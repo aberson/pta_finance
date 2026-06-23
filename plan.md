@@ -338,7 +338,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 ### Step 1: Scaffold + tooling + config + IDs
 - **Problem:** Create the `uv`/hatchling project (pyproject with ruff, mypy-strict, pytest mirroring `switchboard`), flat `pta_finance/` package skeleton, `.gitignore` (config.toml, secrets/, *.json, .env, caches), `config.example.toml` with FAKE placeholders, generic `README.md`, `config.py` (load+validate TOML, resolve SA key path), and `ids.py` (ID grammar + `fiscal_year_label`) with tests. Add a CI guard script that fails if a `*.json` credential or an identity pattern is staged.
 - **Type:** code
-- **Issue:** #
+- **Issue:** #1
 - **Flags:** --reviewers code --isolation worktree
 - **Produces:** project skeleton, `pta_finance/config.py`, `pta_finance/ids.py`, `tests/test_ids.py`, `tests/test_config.py`, `config.example.toml`, `.gitignore`, `.github/workflows/ci.yml`
 - **Done when:** `uv run pytest -q`, `uv run ruff check .`, `uv run mypy --strict pta_finance` all pass; ID tests assert exact formats; `config.py` fails fast on a missing required field (tested)
@@ -347,7 +347,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 ### Step 2: Sheet schema + entity models
 - **Problem:** Define `schema.py` (canonical tab names + ordered column lists as single-source-of-truth constants) and `models.py` (entity dataclasses + row (de)serialization). Add tests asserting column-list **identity** with `is` (not `==`).
 - **Type:** code
-- **Issue:** #
+- **Issue:** #2
 - **Flags:** --reviewers code --isolation worktree
 - **Produces:** `pta_finance/schema.py`, `pta_finance/models.py`, `tests/test_schema.py`
 - **Done when:** tests pass incl. an `is`-identity assertion on a shared column list; mypy strict clean
@@ -356,7 +356,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 ### Step 3: Sheets client + backup
 - **Problem:** Implement `sheets.py` (`gspread` service-account wrapper: open spreadsheet, read tab→records, atomic `batch_update` with 429 exponential-backoff+jitter, schema validation, named `update()` args) and `backup.py` (CSV snapshot of all tabs). Mock `gspread` in tests; include an integration test that exercises the production write path and asserts the batch+backoff code is reached (workspace `code-quality` rule: integration test through the production caller).
 - **Type:** code
-- **Issue:** #
+- **Issue:** #3
 - **Flags:** --reviewers code --isolation worktree
 - **Produces:** `pta_finance/sheets.py`, `pta_finance/backup.py`, `tests/` additions
 - **Done when:** unit + integration tests pass against a mocked client; mypy strict clean (add `[[tool.mypy.overrides]]` for `gspread`/`google.*` if untyped)
@@ -365,7 +365,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 ### Step 4: ETL / normalize
 - **Problem:** Implement `etl.py` — normalize legacy/raw rows to canonical schema, assign missing IDs via `ids.py`, dedup via `(date|amount|payee)` hash, flag ambiguous rows `needs_review`, snapshot-before-write. Rows with an unparseable date/amount are flagged `needs_review` and skipped — a single bad legacy row must never crash the whole run. Wire the `normalize` CLI subcommand. Integration test: legacy fixture → normalized round trip (assert IDs assigned, dups flagged, existing IDs untouched).
 - **Type:** code
-- **Issue:** #
+- **Issue:** #4
 - **Flags:** --reviewers code --isolation worktree
 - **Produces:** `pta_finance/etl.py`, `normalize` in `cli.py`, `tests/test_etl.py`
 - **Done when:** round-trip test passes; re-running normalize is idempotent (no dup IDs, no reassigned IDs); a malformed-legacy-row fixture is flagged `needs_review`, not fatal
@@ -374,7 +374,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 ### Step 5: Analytics engine
 - **Problem:** Implement `analytics/aggregate.py` (totals, income/expense, by category, by grade, by month via `pd.Grouper`, budget-vs-actual variance) and `analytics/trends.py` (multi-year fundraising/spend series, YoY). Wire the `analyze` CLI subcommand. Fixture-based numeric assertions.
 - **Type:** code
-- **Issue:** #
+- **Issue:** #5
 - **Flags:** --reviewers code --isolation worktree
 - **Produces:** `pta_finance/analytics/`, `analyze` in `cli.py`, `tests/test_analytics.py`
 - **Done when:** known-fixture → expected-number assertions pass; mypy strict clean
@@ -383,7 +383,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 ### Step 6: Report generation (internal + external)
 - **Problem:** Implement `reports/builder.py` (compute the report data model from analytics), `reports/charts.py` (matplotlib Agg PNGs), `reports/render.py` (Jinja2 → HTML with autoescape on payee/memo; optional WeasyPrint PDF behind the `[pdf]` extra), and `templates/internal.html.j2` + `templates/external.html.j2`. **Pin the exact internal vs external field lists here.** The external variant must exclude payee names, receipt links, and member PII — enforce this as a **runtime invariant**, not just a test: the external builder raises a stable `ExternalReportPIIError` if any payee/receipt/PII field appears in the external data model (per `.claude/rules/security.md` § "Pair unsafe configs with startup safety checks" — a public-facing safety control must be a guard, not documentation). Wire the `report` CLI subcommand; append to `report_log`; write to `reports/output/` + (configured) private Drive folder — never to the repo.
 - **Type:** code
-- **Issue:** #
+- **Issue:** #6
 - **Flags:** --reviewers code --isolation worktree
 - **Produces:** `pta_finance/reports/`, `report` in `cli.py`, `tests/test_reports.py`
 - **Done when:** both variants render from a fixture without error; a unit test AND the runtime `ExternalReportPIIError` guard both reject an external data model containing payee/receipt/PII fields; mypy strict clean
@@ -392,7 +392,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 ### Step 7: End-to-end smoke gate (code)
 - **Problem:** Add `tests/test_smoke_pipeline.py` — a 60-second end-to-end wiring test with REAL components (config → schema → etl → analytics → reports) against an in-memory / mocked Sheet, asserting the full pipeline completes once without exception and the rendered report contains the expected sections. No business-logic assertions — this is a producer/consumer drift gate, distinct from the M3 observation run.
 - **Type:** code
-- **Issue:** #
+- **Issue:** #7
 - **Flags:** --reviewers code --isolation worktree
 - **Produces:** `tests/test_smoke_pipeline.py`
 - **Done when:** the smoke test passes in CI with no live Google calls
@@ -401,7 +401,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 ### Step 8: GitHub Actions monthly report workflow
 - **Problem:** Add `.github/workflows/monthly-report.yml` — `schedule: cron "0 9 1 * *"` + `workflow_dispatch`; `actions/checkout@v4`; `astral-sh/setup-uv` (cache on); restore `GOOGLE_SA_KEY_B64` + `PTA_CONFIG_B64` secrets by base64-decoding to files **without echoing**; `uv run pta-finance report --variant both` (the command writes to the private Drive folder, the canonical destination); the workflow then uploads the local `reports/output/` as an ephemeral artifact for operator download; **never commit reports to the repo**. Also append a UTC timestamp to a tracked `.github/last-run.txt` and push it (keepalive so the public-repo scheduler isn't auto-disabled after 60 days; this liveness marker is not a report). Confirm `ci.yml` (lint/type/test on PR) from Step 1 is green.
 - **Type:** code
-- **Issue:** #
+- **Issue:** #8
 - **Flags:** --reviewers code --isolation worktree
 - **Produces:** `.github/workflows/monthly-report.yml`, `.github/last-run.txt`
 - **Done when:** `actionlint` (or a YAML lint) passes; a test asserts the workflow restores secrets via file redirect with no `run: echo`/`cat` of a secret variable and that it invokes `pta-finance report`; the real credentialed end-to-end run is deferred to M3
