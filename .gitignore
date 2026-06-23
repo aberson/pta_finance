@@ -1,0 +1,23 @@
+# --- Secrets & private config (NEVER commit; this is a public repo) ---
+config.toml
+secrets/
+service-account*.json
+*-credentials.json
+.env
+
+# --- Generated data (kept private / out of the repo) ---
+snapshots/
+reports/output/
+
+# --- Python ---
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- Local tooling ---
+.claude/settings.local.json
