@@ -75,8 +75,12 @@ config.toml         gitignored private config; config.example.toml ships fake va
 
 ## 6. Current state
 
-**Plan written, no code yet.** Build via `/build-phase` against `plan.md` (8 automated steps +
-M1–M3 manual). Update this file at the end of each phase via `/repo-update`.
+**v1 automated build COMPLETE (Steps 1–8, issues #1–#8 closed).** The full pipeline works end-to-end
+under test: Sheets client, ETL/normalize, analytics, internal/external reports (runtime PII guard),
+smoke gate, and the monthly GitHub Actions workflow. 113 tests + 1 skipped; `mypy --strict` + ruff
+clean. **Next = operator-gated manual steps** (need real Google credentials): M1 service-account
+setup → M2 `pta-finance check` real-sheet smoke → M3 monthly-report observation (plan §11 Manual
+Steps). Live Drive upload is deferred to Phase 2 (`google-api-python-client`).
 
 ## 7. Environment requirements
 

@@ -232,14 +232,21 @@ pta_finance/                      # repo root (standalone public repo)
 │       └── templates/
 │           ├── internal.html.j2
 │           └── external.html.j2
+├── scripts/
+│   └── check_no_identity.py      # CI guard: blocks staged credentials / identity strings
 ├── tests/
 │   ├── conftest.py               # fake-org fixtures + mocked gspread client
 │   ├── test_ids.py
 │   ├── test_config.py            # config validation fails fast on missing fields
 │   ├── test_schema.py            # asserts column-list identity with `is`
+│   ├── test_models.py
+│   ├── test_sheets.py
+│   ├── test_backup.py
 │   ├── test_etl.py
 │   ├── test_analytics.py
 │   ├── test_reports.py
+│   ├── test_cli.py
+│   ├── test_workflows.py         # static safety guards on monthly-report.yml
 │   └── test_smoke_pipeline.py    # end-to-end wiring gate (mock sheet)
 ├── secrets/                      # gitignored; holds service-account.json locally
 └── snapshots/                    # gitignored; CSV backups
@@ -537,3 +544,46 @@ service_account_file = "secrets/service-account.json"
 # [llm]            # Phase 4
 # api_key_env = "ANTHROPIC_API_KEY"
 ```
+
+---
+
+## Phase 1 — v1 Automated Build (Steps 1–8)
+
+**All 8 issues (#1–#8) closed. 113 tests passing (+1 skipped, pyyaml-gated). Zero type errors
+(`mypy --strict`). Zero lint violations. Built directly on `main` (sequential greenfield, no
+worktrees); pushed `cbeeecc..193bed2`.**
+
+### What was built
+- **Step 1** — `uv`/hatchling scaffold (ruff, `mypy --strict`, pytest), `config.py` (TOML load +
+  fail-fast validation), `ids.py` (single-source ID grammar + `fiscal_year_label`), the CI
+  identity guard, and `ci.yml`.
+- **Step 2** — `schema.py` (single source of truth for tab column lists, `is`-identity registry) +
+  `models.py` (entity dataclasses, Decimal money, tolerant parsers, import-time field/schema guard).
+- **Step 3** — `sheets.py` (service-account gspread wrapper: atomic row-targeted `batch_update`,
+  429/500/503 exponential backoff + jitter, schema validation) + `backup.py` (CSV snapshots).
+- **Step 4** — `etl.py` (normalize legacy ledger: FY-scoped ID assignment seeded from existing ids,
+  `(date|amount|payee)` dedup, malformed-row resilience, snapshot-before-write).
+- **Step 5** — `analytics/` (exact integer-cents aggregation by category/grade/month, budget-vs-actual,
+  multi-year trends + YoY; `needs_review` rows excluded).
+- **Step 6** — `reports/` (internal + external HTML via Jinja2 with autoescape, matplotlib Agg charts,
+  optional WeasyPrint PDF; the external builder's runtime `ExternalReportPIIError` guard).
+- **Step 7** — `tests/test_smoke_pipeline.py` (end-to-end wiring gate, real modules, in-memory sheet).
+- **Step 8** — `.github/workflows/monthly-report.yml` (cron + dispatch, secret-safe credential
+  restore, ephemeral artifact, `last-run.txt` scheduler keepalive).
+
+### Files changed
+
+| Area | Files |
+|---|---|
+| Package | `pta_finance/{config,ids,schema,models,sheets,backup,etl,cli}.py`, `analytics/{aggregate,trends}.py`, `reports/{builder,charts,render}.py` + `templates/{internal,external}.html.j2` |
+| Config / CI | `pyproject.toml`, `config.example.toml`, `scripts/check_no_identity.py`, `.github/workflows/{ci,monthly-report}.yml`, `.github/last-run.txt` |
+| Tests | `tests/conftest.py` + 12 `test_*.py` (113 passing + 1 skipped) |
+
+### Fresh-context notes
+
+| Issue | Detail |
+|---|---|
+| Review-caught fixes | Step 3: header row is never a data-write target (upsert/delete). Step 4: malformed id-less rows persist `needs_review` by sheet position via `SheetsClient.update_rows_by_index`. |
+| Drive deviation | Live Drive upload deferred to Phase 2 (needs `google-api-python-client` per §8); v1 = local `reports/output/` + the CI artifact. |
+| Money | Aggregated as exact integer cents — never binary floats. |
+| Next | Operator-gated Manual Steps M1–M3 (real Google credentials) — see §11 Manual Steps. |

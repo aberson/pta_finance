@@ -90,9 +90,16 @@ See [plan.md](plan.md) for the full design, data model, and build steps, and
 
 ## Status
 
-Plan written; implementation tracked in the repo's [issues](../../issues) (build Steps 1–8).
+**v1 complete** — issues #1–#8 closed. The full toolkit ships: config/IDs, a single-source-of-truth
+schema, a service-account Sheets client (atomic row-targeted writes + 429 backoff), idempotent
+legacy-ledger ETL (ID assignment, dedup, malformed-row resilience), an exact-cents analytics engine,
+internal/external HTML reports with a runtime PII guard, an end-to-end smoke gate, and a monthly
+GitHub Actions report workflow. 113 tests passing (+1 skipped), 0 type errors (`mypy --strict`),
+0 lint violations. First-run setup needs the Google service account (see Setup) — then
+`uv run pta-finance check`.
+
 Roadmap beyond v1: Apps Script automation (nag emails, calendar, sign-in), an admin web UI, then
-forecasting / receipt ingestion / bank imports / wiki.
+forecasting / receipt ingestion / bank imports / wiki / live Drive upload (`google-api-python-client`).
 
 ## License
 
