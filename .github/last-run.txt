@@ -1,0 +1,4 @@
+# monthly-report keepalive log — liveness marker, NOT a report.
+# Each scheduled/manual run appends a UTC timestamp here and pushes it, which counts as
+# repository activity and resets GitHub's 60-day scheduled-workflow auto-disable timer.
+2026-06-23T00:00:00Z seed

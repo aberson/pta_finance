@@ -415,6 +415,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 - **Produces:** `.github/workflows/monthly-report.yml`, `.github/last-run.txt`
 - **Done when:** `actionlint` (or a YAML lint) passes; a test asserts the workflow restores secrets via file redirect with no `run: echo`/`cat` of a secret variable and that it invokes `pta-finance report`; the real credentialed end-to-end run is deferred to M3
 - **Depends on:** 7
+- **Status:** DONE (2026-06-23)
 
 ### Manual Steps
 *(These run after `/build-phase` completes. Operator drives.)*

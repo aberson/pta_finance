@@ -1,0 +1,87 @@
+# Monthly report — unattended GitHub Actions cron.
+#
+# Scheduling caveats for a PUBLIC repo (load-bearing):
+#   * Scheduled (`schedule:`) workflows run only on the repository's DEFAULT branch.
+#   * GitHub auto-DISABLES the schedule after 60 days of NO repository activity. The cron
+#     merely firing does NOT count as activity, so a quiet repo silently stops reporting.
+#   * Counter: each run appends a UTC timestamp to `.github/last-run.txt` and pushes it. That
+#     push is genuine repo activity and resets the 60-day timer. The file is a liveness marker,
+#     NOT a report (reports are never committed — see the upload-artifact step).
+#
+# Secrets posture: the service-account JSON and the private config.toml are stored as base64
+# GitHub Actions secrets and decoded to files at runtime WITHOUT ever echoing the decoded (or
+# raw) value to stdout. Reports may carry financial/identifying detail and are never committed;
+# they are attached as an ephemeral workflow artifact for the operator to download.
+
+name: Monthly report
+
+on:
+  schedule:
+    - cron: "0 9 1 * *"  # 09:00 UTC on the 1st of each month
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "Target month (YYYY-MM); empty = previous month"
+        required: false
+        default: ""
+
+permissions:
+  contents: write  # needed for the keepalive push to .github/last-run.txt
+
+jobs:
+  monthly-report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Restore credentials + config
+        env:
+          GOOGLE_SA_KEY_B64: ${{ secrets.GOOGLE_SA_KEY_B64 }}
+          PTA_CONFIG_B64: ${{ secrets.PTA_CONFIG_B64 }}
+        run: |
+          mkdir -p secrets
+          printf '%s' "$GOOGLE_SA_KEY_B64" | base64 -d > secrets/service-account.json
+          printf '%s' "$PTA_CONFIG_B64" | base64 -d > config.toml
+
+      - name: Resolve target month
+        id: month
+        env:
+          INPUT_MONTH: ${{ github.event.inputs.month }}
+        run: |
+          if [ -n "$INPUT_MONTH" ]; then
+            MONTH="$INPUT_MONTH"
+          else
+            MONTH="$(date -u -d 'last month' +%Y-%m)"
+          fi
+          echo "month=$MONTH" >> "$GITHUB_OUTPUT"
+
+      - name: Generate report
+        run: uv run pta-finance report --month "${{ steps.month.outputs.month }}" --variant both
+
+      - name: Upload report artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pta-report-${{ steps.month.outputs.month }}
+          path: reports/output/
+          if-no-files-found: warn
+
+      - name: Keepalive push (resets the 60-day scheduler-disable timer)
+        run: |
+          STAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          echo "$STAMP monthly-report run" >> .github/last-run.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/last-run.txt
+          git diff --staged --quiet || git commit -m "chore: monthly-report keepalive $STAMP"
+          git push
