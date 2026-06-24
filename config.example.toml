@@ -1,0 +1,33 @@
+# pta_finance — example config (committed template; FAKE placeholders only).
+#
+# Copy this file to `config.toml` (gitignored) and fill in your real values.
+# The repo is PUBLIC; your real identity and IDs live ONLY in config.toml, never here.
+
+[organization]
+name        = "Example PTA"            # PTA / booster name
+school_name = "Example Elementary"
+school_email = "office@example.org"
+
+[contacts]
+president       = ["president@example.org"]
+treasurer       = "treasurer@example.org"
+cfo             = "cfo@example.org"
+account_holders = ["president@example.org", "treasurer@example.org", "cfo@example.org"]  # Phase-3 allowlist
+
+[fiscal_year]
+start_month = 1                        # 1 = January (calendar year)
+
+[grades]
+labels = ["K", "1", "2", "3", "4", "5"]
+
+[sheets]
+spreadsheet_id           = "<google-spreadsheet-id>"
+test_spreadsheet_id      = "<throwaway-test-sheet-id>"     # for `check`
+drive_receipts_folder_id = "<google-drive-folder-id>"
+drive_reports_folder_id  = "<private-drive-folder-id>"     # report outputs (never the repo)
+
+[google]
+service_account_file = "secrets/service-account.json"
+
+# [llm]            # Phase 4
+# api_key_env = "ANTHROPIC_API_KEY"

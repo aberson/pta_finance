@@ -1,0 +1,61 @@
+[project]
+name = "pta_finance"
+version = "0.1.0"
+description = "Generic, reusable finance toolkit for a PTA / booster club / small nonprofit (Google Sheet as system-of-record)."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "gspread",
+    "google-auth",
+    "pandas",
+    "matplotlib",
+    "jinja2",
+]
+
+[project.optional-dependencies]
+pdf = ["weasyprint"]
+dev = [
+    "pytest",
+    "ruff",
+    "mypy",
+]
+
+[project.scripts]
+pta-finance = "pta_finance.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pta_finance"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+
+[[tool.mypy.overrides]]
+module = [
+    "gspread",
+    "gspread.*",
+    "google.*",
+    "matplotlib",
+    "matplotlib.*",
+    "pandas",
+    "pandas.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

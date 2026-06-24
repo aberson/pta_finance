@@ -343,6 +343,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 - **Produces:** project skeleton, `pta_finance/config.py`, `pta_finance/ids.py`, `tests/test_ids.py`, `tests/test_config.py`, `config.example.toml`, `.gitignore`, `.github/workflows/ci.yml`
 - **Done when:** `uv run pytest -q`, `uv run ruff check .`, `uv run mypy --strict pta_finance` all pass; ID tests assert exact formats; `config.py` fails fast on a missing required field (tested)
 - **Depends on:** none
+- **Status:** DONE (2026-06-23)
 
 ### Step 2: Sheet schema + entity models
 - **Problem:** Define `schema.py` (canonical tab names + ordered column lists as single-source-of-truth constants) and `models.py` (entity dataclasses + row (de)serialization). Add tests asserting column-list **identity** with `is` (not `==`).

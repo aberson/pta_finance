@@ -21,3 +21,4 @@ __pycache__/
 
 # --- Local tooling ---
 .claude/settings.local.json
+.plan-expedite-state
