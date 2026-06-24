@@ -152,9 +152,11 @@ variant is a Phase-2 nicety, not v1.
 > above is the working default; the precise columns are confirmed during the report step.
 
 Charts are matplotlib (Agg) PNGs embedded in the HTML. **Reports are never committed to the public
-repo.** They are written to `reports/output/` locally, uploaded to a **private** Drive folder, and
-(in CI) attached as an ephemeral workflow artifact for the operator. A row is appended to
-`report_log`.
+repo.** They are written to `reports/output/` (gitignored) locally and (in CI) attached as an
+ephemeral workflow artifact for the operator. A row is appended to `report_log`. **Live upload to a
+private Drive folder is deferred to Phase 2** — it needs `google-api-python-client`, which §8 defers
+to Phase 2; v1 ships local output + the CI artifact, and `report_log.output_url` records the local
+path.
 
 ## 5. Modules
 
@@ -393,6 +395,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 - **Produces:** `pta_finance/reports/`, `report` in `cli.py`, `tests/test_reports.py`
 - **Done when:** both variants render from a fixture without error; a unit test AND the runtime `ExternalReportPIIError` guard both reject an external data model containing payee/receipt/PII fields; mypy strict clean
 - **Depends on:** 5
+- **Status:** DONE (2026-06-23) — Drive upload deferred to Phase 2 (needs google-api-python-client per §8); v1 = local output + CI artifact
 
 ### Step 7: End-to-end smoke gate (code)
 - **Problem:** Add `tests/test_smoke_pipeline.py` — a 60-second end-to-end wiring test with REAL components (config → schema → etl → analytics → reports) against an in-memory / mocked Sheet, asserting the full pipeline completes once without exception and the rendered report contains the expected sections. No business-logic assertions — this is a producer/consumer drift gate, distinct from the M3 observation run.

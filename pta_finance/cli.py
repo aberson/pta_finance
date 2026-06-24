@@ -6,10 +6,7 @@ Wired subcommands:
     snapshot   Step 3 — export CSV backups of all tabs under ``snapshots/<utc>/``
     normalize  Step 4 — normalize legacy ledger -> canonical schema (snapshot first)
     analyze    Step 5 — run analytics over the ledger; print a readable summary
-
-Placeholder subcommands (later steps):
-
-    report     Step 6 (reports)     — generate monthly report(s)
+    report     Step 6 — generate monthly report(s); write HTML to reports/output/, log a run
 """
 
 from __future__ import annotations
@@ -19,7 +16,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pta_finance import analytics, backup, etl, schema
+from pta_finance import analytics, backup, etl, reports, schema
 from pta_finance.config import Config, load_config
 from pta_finance.sheets import SheetsClient
 
@@ -159,7 +156,57 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
-    print("report: not yet implemented (Step 6)")
+    """Generate monthly report(s): read the ledger, build, render to HTML, log the run.
+
+    Reads ``transactions`` + ``budget`` (read-only), builds the requested variant(s) via
+    :mod:`pta_finance.reports`, renders each to a single self-contained HTML file under
+    ``reports/output/<month>-<variant>.html`` (a gitignored dir — reports never enter the
+    repo), and appends one row to the ``report_log`` tab per variant (run_at, variant, month,
+    output_url=the local path, generated_by). ``--variant both`` emits both files + both log
+    rows. The external builder runs its PII guard before rendering.
+    """
+    config = _load(args)
+    month = args.month
+    if not month:
+        print("report: --month YYYY-MM is required")
+        return 1
+
+    client = SheetsClient(config)
+    txn_rows = client.read_tab(schema.TAB_TRANSACTIONS)
+    budget_rows = client.read_tab(schema.TAB_BUDGET)
+
+    variants = ("internal", "external") if args.variant == "both" else (args.variant,)
+
+    out_dir = Path(args.output_dir) / "reports" / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    run_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    generated_by = config.contacts.treasurer
+
+    log_rows: list[dict[str, str]] = []
+    for variant in variants:
+        if variant == "internal":
+            model = reports.build_internal_report(config, month, txn_rows, budget_rows)
+            html = reports.render_internal(model)
+        else:
+            ext_model = reports.build_external_report(config, month, txn_rows, budget_rows)
+            html = reports.render_external(ext_model)
+
+        out_path = out_dir / f"{month}-{variant}.html"
+        out_path.write_text(html, encoding="utf-8")
+        print(f"report: wrote {variant} report to {out_path}")
+
+        log_rows.append(
+            {
+                "run_at": run_at,
+                "variant": variant,
+                "month": month,
+                "output_url": str(out_path),
+                "generated_by": generated_by,
+            }
+        )
+
+    client.append_rows(schema.TAB_REPORT_LOG, log_rows)
+    print(f"report: logged {len(log_rows)} run(s) to {schema.TAB_REPORT_LOG}")
     return 0
 
 
@@ -212,12 +259,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_analyze.set_defaults(func=_cmd_analyze)
 
     p_report = sub.add_parser("report", help="generate monthly report(s)")
+    _add_config_arg(p_report)
     p_report.add_argument("--month", default=None, help="report month, format YYYY-MM")
     p_report.add_argument(
         "--variant",
         choices=("internal", "external", "both"),
         default="both",
         help="report variant to generate (default: both)",
+    )
+    p_report.add_argument(
+        "--output-dir",
+        default=".",
+        help="base dir for the gitignored reports/output/ HTML files (default: .)",
     )
     p_report.set_defaults(func=_cmd_report)
 

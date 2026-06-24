@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ report.organization }} — Internal Report {{ report.month }}</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 2rem; color: #222; }
+    h1, h2 { color: #2a4d69; }
+    table { border-collapse: collapse; width: 100%; margin: 0.5rem 0 1.5rem; }
+    th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; font-size: 0.9rem; }
+    th { background: #eef3f8; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .banner { background: #fdecea; border: 1px solid #c0392b; padding: 6px 10px;
+              color: #922b21; font-weight: bold; border-radius: 4px; }
+    img.chart { max-width: 100%; height: auto; border: 1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <p class="banner" data-section="confidential">CONFIDENTIAL — INTERNAL USE ONLY (contains payee &amp; receipt detail)</p>
+
+  <h1>{{ report.organization }}</h1>
+  <p>{{ report.school_name }} — Internal financial report for {{ report.month }}
+     (fiscal year {{ report.fiscal_year }})</p>
+
+  <h2 data-section="totals">Totals</h2>
+  <table data-section="totals-table">
+    <tr><th>Income</th><td class="num">${{ report.totals.income }}</td></tr>
+    <tr><th>Expense</th><td class="num">${{ report.totals.expense }}</td></tr>
+    <tr><th>Net</th><td class="num">${{ report.totals.net }}</td></tr>
+  </table>
+
+  <h2 data-section="fundraising">Fundraising progress</h2>
+  <p>Raised <strong>${{ report.fundraising.raised }}</strong> of
+     target <strong>${{ report.fundraising.target }}</strong>
+     {% if report.fundraising.pct is not none %}({{ report.fundraising.pct }}%){% endif %}.</p>
+
+  <h2 data-section="budget-headline">Budget headline (FY{{ report.budget_headline.fiscal_year }})</h2>
+  <table data-section="budget-headline-table">
+    <tr><th>Total budgeted</th><td class="num">${{ report.budget_headline.total_budgeted }}</td></tr>
+    <tr><th>Total spent</th><td class="num">${{ report.budget_headline.total_spent }}</td></tr>
+    <tr><th>Remaining</th><td class="num">${{ report.budget_headline.remaining }}</td></tr>
+  </table>
+
+  <h2 data-section="by-grade">Allocation by grade</h2>
+  <img class="chart" src="{{ grade_chart_uri }}" alt="Net allocation by grade">
+  <table data-section="by-grade-table">
+    <thead><tr><th>Grade</th><th>Income</th><th>Expense</th><th>Net</th></tr></thead>
+    <tbody>
+    {% for g in report.by_grade %}
+      <tr>
+        <td>{{ g.grade }}</td>
+        <td class="num">${{ g.income }}</td>
+        <td class="num">${{ g.expense }}</td>
+        <td class="num">${{ g.net }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2 data-section="by-category">By category (with budget variance)</h2>
+  <img class="chart" src="{{ category_chart_uri }}" alt="Expense by category">
+  <table data-section="by-category-table">
+    <thead><tr><th>Category</th><th>Income</th><th>Expense</th><th>Net</th>
+               <th>Budgeted</th><th>Variance</th></tr></thead>
+    <tbody>
+    {% for c in report.by_category %}
+      <tr>
+        <td>{{ c.category }}</td>
+        <td class="num">${{ c.income }}</td>
+        <td class="num">${{ c.expense }}</td>
+        <td class="num">${{ c.net }}</td>
+        <td class="num">${{ c.budgeted }}</td>
+        <td class="num">${{ c.variance }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <h2 data-section="transactions">Transactions ({{ report.month }})</h2>
+  <table data-section="transactions-table">
+    <thead><tr><th>ID</th><th>Date</th><th>Type</th><th>Amount</th><th>Category</th>
+               <th>Grade</th><th>Payee</th><th>Memo</th><th>Receipt</th><th>Entered by</th></tr></thead>
+    <tbody>
+    {% for t in report.transactions %}
+      <tr>
+        <td>{{ t.id }}</td>
+        <td>{{ t.date }}</td>
+        <td>{{ t.type }}</td>
+        <td class="num">${{ t.amount }}</td>
+        <td>{{ t.category }}</td>
+        <td>{{ t.grade }}</td>
+        <td>{{ t.payee }}</td>
+        <td>{{ t.memo }}</td>
+        <td>
+          {% if t.receipt_url %}<a href="{{ t.receipt_url }}">{{ t.receipt_id }}</a>
+          {% else %}{{ t.receipt_id }}{% endif %}
+        </td>
+        <td>{{ t.entered_by }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</body>
+</html>
