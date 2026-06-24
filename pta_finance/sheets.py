@@ -88,6 +88,21 @@ def _status_of(err: APIError) -> int | None:
     return code if isinstance(code, int) else None
 
 
+def _is_duplicate_title_error(err: APIError) -> bool:
+    """True when ``err`` is a 400 'sheet title already exists' rejection.
+
+    ``add_worksheet`` is not idempotent: a retried create whose first attempt already
+    applied server-side comes back as a non-retryable 400 naming a duplicate title.
+    :meth:`SheetsClient.ensure_tab` treats this as benign (the tab now exists) rather than
+    aborting the bootstrap loop. Status via :func:`_status_of`; the duplicate signal is a
+    substring match on the error message (gspread surfaces the API's text verbatim).
+    """
+    if _status_of(err) != 400:
+        return False
+    message = str(err).lower()
+    return "already exists" in message
+
+
 class SheetsClient:
     """Service-account ``gspread`` wrapper around one spreadsheet.
 
@@ -200,6 +215,75 @@ class SheetsClient:
         actual = tuple(_as_str(cell) for cell in header_raw)
         if actual != expected:
             raise SchemaError(tab, expected, actual)
+
+    def read_header(self, tab: str) -> list[str]:
+        """Return row 1 (the header) of ``tab`` as a list of strings.
+
+        Read-only — never validates or writes. Used by ``init-sheet --dry-run`` to report
+        what :meth:`ensure_tab` would do without issuing any write. An empty/header-less
+        sheet yields an empty list.
+        """
+        ws = self.worksheet(tab)
+        header_raw: list[Any] = self._with_retry(lambda: ws.row_values(1))
+        return [_as_str(cell) for cell in header_raw]
+
+    def list_worksheet_titles(self) -> list[str]:
+        """Return the titles of every worksheet in the spreadsheet.
+
+        Opens the spreadsheet (if needed) and reads the ``worksheets()`` handle. Used by
+        :meth:`ensure_tab` and the ``init-sheet`` command to tell which canonical tabs
+        already exist before deciding whether to create one.
+        """
+        worksheets = self._with_retry(lambda: self.connect().worksheets())
+        return [ws.title for ws in worksheets]
+
+    # --- bootstrap (create-if-absent) ---------------------------------------
+
+    def ensure_tab(self, tab: str) -> str:
+        """Create ``tab`` if absent and ensure row 1 equals ``schema.TABS[tab]``.
+
+        Idempotent and corruption-safe — never overwrites a non-empty, mismatched header
+        (that would clobber a real but wrong-shaped tab). Returns a status string:
+
+        * ``"created"`` — the worksheet did not exist; it was added (sized to the schema)
+          and its header row was written.
+        * ``"headers-written"`` — the worksheet existed but row 1 was empty; the header
+          row was written.
+        * ``"ok"`` — the worksheet existed and row 1 already equals the schema headers;
+          no write was issued.
+
+        Raises :class:`SchemaError` (naming ``tab`` + expected/actual headers) when the
+        worksheet exists and row 1 is non-empty but does NOT match the schema.
+        """
+        columns = schema.TABS[tab]
+        header = list(columns)
+        header_range = self._a1_range(1, len(columns))
+
+        if tab not in self.list_worksheet_titles():
+            try:
+                ws = self._with_retry(
+                    lambda: self.connect().add_worksheet(title=tab, rows=100, cols=len(columns))
+                )
+            except APIError as err:
+                # A retried create (after a 500/503/timeout that already applied
+                # server-side) hits a non-retryable 400 duplicate-title error. Treat that as
+                # "the tab now exists" and fall through to ensure its header — never abort
+                # the init-sheet loop mid-way.
+                if not _is_duplicate_title_error(err):
+                    raise
+            else:
+                self._with_retry(lambda: ws.update(range_name=header_range, values=[header]))
+                return "created"
+
+        ws = self.worksheet(tab)
+        header_raw: list[Any] = self._with_retry(lambda: ws.row_values(1))
+        actual = tuple(_as_str(cell) for cell in header_raw)
+        if actual == ():
+            self._with_retry(lambda: ws.update(range_name=header_range, values=[header]))
+            return "headers-written"
+        if actual != columns:
+            raise SchemaError(tab, columns, actual)
+        return "ok"
 
     # --- writes (row/range-targeted, atomic) --------------------------------
 

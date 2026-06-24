@@ -3,6 +3,7 @@
 Wired subcommands:
 
     check      Step 3 — validate config + sheet schema; round-trip a test row (test sheet)
+    init-sheet bootstrap the spreadsheet with the 5 canonical tabs + their schema headers
     snapshot   Step 3 — export CSV backups of all tabs under ``snapshots/<utc>/``
     normalize  Step 4 — normalize legacy ledger -> canonical schema (snapshot first)
     analyze    Step 5 — run analytics over the ledger; print a readable summary
@@ -60,6 +61,57 @@ def _cmd_check(args: argparse.Namespace) -> int:
         print(f"check: round-trip FAILED — wrote {probe_id} but did not read it back")
         return 1
     print(f"check: round-trip OK on test sheet (wrote/read/deleted {probe_id})")
+    return 0
+
+
+def _cmd_init_sheet(args: argparse.Namespace) -> int:
+    """Bootstrap the spreadsheet with the 5 canonical tabs + their exact schema headers.
+
+    Iterates :data:`schema.TABS` in order and calls :meth:`SheetsClient.ensure_tab` on each,
+    which creates a missing worksheet (sized to the schema) and writes its header row, writes
+    the header into an existing tab whose row 1 is empty, or no-ops when the header already
+    matches. A pre-existing tab with a non-empty mismatched header raises (never clobbered).
+
+    ``--target test`` bootstraps ``test_spreadsheet_id`` instead of the production sheet (and
+    fails fast when that id is blank). ``--dry-run`` reports the action each tab WOULD take —
+    computed from :meth:`SheetsClient.list_worksheet_titles` plus a header read for existing
+    tabs — and issues no writes.
+    """
+    config = _load(args)
+
+    if args.target == "test":
+        spreadsheet_id = config.sheets.test_spreadsheet_id
+        if not spreadsheet_id:
+            print("init-sheet: no test_spreadsheet_id configured — nothing to do")
+            return 1
+        client = SheetsClient(config, spreadsheet_id=spreadsheet_id)
+    else:
+        client = SheetsClient(config)
+
+    if args.dry_run:
+        existing = set(client.list_worksheet_titles())
+        for tab, columns in schema.TABS.items():
+            if tab not in existing:
+                action = "would create"
+            elif tuple(client.read_header(tab)) == columns:
+                action = "ok (no change)"
+            else:
+                action = "would write headers / mismatch"
+            print(f"init-sheet [dry-run]: {tab} -> {action}")
+        print(f"init-sheet [dry-run]: {len(schema.TABS)} tab(s) inspected, no writes made")
+        return 0
+
+    counts = {"created": 0, "headers-written": 0, "ok": 0}
+    for tab in schema.TABS:
+        status = client.ensure_tab(tab)
+        counts[status] += 1
+        print(f"init-sheet: {tab} -> {status}")
+    print(
+        "init-sheet: "
+        f"{counts['created']} created, "
+        f"{counts['headers-written']} header(s) written, "
+        f"{counts['ok']} already ok"
+    )
     return 0
 
 
@@ -232,6 +284,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_check = sub.add_parser("check", help="validate config + sheet schema (round-trip smoke)")
     _add_config_arg(p_check)
     p_check.set_defaults(func=_cmd_check)
+
+    p_init_sheet = sub.add_parser(
+        "init-sheet", help="create the 5 canonical tabs + schema headers in the spreadsheet"
+    )
+    _add_config_arg(p_init_sheet)
+    p_init_sheet.add_argument(
+        "--target",
+        choices=("main", "test"),
+        default="main",
+        help="which spreadsheet to bootstrap: main (default) or the test sheet",
+    )
+    p_init_sheet.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report the action each tab would take, make no writes",
+    )
+    p_init_sheet.set_defaults(func=_cmd_init_sheet)
 
     p_snapshot = sub.add_parser("snapshot", help="export CSV backups of all tabs")
     _add_config_arg(p_snapshot)

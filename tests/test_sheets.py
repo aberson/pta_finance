@@ -251,3 +251,130 @@ def test_update_rows_by_index_rejects_header_row(fake_config: Config) -> None:
     client = _client(fake_config, ws)
     with pytest.raises(ValueError):
         client.update_rows_by_index(_TXN, {1: _row_for("X")})
+
+
+# --- ensure_tab / list_worksheet_titles (init-sheet bootstrap) --------------
+
+
+def _multi_client(
+    config: Config, worksheets: dict[str, FakeWorksheet]
+) -> tuple[SheetsClient, FakeSpreadsheet]:
+    """Build a SheetsClient over a multi-tab fake spreadsheet, returning both for asserts."""
+    spreadsheet = FakeSpreadsheet(worksheets)
+    fake_client = FakeClient(spreadsheet)
+    client = SheetsClient(config, gspread_client=fake_client)  # type: ignore[arg-type]
+    return client, spreadsheet
+
+
+def test_list_worksheet_titles_returns_all_tab_names(fake_config: Config) -> None:
+    client, _ = _multi_client(
+        fake_config,
+        {_TXN: FakeWorksheet([_header_row()]), schema.TAB_BUDGET: FakeWorksheet([])},
+    )
+    assert client.list_worksheet_titles() == [_TXN, schema.TAB_BUDGET]
+
+
+def test_ensure_tab_creates_missing_worksheet_with_schema_headers(fake_config: Config) -> None:
+    """A missing tab is added (sized to the schema) and row 1 gets the EXACT schema headers."""
+    # Spreadsheet starts with an unrelated tab; the target tab is absent.
+    client, spreadsheet = _multi_client(fake_config, {"unrelated": FakeWorksheet([])})
+
+    status = client.ensure_tab(_TXN)
+
+    assert status == "created"
+    # add_worksheet was called once, sized to len(columns).
+    assert spreadsheet.add_worksheet_calls == [(_TXN, 100, len(_COLS))]
+    created = spreadsheet.worksheet(_TXN)
+    # The header row written equals list(schema.TABS[tab]) exactly.
+    assert len(created.update_calls) == 1
+    _range, values = created.update_calls[0]
+    assert values == [list(schema.TABS[_TXN])]
+    assert created.grid[0] == list(_COLS)
+
+
+def test_ensure_tab_idempotent_on_correct_tab_issues_no_write(fake_config: Config) -> None:
+    """Re-running on an already-correct tab returns 'ok' and issues NO write."""
+    ws = FakeWorksheet([_header_row()])
+    client, spreadsheet = _multi_client(fake_config, {_TXN: ws})
+
+    status = client.ensure_tab(_TXN)
+
+    assert status == "ok"
+    assert ws.update_calls == []  # no write
+    assert ws.batch_update_calls == []
+    assert spreadsheet.add_worksheet_calls == []
+
+
+def test_ensure_tab_writes_headers_when_row1_empty(fake_config: Config) -> None:
+    """An existing tab whose row 1 is empty gets its header written, returning 'headers-written'."""
+    ws = FakeWorksheet([])  # exists but completely empty (no header)
+    client, spreadsheet = _multi_client(fake_config, {_TXN: ws})
+
+    status = client.ensure_tab(_TXN)
+
+    assert status == "headers-written"
+    assert spreadsheet.add_worksheet_calls == []  # not created — already existed
+    assert len(ws.update_calls) == 1
+    _range, values = ws.update_calls[0]
+    assert values == [list(schema.TABS[_TXN])]
+    assert ws.grid[0] == list(_COLS)
+
+
+def test_ensure_tab_raises_on_nonempty_mismatch_without_clobber(fake_config: Config) -> None:
+    """A non-empty, wrong-shaped header raises SchemaError and issues NO write (no clobber)."""
+    bad_header = ["id", "WRONG", *list(_COLS[2:])]
+    ws = FakeWorksheet([bad_header])
+    client, _ = _multi_client(fake_config, {_TXN: ws})
+
+    with pytest.raises(SchemaError) as exc_info:
+        client.ensure_tab(_TXN)
+
+    err = exc_info.value
+    assert err.tab == _TXN
+    assert err.expected == _COLS
+    assert err.actual == tuple(bad_header)
+    # No write of any kind — the real (but wrong-shaped) data is preserved.
+    assert ws.update_calls == []
+    assert ws.batch_update_calls == []
+    assert ws.grid == [bad_header]
+
+
+def test_ensure_tab_recovers_from_duplicate_title_after_retried_create(
+    fake_config: Config,
+) -> None:
+    """A retried create that already applied server-side raises a 400 duplicate-title error;
+    ensure_tab must NOT abort — it falls through, finds the tab present with an empty row 1,
+    writes the schema header, and returns a sensible status (not propagate the APIError)."""
+    dup_err = make_api_error(
+        400,
+        message='A sheet with the name "transactions" already exists.',
+        api_status="INVALID_ARGUMENT",
+    )
+    # The target tab is absent initially; add_worksheet applies the create (server-side)
+    # then raises the duplicate-title 400 — exactly the retry hazard.
+    spreadsheet = FakeSpreadsheet({"unrelated": FakeWorksheet([])}, add_worksheet_error=dup_err)
+    fake_client = FakeClient(spreadsheet)
+    client = SheetsClient(fake_config, gspread_client=fake_client)  # type: ignore[arg-type]
+
+    status = client.ensure_tab(_TXN)
+
+    # Recovered: the create applied, row 1 was empty, so the header was written.
+    assert status == "headers-written"
+    created = spreadsheet.worksheet(_TXN)
+    assert len(created.update_calls) == 1
+    _range, values = created.update_calls[0]
+    assert values == [list(schema.TABS[_TXN])]
+    assert created.grid[0] == list(_COLS)
+
+
+def test_ensure_tab_propagates_non_duplicate_400(fake_config: Config) -> None:
+    """A 400 that is NOT a duplicate-title error still propagates (no silent swallow)."""
+    other_err = make_api_error(
+        400, message="Invalid requests[0].addSheet: bad grid", api_status="INVALID_ARGUMENT"
+    )
+    spreadsheet = FakeSpreadsheet({"unrelated": FakeWorksheet([])}, add_worksheet_error=other_err)
+    fake_client = FakeClient(spreadsheet)
+    client = SheetsClient(fake_config, gspread_client=fake_client)  # type: ignore[arg-type]
+
+    with pytest.raises(APIError):
+        client.ensure_tab(_TXN)

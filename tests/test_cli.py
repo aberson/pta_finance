@@ -1,4 +1,4 @@
-"""Tests for the wired CLI subcommands (check, snapshot) against a mocked SheetsClient.
+"""Tests for the wired CLI subcommands (check, init-sheet, snapshot) against a mocked SheetsClient.
 
 No live Google calls: ``cli.SheetsClient`` is monkeypatched to a fake, and ``snapshot``
 runs through the real ``backup.snapshot_all_tabs`` with a fake read client.
@@ -143,6 +143,139 @@ def test_check_skips_round_trip_without_test_sheet(
     assert len(FakeCheckClient.instances) == 1
     out = capsys.readouterr().out
     assert "skipping round-trip" in out
+
+
+class FakeInitSheetClient:
+    """A fake SheetsClient capturing the init-sheet bootstrap: list/ensure/header reads.
+
+    ``existing`` maps tab name -> its current header row (a missing key = absent tab,
+    an empty list = present-but-empty). ``ensure_tab`` records the tab and returns a
+    status derived from that state; ``read_header`` serves the dry-run path.
+    """
+
+    instances: list[FakeInitSheetClient] = []
+    existing: dict[str, list[str]] = {}
+
+    def __init__(
+        self,
+        config: Config,
+        *,
+        spreadsheet_id: str | None = None,
+        **_: object,
+    ) -> None:
+        self.config = config
+        self.spreadsheet_id = spreadsheet_id
+        self.ensured: list[str] = []
+        self._state = {tab: list(hdr) for tab, hdr in FakeInitSheetClient.existing.items()}
+        FakeInitSheetClient.instances.append(self)
+
+    def list_worksheet_titles(self) -> list[str]:
+        return list(self._state)
+
+    def read_header(self, tab: str) -> list[str]:
+        return list(self._state.get(tab, []))
+
+    def ensure_tab(self, tab: str) -> str:
+        self.ensured.append(tab)
+        if tab not in self._state:
+            self._state[tab] = list(schema.TABS[tab])
+            return "created"
+        if not self._state[tab]:
+            self._state[tab] = list(schema.TABS[tab])
+            return "headers-written"
+        return "ok"
+
+
+def test_init_sheet_creates_all_tabs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """init-sheet drives ensure_tab through every canonical tab via the production entry point."""
+    FakeInitSheetClient.instances = []
+    FakeInitSheetClient.existing = {}  # empty spreadsheet — every tab is created
+    monkeypatch.setattr(cli, "SheetsClient", FakeInitSheetClient)
+    config_path = _write_config(tmp_path)
+
+    rc = cli.main(["init-sheet", "--config", str(config_path)])
+
+    assert rc == 0
+    (client,) = FakeInitSheetClient.instances
+    assert client.spreadsheet_id is None  # default target = main
+    # Every canonical tab was reached end-to-end, in schema order.
+    assert client.ensured == list(schema.TABS)
+    out = capsys.readouterr().out
+    for tab in schema.TABS:
+        assert f"init-sheet: {tab} -> created" in out
+    assert f"{len(schema.TABS)} created" in out
+
+
+def test_init_sheet_dry_run_makes_no_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--dry-run reports the per-tab action and never calls ensure_tab (no writes)."""
+    FakeInitSheetClient.instances = []
+    # transactions already correct; the rest absent.
+    FakeInitSheetClient.existing = {schema.TAB_TRANSACTIONS: list(schema.TRANSACTIONS_COLUMNS)}
+    monkeypatch.setattr(cli, "SheetsClient", FakeInitSheetClient)
+    config_path = _write_config(tmp_path)
+
+    rc = cli.main(["init-sheet", "--config", str(config_path), "--dry-run"])
+
+    assert rc == 0
+    (client,) = FakeInitSheetClient.instances
+    assert client.ensured == []  # NO writes
+    out = capsys.readouterr().out
+    assert "dry-run" in out
+    assert f"{schema.TAB_TRANSACTIONS} -> ok (no change)" in out
+    assert f"{schema.TAB_BUDGET} -> would create" in out
+    assert "no writes made" in out
+
+
+def test_init_sheet_dry_run_reports_mismatch_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--dry-run on an existing tab with a non-empty mismatched header reports the mismatch
+    branch and makes no writes (the previously-uncovered 'would write headers / mismatch' case)."""
+    FakeInitSheetClient.instances = []
+    # transactions exists with a non-empty WRONG header (not equal to the schema columns).
+    bad_header = ["id", "WRONG", *list(schema.TRANSACTIONS_COLUMNS[2:])]
+    FakeInitSheetClient.existing = {schema.TAB_TRANSACTIONS: bad_header}
+    monkeypatch.setattr(cli, "SheetsClient", FakeInitSheetClient)
+    config_path = _write_config(tmp_path)
+
+    rc = cli.main(["init-sheet", "--config", str(config_path), "--dry-run"])
+
+    assert rc == 0
+    (client,) = FakeInitSheetClient.instances
+    assert client.ensured == []  # NO writes
+    out = capsys.readouterr().out
+    assert f"{schema.TAB_TRANSACTIONS} -> would write headers / mismatch" in out
+    assert "no writes made" in out
+
+
+def test_init_sheet_target_test_without_test_sheet_returns_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--target test with an empty test_spreadsheet_id returns 1 before building a client."""
+    FakeInitSheetClient.instances = []
+    FakeInitSheetClient.existing = {}
+    monkeypatch.setattr(cli, "SheetsClient", FakeInitSheetClient)
+    config_path = _write_config(tmp_path)
+
+    real_load = cli.load_config
+
+    def _load_blank(path: Path) -> Config:
+        cfg = real_load(path)
+        object.__setattr__(cfg.sheets, "test_spreadsheet_id", "")
+        return cfg
+
+    monkeypatch.setattr(cli, "load_config", _load_blank)
+
+    rc = cli.main(["init-sheet", "--config", str(config_path), "--target", "test"])
+
+    assert rc == 1
+    # No client was constructed for the missing test sheet.
+    assert FakeInitSheetClient.instances == []
+    assert "no test_spreadsheet_id configured" in capsys.readouterr().out
 
 
 class FakeSnapshotClient:
