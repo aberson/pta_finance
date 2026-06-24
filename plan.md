@@ -363,6 +363,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 - **Produces:** `pta_finance/sheets.py`, `pta_finance/backup.py`, `tests/` additions
 - **Done when:** unit + integration tests pass against a mocked client; mypy strict clean (add `[[tool.mypy.overrides]]` for `gspread`/`google.*` if untyped)
 - **Depends on:** 2
+- **Status:** DONE (2026-06-23)
 
 ### Step 4: ETL / normalize
 - **Problem:** Implement `etl.py` — normalize legacy/raw rows to canonical schema, assign missing IDs via `ids.py`, dedup via `(date|amount|payee)` hash, flag ambiguous rows `needs_review`, snapshot-before-write. Rows with an unparseable date/amount are flagged `needs_review` and skipped — a single bad legacy row must never crash the whole run. Wire the `normalize` CLI subcommand. Integration test: legacy fixture → normalized round trip (assert IDs assigned, dups flagged, existing IDs untouched).

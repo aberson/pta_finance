@@ -1,28 +1,78 @@
 """``pta-finance`` command-line entry point (stdlib ``argparse``).
 
-Subcommands are placeholders in Step 1 — each prints "not yet implemented (Step N)"
-and returns 0. They are wired up in later build steps:
+Wired subcommands:
 
-    check      Step 3 (sheets client) — validate config + sheet round-trip
-    snapshot   Step 3 (backup)        — export CSV backups of all tabs
-    normalize  Step 4 (etl)           — legacy ledger -> canonical schema
-    analyze    Step 5 (analytics)     — run analytics
-    report     Step 6 (reports)       — generate monthly report(s)
+    check      Step 3 — validate config + sheet schema; round-trip a test row (test sheet)
+    snapshot   Step 3 — export CSV backups of all tabs under ``snapshots/<utc>/``
+
+Placeholder subcommands (later steps):
+
+    normalize  Step 4 (etl)         — legacy ledger -> canonical schema
+    analyze    Step 5 (analytics)   — run analytics
+    report     Step 6 (reports)     — generate monthly report(s)
 """
 
 from __future__ import annotations
 
 import argparse
 from collections.abc import Sequence
+from datetime import UTC, datetime
+from pathlib import Path
+
+from pta_finance import backup, schema
+from pta_finance.config import Config, load_config
+from pta_finance.sheets import SheetsClient
+
+
+def _load(args: argparse.Namespace) -> Config:
+    """Load the typed config from ``--config`` (default ``config.toml`` in cwd)."""
+    return load_config(Path(args.config))
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
-    print("check: not yet implemented (Step 3)")
+    """Validate config + every tab's schema, then round-trip one row on the TEST sheet.
+
+    The round-trip (write -> read-back -> delete) runs only when a non-empty
+    ``test_spreadsheet_id`` is configured; it targets the throwaway test sheet, never
+    the production spreadsheet. Runs live only with real creds (M2); here it is unit
+    tested against a mocked client.
+    """
+    config = _load(args)
+    client = SheetsClient(config)
+    for tab in schema.TABS:
+        client.validate_schema(tab)
+    print(f"check: schema OK for {len(schema.TABS)} tab(s) [{config.organization.name}]")
+
+    test_id = config.sheets.test_spreadsheet_id
+    if not test_id:
+        print("check: no test_spreadsheet_id configured — skipping round-trip")
+        return 0
+
+    test_client = SheetsClient(config, spreadsheet_id=test_id)
+    tab = schema.TAB_TRANSACTIONS
+    columns = schema.TABS[tab]
+    probe_id = f"TXN-CHECK-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+    probe = {col: "" for col in columns}
+    probe["id"] = probe_id
+
+    test_client.upsert_rows(tab, {probe_id: probe})
+    rows = test_client.read_tab(tab)
+    found = any(row.get("id") == probe_id for row in rows)
+    test_client.delete_rows_by_id(tab, [probe_id])
+    if not found:
+        print(f"check: round-trip FAILED — wrote {probe_id} but did not read it back")
+        return 1
+    print(f"check: round-trip OK on test sheet (wrote/read/deleted {probe_id})")
     return 0
 
 
 def _cmd_snapshot(args: argparse.Namespace) -> int:
-    print("snapshot: not yet implemented (Step 3)")
+    """Export a CSV snapshot of every tab under ``snapshots/<utc>/``."""
+    config = _load(args)
+    client = SheetsClient(config)
+    dest = Path(args.dest)
+    snapshot_dir = backup.snapshot_all_tabs(client, dest)
+    print(f"snapshot: wrote {len(schema.TABS)} tab(s) to {snapshot_dir}")
     return 0
 
 
@@ -41,6 +91,14 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _add_config_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--config",
+        default="config.toml",
+        help="path to the private config.toml (default: ./config.toml)",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level argument parser with all subcommands."""
     parser = argparse.ArgumentParser(
@@ -53,9 +111,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="command")
 
     p_check = sub.add_parser("check", help="validate config + sheet schema (round-trip smoke)")
+    _add_config_arg(p_check)
     p_check.set_defaults(func=_cmd_check)
 
     p_snapshot = sub.add_parser("snapshot", help="export CSV backups of all tabs")
+    _add_config_arg(p_snapshot)
+    p_snapshot.add_argument(
+        "--dest",
+        default=".",
+        help="base directory for snapshots/<utc>/ output (default: .)",
+    )
     p_snapshot.set_defaults(func=_cmd_snapshot)
 
     p_normalize = sub.add_parser(
