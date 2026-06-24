@@ -228,3 +228,26 @@ def test_delete_does_not_remove_header_row(fake_config: Config) -> None:
 
     assert ws.delete_rows_calls == []  # header (row 1) not deleted
     assert ws.grid[0] == _header_row()  # header intact
+
+
+def test_update_rows_by_index_targets_only_given_rows(fake_config: Config) -> None:
+    """update_rows_by_index writes ONLY the given 1-based rows, one A1 range each, one batch."""
+    grid = [_header_row(), [_row_for("TXN-FY26-0001")[c] for c in _COLS]]
+    ws = FakeWorksheet(grid)
+    client = _client(fake_config, ws)
+
+    flagged = _row_for("")  # a malformed, id-less row
+    flagged["needs_review"] = "TRUE"
+    client.update_rows_by_index(_TXN, {2: flagged})
+
+    assert len(ws.batch_update_calls) == 1
+    ranges = {req["range"] for req in ws.batch_update_calls[0]}
+    assert ranges == {"A2:O2"}  # row-targeted, never the whole tab
+
+
+def test_update_rows_by_index_rejects_header_row(fake_config: Config) -> None:
+    """Writing sheet row 1 (the header) is refused — a guard against clobbering the header."""
+    ws = FakeWorksheet([_header_row()])
+    client = _client(fake_config, ws)
+    with pytest.raises(ValueError):
+        client.update_rows_by_index(_TXN, {1: _row_for("X")})

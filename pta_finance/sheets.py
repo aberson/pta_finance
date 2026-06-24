@@ -260,6 +260,29 @@ class SheetsClient:
         # Single atomic batch — all ranges land together or not at all.
         self._with_retry(lambda: ws.batch_update(requests))
 
+    def update_rows_by_index(
+        self, tab: str, rows_by_index: Mapping[int, Mapping[str, str]]
+    ) -> None:
+        """Overwrite specific 1-based data rows (>= 2) in one atomic ``batch_update``.
+
+        Companion to :meth:`upsert_rows` for rows that have no ``id`` to key an upsert on —
+        e.g. a malformed row that ``etl.normalize`` flagged ``needs_review`` so the flag must
+        still reach the sheet. Each given row's full A1 range is written; the header (row 1)
+        is rejected. Row-targeted — never a full-tab write. A no-op when empty.
+        """
+        if not rows_by_index:
+            return
+        columns = schema.TABS[tab]
+        ncols = len(columns)
+        ws = self.worksheet(tab)
+        requests: list[dict[str, Any]] = []
+        for sheet_row, row in rows_by_index.items():
+            if sheet_row < 2:
+                raise ValueError(f"refusing to write header/invalid sheet row {sheet_row}")
+            values = [row.get(col, "") for col in columns]
+            requests.append({"range": self._a1_range(sheet_row, ncols), "values": [values]})
+        self._with_retry(lambda: ws.batch_update(requests))
+
     def delete_rows_by_id(self, tab: str, ids: Sequence[str]) -> None:
         """Delete the rows whose ``id`` is in ``ids`` (row-targeted, never a full clear).
 

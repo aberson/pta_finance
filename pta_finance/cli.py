@@ -4,10 +4,10 @@ Wired subcommands:
 
     check      Step 3 — validate config + sheet schema; round-trip a test row (test sheet)
     snapshot   Step 3 — export CSV backups of all tabs under ``snapshots/<utc>/``
+    normalize  Step 4 — normalize legacy ledger -> canonical schema (snapshot first)
 
 Placeholder subcommands (later steps):
 
-    normalize  Step 4 (etl)         — legacy ledger -> canonical schema
     analyze    Step 5 (analytics)   — run analytics
     report     Step 6 (reports)     — generate monthly report(s)
 """
@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pta_finance import backup, schema
+from pta_finance import backup, etl, schema
 from pta_finance.config import Config, load_config
 from pta_finance.sheets import SheetsClient
 
@@ -77,7 +77,21 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
 
 
 def _cmd_normalize(args: argparse.Namespace) -> int:
-    print("normalize: not yet implemented (Step 4)")
+    """Normalize the ``transactions`` ledger: snapshot first, assign ids, dedup, flag.
+
+    Delegates to :func:`pta_finance.etl.normalize`, which snapshots every tab BEFORE any
+    write, runs the pure normalization, then writes only changed rows back row-targeted.
+    """
+    config = _load(args)
+    client = SheetsClient(config)
+    result = etl.normalize(client, config, dest_dir=Path(args.dest))
+    print(
+        "normalize: "
+        f"{result.ids_assigned} id(s) assigned, "
+        f"{result.duplicates_flagged} duplicate(s) flagged, "
+        f"{result.malformed_flagged} malformed row(s) flagged, "
+        f"{result.unchanged} unchanged"
+    )
     return 0
 
 
@@ -125,6 +139,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_normalize = sub.add_parser(
         "normalize", help="normalize legacy/raw ledger -> canonical schema (assign IDs, dedup)"
+    )
+    _add_config_arg(p_normalize)
+    p_normalize.add_argument(
+        "--dest",
+        default=".",
+        help="base directory for the pre-write snapshots/<utc>/ backup (default: .)",
     )
     p_normalize.set_defaults(func=_cmd_normalize)
 

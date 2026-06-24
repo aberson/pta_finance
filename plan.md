@@ -373,6 +373,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 - **Produces:** `pta_finance/etl.py`, `normalize` in `cli.py`, `tests/test_etl.py`
 - **Done when:** round-trip test passes; re-running normalize is idempotent (no dup IDs, no reassigned IDs); a malformed-legacy-row fixture is flagged `needs_review`, not fatal
 - **Depends on:** 3
+- **Status:** DONE (2026-06-23)
 
 ### Step 5: Analytics engine
 - **Problem:** Implement `analytics/aggregate.py` (totals, income/expense, by category, by grade, by month via `pd.Grouper`, budget-vs-actual variance) and `analytics/trends.py` (multi-year fundraising/spend series, YoY). Wire the `analyze` CLI subcommand. Fixture-based numeric assertions.
