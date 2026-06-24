@@ -353,6 +353,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 - **Produces:** `pta_finance/schema.py`, `pta_finance/models.py`, `tests/test_schema.py`
 - **Done when:** tests pass incl. an `is`-identity assertion on a shared column list; mypy strict clean
 - **Depends on:** 1
+- **Status:** DONE (2026-06-23)
 
 ### Step 3: Sheets client + backup
 - **Problem:** Implement `sheets.py` (`gspread` service-account wrapper: open spreadsheet, read tab→records, atomic `batch_update` with 429 exponential-backoff+jitter, schema validation, named `update()` args) and `backup.py` (CSV snapshot of all tabs). Mock `gspread` in tests; include an integration test that exercises the production write path and asserts the batch+backoff code is reached (workspace `code-quality` rule: integration test through the production caller).
