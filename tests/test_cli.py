@@ -173,3 +173,103 @@ def test_snapshot_writes_csvs(
             rows = list(csv.reader(fh))
         assert rows[0] == list(columns)
     assert "snapshot: wrote" in capsys.readouterr().out
+
+
+class FakeAnalyzeClient:
+    """A fake SheetsClient returning canned transactions + budget records for ``analyze``."""
+
+    def __init__(self, config: Config, **_: object) -> None:
+        self.config = config
+        cols = schema.TRANSACTIONS_COLUMNS
+        bcols = schema.BUDGET_COLUMNS
+
+        def txn(**ov: str) -> dict[str, str]:
+            row = {c: "" for c in cols}
+            row.update(ov)
+            return row
+
+        def bud(**ov: str) -> dict[str, str]:
+            row = {c: "" for c in bcols}
+            row.update(ov)
+            return row
+
+        self._txns = [
+            txn(
+                id="TXN-FY26-0001",
+                date="2026-01-15",
+                fiscal_year="2026",
+                type="income",
+                amount="500.00",
+                category="fundraiser",
+            ),
+            txn(
+                id="TXN-FY26-0002",
+                date="2026-02-10",
+                fiscal_year="2026",
+                type="expense",
+                amount="120.00",
+                category="supplies",
+                grade="3",
+            ),
+            # Excluded from all aggregations.
+            txn(
+                id="TXN-FY26-0003",
+                date="2026-02-11",
+                fiscal_year="2026",
+                type="expense",
+                amount="999.99",
+                category="supplies",
+                needs_review="TRUE",
+            ),
+        ]
+        self._budget = [
+            bud(
+                id="BUD-FY26-supplies",
+                fiscal_year="2026",
+                category="supplies",
+                budgeted_amount="200.00",
+            ),
+        ]
+
+    def read_tab(self, tab: str) -> list[dict[str, str]]:
+        if tab == schema.TAB_TRANSACTIONS:
+            return [dict(r) for r in self._txns]
+        if tab == schema.TAB_BUDGET:
+            return [dict(r) for r in self._budget]
+        return []
+
+
+def test_analyze_prints_summary_all_years(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The analyze subcommand runs the real analytics through the production caller."""
+    monkeypatch.setattr(cli, "SheetsClient", FakeAnalyzeClient)
+    config_path = _write_config(tmp_path)
+
+    rc = cli.main(["analyze", "--config", str(config_path)])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "all fiscal years" in out
+    # The needs_review row is excluded and reported.
+    assert "excluded (needs_review): 1" in out
+    # income 500.00, expense 120.00 (NOT 1119.99 — the flagged row is excluded).
+    assert "income:  500.00" in out
+    assert "expense: 120.00" in out
+
+
+def test_analyze_filtered_to_fiscal_year_shows_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--fy filters the frame and triggers the budget-vs-actual section."""
+    monkeypatch.setattr(cli, "SheetsClient", FakeAnalyzeClient)
+    config_path = _write_config(tmp_path)
+
+    rc = cli.main(["analyze", "--config", str(config_path), "--fy", "2026"])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "FY2026" in out
+    assert "budget vs actual (FY2026)" in out
+    # supplies budgeted 200.00, actual 120.00, variance 80.00 (under budget).
+    assert "budgeted 200.00, actual 120.00, variance 80.00" in out

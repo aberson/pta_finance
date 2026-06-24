@@ -5,10 +5,10 @@ Wired subcommands:
     check      Step 3 — validate config + sheet schema; round-trip a test row (test sheet)
     snapshot   Step 3 — export CSV backups of all tabs under ``snapshots/<utc>/``
     normalize  Step 4 — normalize legacy ledger -> canonical schema (snapshot first)
+    analyze    Step 5 — run analytics over the ledger; print a readable summary
 
 Placeholder subcommands (later steps):
 
-    analyze    Step 5 (analytics)   — run analytics
     report     Step 6 (reports)     — generate monthly report(s)
 """
 
@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
-from pta_finance import backup, etl, schema
+from pta_finance import analytics, backup, etl, schema
 from pta_finance.config import Config, load_config
 from pta_finance.sheets import SheetsClient
 
@@ -96,7 +96,65 @@ def _cmd_normalize(args: argparse.Namespace) -> int:
 
 
 def _cmd_analyze(args: argparse.Namespace) -> int:
-    print("analyze: not yet implemented (Step 5)")
+    """Read the ledger (+ budget), build the analytics frame, print a readable summary.
+
+    ``--fy YYYY`` filters every aggregation to that fiscal year; absent, all years are
+    included. Rows flagged ``needs_review`` are excluded by :func:`analytics.build_frame`
+    (the excluded count is printed). Reads only — never writes the sheet.
+    """
+    config = _load(args)
+    client = SheetsClient(config)
+    txn_rows = client.read_tab(schema.TAB_TRANSACTIONS)
+    budget_rows = client.read_tab(schema.TAB_BUDGET)
+
+    built = analytics.build_frame(txn_rows, start_month=config.fiscal_year.start_month)
+    frame = built.frame
+    fy: int | None = args.fy
+    if fy is not None:
+        frame = frame[frame[analytics.aggregate.FISCAL_YEAR_INT] == fy]
+
+    scope = f"FY{fy}" if fy is not None else "all fiscal years"
+    print(f"analyze: {config.organization.name} — {scope}")
+    print(f"  rows analyzed: {len(frame)}; excluded (needs_review): {built.excluded_needs_review}")
+
+    tot = analytics.totals(frame)
+    print(f"  income:  {tot.income}")
+    print(f"  expense: {tot.expense}")
+    print(f"  net:     {tot.net}")
+
+    print("  by category:")
+    for cat in analytics.by_category(frame):
+        print(f"    {cat.category or '(uncategorized)'}: net {cat.net}")
+
+    print("  by grade:")
+    for grade in analytics.by_grade(frame):
+        print(f"    {grade.grade}: net {grade.net}")
+
+    print("  by month:")
+    for month in analytics.by_month(frame):
+        print(f"    {month.month.isoformat()}: net {month.net}")
+
+    if fy is not None:
+        print(f"  budget vs actual (FY{fy}):")
+        for bv in analytics.budget_vs_actual(frame, budget_rows, fy):
+            print(
+                f"    {bv.category or '(uncategorized)'}: "
+                f"budgeted {bv.budgeted}, actual {bv.actual}, variance {bv.variance}"
+            )
+
+    print("  fundraising + spend by year:")
+    for year in analytics.fundraising_and_spend_by_year(built.frame):
+        print(f"    FY{year.fiscal_year}: income {year.income}, expense {year.expense}")
+
+    print("  year-over-year:")
+    for yoy in analytics.year_over_year(built.frame):
+        inc_pct = "n/a" if yoy.income_pct is None else f"{yoy.income_pct}%"
+        exp_pct = "n/a" if yoy.expense_pct is None else f"{yoy.expense_pct}%"
+        print(
+            f"    FY{yoy.prior_year}->FY{yoy.year}: "
+            f"income {yoy.income_change} ({inc_pct}), expense {yoy.expense_change} ({exp_pct})"
+        )
+
     return 0
 
 
@@ -149,6 +207,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_normalize.set_defaults(func=_cmd_normalize)
 
     p_analyze = sub.add_parser("analyze", help="run analytics over the ledger")
+    _add_config_arg(p_analyze)
     p_analyze.add_argument("--fy", type=int, default=None, help="fiscal-year label, e.g. 2026")
     p_analyze.set_defaults(func=_cmd_analyze)
 

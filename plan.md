@@ -383,6 +383,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 - **Produces:** `pta_finance/analytics/`, `analyze` in `cli.py`, `tests/test_analytics.py`
 - **Done when:** known-fixture → expected-number assertions pass; mypy strict clean
 - **Depends on:** 4
+- **Status:** DONE (2026-06-23)
 
 ### Step 6: Report generation (internal + external)
 - **Problem:** Implement `reports/builder.py` (compute the report data model from analytics), `reports/charts.py` (matplotlib Agg PNGs), `reports/render.py` (Jinja2 → HTML with autoescape on payee/memo; optional WeasyPrint PDF behind the `[pdf]` extra), and `templates/internal.html.j2` + `templates/external.html.j2`. **Pin the exact internal vs external field lists here.** The external variant must exclude payee names, receipt links, and member PII — enforce this as a **runtime invariant**, not just a test: the external builder raises a stable `ExternalReportPIIError` if any payee/receipt/PII field appears in the external data model (per `.claude/rules/security.md` § "Pair unsafe configs with startup safety checks" — a public-facing safety control must be a guard, not documentation). Wire the `report` CLI subcommand; append to `report_log`; write to `reports/output/` + (configured) private Drive folder — never to the repo.
