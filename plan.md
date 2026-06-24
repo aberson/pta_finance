@@ -405,6 +405,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 - **Produces:** `tests/test_smoke_pipeline.py`
 - **Done when:** the smoke test passes in CI with no live Google calls
 - **Depends on:** 6
+- **Status:** DONE (2026-06-23)
 
 ### Step 8: GitHub Actions monthly report workflow
 - **Problem:** Add `.github/workflows/monthly-report.yml` — `schedule: cron "0 9 1 * *"` + `workflow_dispatch`; `actions/checkout@v4`; `astral-sh/setup-uv` (cache on); restore `GOOGLE_SA_KEY_B64` + `PTA_CONFIG_B64` secrets by base64-decoding to files **without echoing**; `uv run pta-finance report --variant both` (the command writes to the private Drive folder, the canonical destination); the workflow then uploads the local `reports/output/` as an ephemeral artifact for operator download; **never commit reports to the repo**. Also append a UTC timestamp to a tracked `.github/last-run.txt` and push it (keepalive so the public-repo scheduler isn't auto-disabled after 60 days; this liveness marker is not a report). Confirm `ci.yml` (lint/type/test on PR) from Step 1 is green.
