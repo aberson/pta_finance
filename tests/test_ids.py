@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from datetime import date
 
+from pta_finance.etl import _TXN_ID_RE
 from pta_finance.ids import (
     budget_id,
     event_id,
     fiscal_year_label,
     receipt_id,
     slugify,
+    summary_txn_id,
     txn_id,
 )
 
@@ -18,6 +20,28 @@ def test_txn_id_exact() -> None:
     assert txn_id(2026, 1) == "TXN-FY26-0001"
     assert txn_id(2026, 42) == "TXN-FY26-0042"
     assert txn_id(2025, 1234) == "TXN-FY25-1234"
+
+
+def test_summary_txn_id_exact() -> None:
+    assert summary_txn_id(2026, "Fall Festival") == "TXN-FY26-SUM-fall-festival"
+    assert summary_txn_id(2025, "Supplies") == "TXN-FY25-SUM-supplies"
+    # Grade suffix mirrors budget_id's -g{slug} shape.
+    assert summary_txn_id(2026, "Field Trips", grade="3") == "TXN-FY26-SUM-field-trips-g3"
+    assert summary_txn_id(2026, "Field Trips", grade="K") == "TXN-FY26-SUM-field-trips-gk"
+    # Empty/None grade collapses to the plain form.
+    assert summary_txn_id(2026, "Supplies", grade=None) == "TXN-FY26-SUM-supplies"
+    assert summary_txn_id(2026, "Supplies", grade="") == "TXN-FY26-SUM-supplies"
+
+
+def test_summary_txn_id_not_matched_by_etl_txn_id_regex() -> None:
+    """Cross-consumer safety: a summary id must NOT match etl's canonical-id regex, so it
+    can never seed/perturb normalize's per-FY sequence counter (code-quality rule: grep
+    all downstream consumers of an id shape)."""
+    # The canonical-id regex DOES match a real txn id...
+    assert _TXN_ID_RE.match(txn_id(2026, 1)) is not None
+    # ...but never a summary id (its body is -SUM-{slug}, not a \d{4,} sequence).
+    assert _TXN_ID_RE.match(summary_txn_id(2026, "Fall Festival")) is None
+    assert _TXN_ID_RE.match(summary_txn_id(2026, "Supplies", grade="3")) is None
 
 
 def test_receipt_id_exact() -> None:

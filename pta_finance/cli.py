@@ -8,16 +8,18 @@ Wired subcommands:
     normalize  Step 4 — normalize legacy ledger -> canonical schema (snapshot first)
     analyze    Step 5 — run analytics over the ledger; print a readable summary
     report     Step 6 — generate monthly report(s); write HTML to reports/output/, log a run
+    import-budget  load a messy "budget" worksheet into the canonical budget tab (+ summary actuals)
 """
 
 from __future__ import annotations
 
 import argparse
+import calendar
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
-from pta_finance import analytics, backup, etl, reports, schema
+from pta_finance import analytics, backup, budget_import, etl, ids, models, reports, schema
 from pta_finance.config import Config, load_config
 from pta_finance.sheets import SheetsClient
 
@@ -262,6 +264,97 @@ def _cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fiscal_year_end_date(fy: int, start_month: int) -> date:
+    """The LAST calendar day of fiscal year ``fy`` for a given start month.
+
+    For a calendar fiscal year (``start_month == 1``) this is December 31 of ``fy``.
+    Otherwise the year spans into ``fy``'s calendar year and ENDS in ``start_month - 1``
+    of that year; the last day of that month is found via :func:`calendar.monthrange`.
+    """
+    if start_month == 1:
+        return date(fy, 12, 31)
+    end_month = start_month - 1
+    last_day = calendar.monthrange(fy, end_month)[1]
+    return date(fy, end_month, last_day)
+
+
+def _cmd_import_budget(args: argparse.Namespace) -> int:
+    """Load a messy human "budget" worksheet into the canonical ``budget`` tab.
+
+    Reads the source worksheet named by ``--from-tab`` as a raw grid
+    (:meth:`SheetsClient.read_values`), parses it with the pure
+    :func:`pta_finance.budget_import.plan_budget_import`, then (unless ``--dry-run``)
+    snapshots every tab BEFORE any write and upserts the planned ``budget`` rows
+    (idempotent by :func:`pta_finance.ids.budget_id`). With ``--with-actuals`` it also
+    upserts one summary ``transactions`` row per line item carrying its actual spend
+    (keyed by :func:`pta_finance.ids.summary_txn_id`, a shape ``etl.normalize`` ignores).
+
+    The summary transactions are stamped with the fiscal year's last day. ``--actual-date``
+    overrides that; absent, it is derived from ``--fy`` + ``fiscal_year.start_month`` and a
+    sanity check (a real :class:`ValueError`, not an ``assert``) confirms the derived date
+    falls in ``--fy``. ``--dry-run`` prints the plan's counts + a sample and makes NO writes
+    and NO snapshot.
+    """
+    config = _load(args)
+    start_month = config.fiscal_year.start_month
+
+    if args.actual_date:
+        actual_date = models.parse_date(args.actual_date)
+    else:
+        actual_date = _fiscal_year_end_date(args.fy, start_month)
+        # The derived date must fall in the requested fiscal year — a real guard (NOT an
+        # assert, which `python -O` strips) against an off-by-one in the start-month
+        # arithmetic (workspace security rule: invariants get real guards).
+        derived_fy = ids.fiscal_year_label(actual_date, start_month)
+        if derived_fy != args.fy:
+            raise ValueError(
+                f"computed fiscal-year-end date {actual_date.isoformat()} falls in "
+                f"FY{derived_fy}, not the requested FY{args.fy} "
+                f"(start_month={start_month}) — internal arithmetic error"
+            )
+
+    client = SheetsClient(config)
+    values = client.read_values(args.from_tab)
+    plan = budget_import.plan_budget_import(
+        values,
+        fy=args.fy,
+        with_actuals=args.with_actuals,
+        actual_date=actual_date,
+    )
+
+    if args.dry_run:
+        print(
+            "import-budget [dry-run]: "
+            f"{len(plan.budget_rows)} budget row(s), "
+            f"{len(plan.txn_rows)} summary txn(s), "
+            f"{plan.skipped_blank} skipped (blank), "
+            f"{plan.skipped_summary} skipped (summary), "
+            f"{plan.needs_review} need review, "
+            f"{plan.duplicate_ids} duplicate(s)"
+        )
+        for budget_id_ in list(plan.budget_rows)[:5]:
+            row = plan.budget_rows[budget_id_]
+            print(f"  {budget_id_}: {row['budgeted_amount']}")
+        print("import-budget [dry-run]: no writes made")
+        return 0
+
+    # Snapshot BEFORE any mutation (corruption protection).
+    backup.snapshot_all_tabs(client, Path("."))
+    client.upsert_rows(schema.TAB_BUDGET, plan.budget_rows)
+    if args.with_actuals and plan.txn_rows:
+        client.upsert_rows(schema.TAB_TRANSACTIONS, plan.txn_rows)
+
+    skipped = plan.skipped_blank + plan.skipped_summary
+    print(
+        "import-budget: "
+        f"{len(plan.budget_rows)} budget row(s), "
+        f"{len(plan.txn_rows)} summary txn(s), "
+        f"{skipped} skipped, "
+        f"{plan.needs_review} need review"
+    )
+    return 0
+
+
 def _add_config_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--config",
@@ -342,6 +435,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="base dir for the gitignored reports/output/ HTML files (default: .)",
     )
     p_report.set_defaults(func=_cmd_report)
+
+    p_import_budget = sub.add_parser(
+        "import-budget",
+        help="load a messy budget worksheet into the canonical budget tab (+ summary actuals)",
+    )
+    _add_config_arg(p_import_budget)
+    p_import_budget.add_argument(
+        "--from-tab",
+        required=True,
+        help="name of the source worksheet to read (the messy human budget tab)",
+    )
+    p_import_budget.add_argument(
+        "--fy",
+        type=int,
+        required=True,
+        help="fiscal-year label the budget belongs to, e.g. 2026",
+    )
+    p_import_budget.add_argument(
+        "--with-actuals",
+        action="store_true",
+        help="also import one summary 'actual' transaction per line item",
+    )
+    p_import_budget.add_argument(
+        "--actual-date",
+        default=None,
+        help="ISO date YYYY-MM-DD for the summary actuals (default: last day of the FY)",
+    )
+    p_import_budget.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the parsed plan + counts, make no writes and no snapshot",
+    )
+    p_import_budget.set_defaults(func=_cmd_import_budget)
 
     return parser
 

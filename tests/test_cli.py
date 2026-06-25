@@ -406,3 +406,243 @@ def test_analyze_filtered_to_fiscal_year_shows_budget(
     assert "budget vs actual (FY2026)" in out
     # supplies budgeted 200.00, actual 120.00, variance 80.00 (under budget).
     assert "budgeted 200.00, actual 120.00, variance 80.00" in out
+
+
+# A raw budget grid (header below row 1, a section, currency cells, a total rollup) with
+# obviously-fake line items — exercises import-budget through the production CLI caller.
+_BUDGET_GRID = [
+    ["Example PTA Budget", "", "", ""],
+    ["Type", "Line Item", "Proposed", "Actual "],
+    ["Income", "Membership Dues", "1500", "1450"],
+    ["Expense", "Classroom Supplies", "$2,000.00", "1200"],
+    ["", "Total Expense", "2000", "1200"],
+]
+
+
+class FakeImportBudgetClient:
+    """A fake SheetsClient for import-budget: serves a raw grid + records upserts/snapshots.
+
+    ``read_values`` returns the canned budget grid; ``read_tab`` returns [] for every tab
+    (so the real ``backup.snapshot_all_tabs`` runs and we can detect a snapshot was taken);
+    ``upsert_rows`` records its (tab, rows) so the test asserts which tabs were written.
+    """
+
+    instances: list[FakeImportBudgetClient] = []
+
+    def __init__(self, config: Config, **_: object) -> None:
+        self.config = config
+        self.upserts: list[tuple[str, Mapping[str, Mapping[str, str]]]] = []
+        self.read_tab_calls: list[str] = []
+        self.read_values_calls: list[str] = []
+        FakeImportBudgetClient.instances.append(self)
+
+    def read_values(self, tab: str) -> list[list[str]]:
+        self.read_values_calls.append(tab)
+        return [list(row) for row in _BUDGET_GRID]
+
+    def read_tab(self, tab: str) -> list[dict[str, str]]:
+        self.read_tab_calls.append(tab)
+        return []
+
+    def upsert_rows(self, tab: str, rows_by_id: Mapping[str, Mapping[str, str]]) -> None:
+        self.upserts.append((tab, rows_by_id))
+
+
+def test_import_budget_upserts_budget_and_transactions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """import-budget --with-actuals upserts BOTH tabs and snapshots first, end-to-end."""
+    from pta_finance import ids
+
+    FakeImportBudgetClient.instances = []
+    monkeypatch.setattr(cli, "SheetsClient", FakeImportBudgetClient)
+    config_path = _write_config(tmp_path)
+    monkeypatch.chdir(tmp_path)  # snapshot writes under cwd
+
+    rc = cli.main(
+        [
+            "import-budget",
+            "--from-tab",
+            "Budget Source",
+            "--fy",
+            "2026",
+            "--with-actuals",
+            "--config",
+            str(config_path),
+        ]
+    )
+
+    assert rc == 0
+    (client,) = FakeImportBudgetClient.instances
+    assert client.read_values_calls == ["Budget Source"]
+    # A snapshot was taken BEFORE writing (read_tab fired for every canonical tab).
+    assert set(client.read_tab_calls) == set(schema.TABS)
+    assert (tmp_path / "snapshots").is_dir()
+
+    upsert_tabs = {tab for tab, _ in client.upserts}
+    assert upsert_tabs == {schema.TAB_BUDGET, schema.TAB_TRANSACTIONS}
+
+    budget_upsert = next(rows for tab, rows in client.upserts if tab == schema.TAB_BUDGET)
+    assert ids.budget_id(2026, "Membership Dues") in budget_upsert
+    assert ids.budget_id(2026, "Classroom Supplies") in budget_upsert
+    # "Total Expense" rollup was skipped.
+    assert ids.budget_id(2026, "Total Expense") not in budget_upsert
+
+    txn_upsert = next(rows for tab, rows in client.upserts if tab == schema.TAB_TRANSACTIONS)
+    assert ids.summary_txn_id(2026, "Membership Dues") in txn_upsert
+    assert ids.summary_txn_id(2026, "Classroom Supplies") in txn_upsert
+
+    assert "import-budget:" in capsys.readouterr().out
+
+
+def test_import_budget_dry_run_makes_no_writes_or_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--dry-run prints the plan but never upserts and never snapshots."""
+    FakeImportBudgetClient.instances = []
+    monkeypatch.setattr(cli, "SheetsClient", FakeImportBudgetClient)
+    config_path = _write_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    rc = cli.main(
+        [
+            "import-budget",
+            "--from-tab",
+            "Budget Source",
+            "--fy",
+            "2026",
+            "--with-actuals",
+            "--dry-run",
+            "--config",
+            str(config_path),
+        ]
+    )
+
+    assert rc == 0
+    (client,) = FakeImportBudgetClient.instances
+    assert client.upserts == []  # NO writes
+    assert client.read_tab_calls == []  # NO snapshot
+    assert not (tmp_path / "snapshots").exists()
+    out = capsys.readouterr().out
+    assert "dry-run" in out
+    assert "no writes made" in out
+
+
+def test_import_budget_without_actuals_upserts_only_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Without --with-actuals, only the budget tab is upserted (no transactions)."""
+    FakeImportBudgetClient.instances = []
+    monkeypatch.setattr(cli, "SheetsClient", FakeImportBudgetClient)
+    config_path = _write_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    rc = cli.main(
+        [
+            "import-budget",
+            "--from-tab",
+            "Budget Source",
+            "--fy",
+            "2026",
+            "--config",
+            str(config_path),
+        ]
+    )
+
+    assert rc == 0
+    (client,) = FakeImportBudgetClient.instances
+    upsert_tabs = [tab for tab, _ in client.upserts]
+    assert upsert_tabs == [schema.TAB_BUDGET]  # transactions NOT written
+
+
+def _config_with_start_month(start_month: int) -> str:
+    """The fake config text with a substituted fiscal_year.start_month."""
+    return _CONFIG_TEXT.replace("start_month = 1", f"start_month = {start_month}")
+
+
+def _one_summary_txn_date(client: FakeImportBudgetClient) -> str:
+    """The ``date`` cell shared by every upserted summary transaction row."""
+    txn_rows = next(rows for tab, rows in client.upserts if tab == schema.TAB_TRANSACTIONS)
+    dates = {row["date"] for row in txn_rows.values()}
+    assert len(dates) == 1  # all summary txns share the FY-end date
+    return dates.pop()
+
+
+def _run_import_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    config_text: str,
+    extra_args: list[str],
+) -> FakeImportBudgetClient:
+    """Run import-budget --with-actuals against the fake client and return that client."""
+    FakeImportBudgetClient.instances = []
+    monkeypatch.setattr(cli, "SheetsClient", FakeImportBudgetClient)
+    config_path = _write_config(tmp_path, config_text)
+    monkeypatch.chdir(tmp_path)
+
+    rc = cli.main(
+        [
+            "import-budget",
+            "--from-tab",
+            "Budget Source",
+            "--fy",
+            "2026",
+            "--with-actuals",
+            "--config",
+            str(config_path),
+            *extra_args,
+        ]
+    )
+    assert rc == 0
+    (client,) = FakeImportBudgetClient.instances
+    return client
+
+
+def test_import_budget_july_start_stamps_fy_end_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """start_month=7, FY2026: summary txns are stamped with the FY-end day (2026-06-30)."""
+    client = _run_import_budget(
+        tmp_path, monkeypatch, config_text=_config_with_start_month(7), extra_args=[]
+    )
+    assert _one_summary_txn_date(client) == "2026-06-30"
+
+
+def test_import_budget_august_start_stamps_fy_end_date(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """start_month=8, FY2026 (the LIVE deployment path): FY ends 2026-07-31."""
+    client = _run_import_budget(
+        tmp_path, monkeypatch, config_text=_config_with_start_month(8), extra_args=[]
+    )
+    assert _one_summary_txn_date(client) == "2026-07-31"
+
+
+def test_import_budget_actual_date_override_flows_into_txn_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--actual-date overrides the derived FY-end date and lands on every summary txn."""
+    client = _run_import_budget(
+        tmp_path,
+        monkeypatch,
+        config_text=_config_with_start_month(8),  # override must win over the derived date
+        extra_args=["--actual-date", "2026-03-15"],
+    )
+    assert _one_summary_txn_date(client) == "2026-03-15"
+
+
+def test_fiscal_year_end_date_guard_holds_for_each_start_month(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The derived FY-end date always falls in the requested FY for every start month — the
+    guard (a real ValueError, not a stripped assert) never trips on the correct arithmetic."""
+    for start_month in range(1, 13):
+        client = _run_import_budget(
+            tmp_path,
+            monkeypatch,
+            config_text=_config_with_start_month(start_month),
+            extra_args=[],
+        )
+        derived = _one_summary_txn_date(client)
+        assert cli.ids.fiscal_year_label(cli.date.fromisoformat(derived), start_month) == 2026

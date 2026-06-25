@@ -167,6 +167,24 @@ def test_read_tab_returns_dicts_keyed_by_schema_columns(fake_config: Config) -> 
     assert records[0]["payee"] == "Example Vendor"
 
 
+def test_read_values_returns_raw_grid_coerced_to_str(fake_config: Config) -> None:
+    """read_values returns the RAW grid (header row included) with every cell coerced to str —
+    no header-keyed dicts, unlike read_tab. Used by import-budget on a non-canonical tab."""
+    grid = [
+        ["", "Type", "Line Item", "Proposed"],  # a non-row-1 header, leading junk column
+        ["", "Income", "Membership", 1500],  # an int cell -> "1500"
+    ]
+    ws = FakeWorksheet(grid)
+    client = _client(fake_config, ws)
+
+    values = client.read_values(_TXN)
+
+    assert values == [
+        ["", "Type", "Line Item", "Proposed"],
+        ["", "Income", "Membership", "1500"],
+    ]
+
+
 def test_append_rows_writes_in_schema_order(fake_config: Config) -> None:
     ws = FakeWorksheet([_header_row()])
     client = _client(fake_config, ws)

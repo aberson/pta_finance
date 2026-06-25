@@ -22,6 +22,7 @@ __all__ = [
     "fiscal_year_label",
     "slugify",
     "txn_id",
+    "summary_txn_id",
     "receipt_id",
     "budget_id",
     "event_id",
@@ -65,6 +66,26 @@ def _yy(fy: int) -> str:
 def txn_id(fy: int, seq: int) -> str:
     """Transaction id, e.g. ``TXN-FY26-0001``."""
     return f"TXN-FY{_yy(fy)}-{seq:04d}"
+
+
+def summary_txn_id(fy: int, category: str, grade: str | None = None) -> str:
+    """Summary-transaction id for an imported budget actual, e.g. ``TXN-FY26-SUM-supplies``.
+
+    Mirrors :func:`budget_id`'s category(+grade) slug shape so a budget line and its
+    imported summary transaction line up by slug. Appends ``-g{grade}`` when ``grade`` is
+    non-empty (e.g. ``TXN-FY26-SUM-supplies-g3``).
+
+    The ``-SUM-{slug}`` body is INTENTIONALLY not matched by ``etl._TXN_ID_RE`` (whose
+    sequence token must be ``\\d{4,}``), so a summary row never perturbs
+    :func:`pta_finance.etl.normalize`'s per-FY sequence seeding — it is invisible to the
+    counter that mints ``TXN-FY{yy}-NNNN`` ids (workspace ``code-quality`` rule: grep all
+    downstream consumers when introducing an id shape; this id's only consumer of note is
+    that regex, asserted in ``tests/test_ids.py``).
+    """
+    base = f"TXN-FY{_yy(fy)}-SUM-{slugify(category)}"
+    if grade is not None and str(grade).strip() != "":
+        base = f"{base}-g{slugify(str(grade))}"
+    return base
 
 
 def receipt_id(fy: int, seq: int) -> str:

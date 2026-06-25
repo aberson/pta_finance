@@ -132,6 +132,10 @@ class FakeWorksheet:
         header = self.grid[0]
         return [dict(zip(header, row, strict=False)) for row in self.grid[1:]]
 
+    def get_all_values(self) -> list[list[str]]:
+        self._maybe_fail("get_all_values")
+        return [list(row) for row in self.grid]
+
     # --- writes -------------------------------------------------------------
 
     def batch_update(self, data: Iterable[Mapping[str, Any]]) -> dict[str, Any]:

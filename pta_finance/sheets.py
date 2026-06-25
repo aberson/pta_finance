@@ -203,6 +203,18 @@ class SheetsClient:
         records = self._with_retry(lambda: ws.get_all_records())
         return [{str(k): _as_str(v) for k, v in record.items()} for record in records]
 
+    def read_values(self, tab: str) -> list[list[str]]:
+        """Read a worksheet's RAW grid (every cell coerced to ``str``).
+
+        Unlike :meth:`read_tab` this does NOT key by a header row — it returns the cells
+        exactly as laid out, header row included. Used by ``import-budget`` to scan a messy
+        human worksheet whose header is not row 1 (or not the canonical schema at all).
+        Routed through :meth:`_with_retry`; uses ``get_all_values`` (whole-grid read).
+        """
+        ws = self.worksheet(tab)
+        rows: list[list[Any]] = self._with_retry(lambda: ws.get_all_values())
+        return [[_as_str(cell) for cell in row] for row in rows]
+
     def validate_schema(self, tab: str) -> None:
         """Assert the worksheet's header row equals ``schema.TABS[tab]``.
 
