@@ -145,11 +145,27 @@ round-trip `OK` line — it wrote, read back, and deleted a probe row on the tes
 uv run pta-finance normalize
 ```
 
-**Load your budget** into the `budget` tab. If your budget lives in another tab of the same
-spreadsheet, use the budget importer (see `pta-finance import-budget --help`) pointed at that
-source tab; for a small one-time load you can also paste rows directly into the `budget` tab
-using the exact columns `id, fiscal_year, category, grade, budgeted_amount, notes` (leave `id`
-blank and let the toolkit mint `BUD-FY..` IDs, or fill them yourself).
+**Load your budget** with `import-budget`, pointed at the worksheet that holds it. It tolerates a
+messy human layout (`Type` / `Line Item` / `Proposed` / `Actual` columns, with subtotal/total rows
+mixed in). Preview first — this reads only and writes nothing:
+
+```bash
+uv run pta-finance import-budget --from-tab "<your budget tab>" --fy <YYYY> --with-actuals --dry-run
+```
+
+Then the real load (snapshots every tab first, then idempotent upsert by ID):
+
+```bash
+uv run pta-finance import-budget --from-tab "<your budget tab>" --fy <YYYY> --with-actuals
+```
+
+- `--fy` is the fiscal-year **label** (e.g. `2026` = the 2025–2026 year when `start_month` is a
+  school-year month).
+- `--with-actuals` also writes one summary "actual" transaction per line item (from the `Actual`
+  column) so `analyze`/`report` show real spend, not just the budget. Omit it to load only the budget.
+- A line whose `Type` cell is blank is **kept but flagged `needs_review`** (and excluded from analytics)
+  until you fill in the type and re-run — the import is idempotent, so re-running is safe.
+- Per-transaction detail (beyond these summary actuals) is a separate, later load.
 
 **Then analyze / report:**
 
