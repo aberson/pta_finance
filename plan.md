@@ -188,8 +188,8 @@ path.
 | `pta-finance check` | Validate config + sheet schema; real round-trip read/write/delete of a test row (smoke) |
 | `pta-finance snapshot` | Export CSV backups of all tabs |
 | `pta-finance normalize` | Normalize legacy/raw ledger → canonical schema, assign IDs, dedup (snapshot first) |
-| `pta-finance analyze [--fy YYYY]` | Run analytics; print summary / write analytics artifacts |
-| `pta-finance report --month YYYY-MM [--variant internal\|external\|both]` | Generate monthly report(s) |
+| `pta-finance analyze [--fy YYYY]` | Run analytics over the Budget Timeseries tab; print summary |
+| `pta-finance report [--fy YYYY] [--variant internal\|external\|both]` | Generate fiscal-year report(s) from the Budget Timeseries tab (default: current FY) |
 
 ## 6. API Route Contract
 
@@ -311,7 +311,7 @@ uv run pta-finance check
 # 5. One-time legacy normalize, then analyze + report
 uv run pta-finance normalize
 uv run pta-finance analyze
-uv run pta-finance report --month 2026-06 --variant both
+uv run pta-finance report --fy 2026 --variant both
 ```
 
 ```bash
@@ -470,7 +470,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
   ```powershell
   # Local end-to-end:
   uv run pta-finance normalize
-  uv run pta-finance report --month 2026-06 --variant both
+  uv run pta-finance report --fy 2026 --variant both
   # CI end-to-end (after adding GOOGLE_SA_KEY_B64 + PTA_CONFIG_B64 secrets):
   gh workflow run monthly-report.yml
   ```

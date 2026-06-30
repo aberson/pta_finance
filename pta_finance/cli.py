@@ -6,8 +6,8 @@ Wired subcommands:
     init-sheet bootstrap the spreadsheet with the 5 canonical tabs + their schema headers
     snapshot   Step 3 — export CSV backups of all tabs under ``snapshots/<utc>/``
     normalize  Step 4 — normalize legacy ledger -> canonical schema (snapshot first)
-    analyze    Step 5 — run analytics over the ledger; print a readable summary
-    report     Step 6 — generate monthly report(s); write HTML to reports/output/, log a run
+    analyze    Step 5 — run analytics over the "Budget Timeseries" tab; print a summary
+    report     Step 6 — generate fiscal-year report(s); write HTML to reports/output/, log a run
     import-budget  load a messy "budget" worksheet into the canonical budget tab (+ summary actuals)
 """
 
@@ -19,7 +19,17 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from pta_finance import analytics, backup, budget_import, etl, ids, models, reports, schema
+from pta_finance import (
+    analytics,
+    backup,
+    budget_import,
+    etl,
+    ids,
+    models,
+    report_source,
+    reports,
+    schema,
+)
 from pta_finance.config import Config, load_config
 from pta_finance.sheets import SheetsClient
 
@@ -147,16 +157,22 @@ def _cmd_normalize(args: argparse.Namespace) -> int:
 
 
 def _cmd_analyze(args: argparse.Namespace) -> int:
-    """Read the ledger (+ budget), build the analytics frame, print a readable summary.
+    """Source from the "Budget Timeseries" tab, build the analytics frame, print a summary.
 
-    ``--fy YYYY`` filters every aggregation to that fiscal year; absent, all years are
-    included. Rows flagged ``needs_review`` are excluded by :func:`analytics.build_frame`
-    (the excluded count is printed). Reads only — never writes the sheet.
+    Reads the "Budget Timeseries" long dataset via
+    :func:`pta_finance.report_source.read_timeseries` + :func:`~.to_inputs` (which projects
+    it onto the budget/transaction row shapes the analytics engine consumes) — the canonical
+    ``transactions`` / ``budget`` tabs are no longer read here. ``--fy YYYY`` filters every
+    aggregation to that fiscal year; absent, all years are included. Rows flagged
+    ``needs_review`` are excluded by :func:`analytics.build_frame` (the excluded count is
+    printed). Reads only — never writes the sheet.
     """
     config = _load(args)
     client = SheetsClient(config)
-    txn_rows = client.read_tab(schema.TAB_TRANSACTIONS)
-    budget_rows = client.read_tab(schema.TAB_BUDGET)
+    rows = report_source.read_timeseries(client)
+    budget_rows, txn_rows = report_source.to_inputs(
+        rows, start_month=config.fiscal_year.start_month, fy=None
+    )
 
     built = analytics.build_frame(txn_rows, start_month=config.fiscal_year.start_month)
     frame = built.frame
@@ -210,24 +226,36 @@ def _cmd_analyze(args: argparse.Namespace) -> int:
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
-    """Generate monthly report(s): read the ledger, build, render to HTML, log the run.
+    """Generate fiscal-year report(s): read the timeseries, build, render to HTML, log the run.
 
-    Reads ``transactions`` + ``budget`` (read-only), builds the requested variant(s) via
-    :mod:`pta_finance.reports`, renders each to a single self-contained HTML file under
-    ``reports/output/<month>-<variant>.html`` (a gitignored dir — reports never enter the
-    repo), and appends one row to the ``report_log`` tab per variant (run_at, variant, month,
-    output_url=the local path, generated_by). ``--variant both`` emits both files + both log
-    rows. The external builder runs its PII guard before rendering.
+    Sources from the "Budget Timeseries" tab (read-only) via
+    :func:`pta_finance.report_source.read_timeseries` + :func:`~.to_inputs`, which projects
+    that long dataset onto the budget/transaction row shapes the report builder consumes —
+    the canonical ``transactions`` / ``budget`` tabs are no longer read here. Builds the
+    requested variant(s) via :mod:`pta_finance.reports`, renders each to a single
+    self-contained HTML file under ``reports/output/FY<fy>-<variant>.html`` (a gitignored
+    dir — reports never enter the repo), and appends one row to the ``report_log`` tab per
+    variant (run_at, variant, ``month``=``FY<fy>``, output_url=the local path, generated_by).
+    ``--variant both`` emits both files + both log rows. The external builder runs its PII
+    guard before rendering.
+
+    ``--fy`` is OPTIONAL: when omitted it defaults to the CURRENT fiscal year
+    (:func:`pta_finance.ids.fiscal_year_label` of today's UTC date under the configured
+    ``fiscal_year.start_month``), so the unattended monthly cron can run
+    ``report --variant both`` with no target argument.
     """
     config = _load(args)
-    month = args.month
-    if not month:
-        print("report: --month YYYY-MM is required")
-        return 1
+    fy: int = (
+        args.fy
+        if args.fy is not None
+        else ids.fiscal_year_label(datetime.now(UTC).date(), config.fiscal_year.start_month)
+    )
 
     client = SheetsClient(config)
-    txn_rows = client.read_tab(schema.TAB_TRANSACTIONS)
-    budget_rows = client.read_tab(schema.TAB_BUDGET)
+    rows = report_source.read_timeseries(client)
+    budget_rows, txn_rows = report_source.to_inputs(
+        rows, start_month=config.fiscal_year.start_month, fy=fy
+    )
 
     variants = ("internal", "external") if args.variant == "both" else (args.variant,)
 
@@ -235,17 +263,18 @@ def _cmd_report(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     run_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     generated_by = config.contacts.treasurer
+    fy_label = f"FY{fy}"
 
     log_rows: list[dict[str, str]] = []
     for variant in variants:
         if variant == "internal":
-            model = reports.build_internal_report(config, month, txn_rows, budget_rows)
+            model = reports.build_internal_report(config, fy, txn_rows, budget_rows)
             html = reports.render_internal(model)
         else:
-            ext_model = reports.build_external_report(config, month, txn_rows, budget_rows)
+            ext_model = reports.build_external_report(config, fy, txn_rows, budget_rows)
             html = reports.render_external(ext_model)
 
-        out_path = out_dir / f"{month}-{variant}.html"
+        out_path = out_dir / f"{fy_label}-{variant}.html"
         out_path.write_text(html, encoding="utf-8")
         print(f"report: wrote {variant} report to {out_path}")
 
@@ -253,7 +282,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
             {
                 "run_at": run_at,
                 "variant": variant,
-                "month": month,
+                "month": fy_label,
                 "output_url": str(out_path),
                 "generated_by": generated_by,
             }
@@ -420,9 +449,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_analyze.add_argument("--fy", type=int, default=None, help="fiscal-year label, e.g. 2026")
     p_analyze.set_defaults(func=_cmd_analyze)
 
-    p_report = sub.add_parser("report", help="generate monthly report(s)")
+    p_report = sub.add_parser("report", help="generate fiscal-year report(s)")
     _add_config_arg(p_report)
-    p_report.add_argument("--month", default=None, help="report month, format YYYY-MM")
+    p_report.add_argument(
+        "--fy",
+        type=int,
+        default=None,
+        help="fiscal-year label to report on, e.g. 2026 (default: current fiscal year)",
+    )
     p_report.add_argument(
         "--variant",
         choices=("internal", "external", "both"),

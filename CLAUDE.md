@@ -39,8 +39,8 @@ uv run mypy --strict pta_finance    # typecheck
 
 uv run pta-finance check                                  # validate config + sheet round-trip
 uv run pta-finance normalize                              # legacy → canonical schema
-uv run pta-finance analyze                                # run analytics
-uv run pta-finance report --month YYYY-MM --variant both  # generate reports
+uv run pta-finance analyze                                # run analytics (Budget Timeseries)
+uv run pta-finance report --fy YYYY --variant both        # fiscal-year reports (default: current FY)
 ```
 
 ## 4. Directory layout

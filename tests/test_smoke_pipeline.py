@@ -44,7 +44,7 @@ _TXN_COLS = schema.TRANSACTIONS_COLUMNS
 _BUD_COLS = schema.BUDGET_COLUMNS
 
 _PAYEE = "Acme Supply Co"  # sentinel: appears internally, must NEVER reach external output
-_MONTH = "2026-06"
+_FY = 2026
 
 
 class _ApplyingWorksheet(FakeWorksheet):
@@ -248,8 +248,8 @@ def test_full_pipeline_wires_end_to_end(fake_config: Config, tmp_path: Path) -> 
     _ = analytics.year_over_year(frame)
 
     # --- Hop 3: build both report variants from the SAME normalized rows, then render. ---
-    internal = reports.build_internal_report(fake_config, _MONTH, txn_rows, budget_rows)
-    external = reports.build_external_report(fake_config, _MONTH, txn_rows, budget_rows)
+    internal = reports.build_internal_report(fake_config, _FY, txn_rows, budget_rows)
+    external = reports.build_external_report(fake_config, _FY, txn_rows, budget_rows)
 
     internal_html = reports.render_internal(internal)
     external_html = reports.render_external(external)

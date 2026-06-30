@@ -308,67 +308,52 @@ def test_snapshot_writes_csvs(
     assert "snapshot: wrote" in capsys.readouterr().out
 
 
+# A "Budget Timeseries" long-dataset grid (header row 0, then data): FY2026 fundraiser
+# income (proposed + actual) and a graded supplies expense (proposed + actual).
+_TIMESERIES_GRID = [
+    [
+        "fiscal_year",
+        "category_group",
+        "type",
+        "measure",
+        "amount",
+        "is_fundraiser",
+        "grade",
+        "raw_category",
+        "source_tab",
+    ],
+    ["2026", "fundraising", "income", "proposed", "1000.00", "TRUE", "", "fundraiser", "budget"],
+    ["2026", "fundraising", "income", "actual", "500.00", "TRUE", "", "fundraiser", "actuals"],
+    ["2026", "operations", "expense", "proposed", "200.00", "FALSE", "3", "supplies", "budget"],
+    ["2026", "operations", "expense", "actual", "120.00", "FALSE", "3", "supplies", "actuals"],
+]
+
+
 class FakeAnalyzeClient:
-    """A fake SheetsClient returning canned transactions + budget records for ``analyze``."""
+    """A fake SheetsClient serving the "Budget Timeseries" grid for ``analyze``.
+
+    Records which tabs were read so a test can assert the canonical transactions/budget
+    tabs are NOT read by ``analyze`` (it sources only from the timeseries).
+    """
+
+    instances: list[FakeAnalyzeClient] = []
 
     def __init__(self, config: Config, **_: object) -> None:
         self.config = config
-        cols = schema.TRANSACTIONS_COLUMNS
-        bcols = schema.BUDGET_COLUMNS
+        self.read_values_calls: list[str] = []
+        self.read_tab_calls: list[str] = []
+        FakeAnalyzeClient.instances.append(self)
 
-        def txn(**ov: str) -> dict[str, str]:
-            row = {c: "" for c in cols}
-            row.update(ov)
-            return row
+    def read_values(self, tab: str) -> list[list[str]]:
+        self.read_values_calls.append(tab)
+        from pta_finance import report_source
 
-        def bud(**ov: str) -> dict[str, str]:
-            row = {c: "" for c in bcols}
-            row.update(ov)
-            return row
-
-        self._txns = [
-            txn(
-                id="TXN-FY26-0001",
-                date="2026-01-15",
-                fiscal_year="2026",
-                type="income",
-                amount="500.00",
-                category="fundraiser",
-            ),
-            txn(
-                id="TXN-FY26-0002",
-                date="2026-02-10",
-                fiscal_year="2026",
-                type="expense",
-                amount="120.00",
-                category="supplies",
-                grade="3",
-            ),
-            # Excluded from all aggregations.
-            txn(
-                id="TXN-FY26-0003",
-                date="2026-02-11",
-                fiscal_year="2026",
-                type="expense",
-                amount="999.99",
-                category="supplies",
-                needs_review="TRUE",
-            ),
-        ]
-        self._budget = [
-            bud(
-                id="BUD-FY26-supplies",
-                fiscal_year="2026",
-                category="supplies",
-                budgeted_amount="200.00",
-            ),
-        ]
+        if tab == report_source.BUDGET_TIMESERIES_TAB:
+            return [list(r) for r in _TIMESERIES_GRID]
+        return []
 
     def read_tab(self, tab: str) -> list[dict[str, str]]:
-        if tab == schema.TAB_TRANSACTIONS:
-            return [dict(r) for r in self._txns]
-        if tab == schema.TAB_BUDGET:
-            return [dict(r) for r in self._budget]
+        self.read_tab_calls.append(tab)
         return []
 
 
@@ -376,6 +361,9 @@ def test_analyze_prints_summary_all_years(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The analyze subcommand runs the real analytics through the production caller."""
+    from pta_finance import report_source
+
+    FakeAnalyzeClient.instances = []
     monkeypatch.setattr(cli, "SheetsClient", FakeAnalyzeClient)
     config_path = _write_config(tmp_path)
 
@@ -384,17 +372,21 @@ def test_analyze_prints_summary_all_years(
     assert rc == 0
     out = capsys.readouterr().out
     assert "all fiscal years" in out
-    # The needs_review row is excluded and reported.
-    assert "excluded (needs_review): 1" in out
-    # income 500.00, expense 120.00 (NOT 1119.99 — the flagged row is excluded).
+    # income 500.00, expense 120.00 (the timeseries actuals).
     assert "income:  500.00" in out
     assert "expense: 120.00" in out
+    # Sourced from the "Budget Timeseries" tab; the canonical tabs are NOT read.
+    (client,) = FakeAnalyzeClient.instances
+    assert client.read_values_calls == [report_source.BUDGET_TIMESERIES_TAB]
+    assert schema.TAB_TRANSACTIONS not in client.read_tab_calls
+    assert schema.TAB_BUDGET not in client.read_tab_calls
 
 
 def test_analyze_filtered_to_fiscal_year_shows_budget(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--fy filters the frame and triggers the budget-vs-actual section."""
+    """--fy filters the frame and triggers the budget-vs-actual section (from the timeseries)."""
+    FakeAnalyzeClient.instances = []
     monkeypatch.setattr(cli, "SheetsClient", FakeAnalyzeClient)
     config_path = _write_config(tmp_path)
 

@@ -171,9 +171,11 @@ uv run pta-finance import-budget --from-tab "<your budget tab>" --fy <YYYY> --wi
 
 ```bash
 uv run pta-finance analyze --fy 2026
-uv run pta-finance report --month 2026-06 --variant both
+uv run pta-finance report --fy 2026 --variant both   # omit --fy to target the current fiscal year
 ```
 
+`analyze` and `report` source from the **Budget Timeseries** tab (a tidy long dataset), not the
+canonical `budget` / `transactions` tabs, and `report` is FISCAL-YEAR scoped.
 Reports are written to `reports/output/` (gitignored — reports never enter the repo).
 
 ---

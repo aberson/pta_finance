@@ -18,12 +18,7 @@ name: Monthly report
 on:
   schedule:
     - cron: "0 9 1 * *"  # 09:00 UTC on the 1st of each month
-  workflow_dispatch:
-    inputs:
-      month:
-        description: "Target month (YYYY-MM); empty = previous month"
-        required: false
-        default: ""
+  workflow_dispatch: {}  # manual run targets the current fiscal year (no inputs needed)
 
 permissions:
   contents: write  # needed for the keepalive push to .github/last-run.txt
@@ -54,25 +49,15 @@ jobs:
           printf '%s' "$GOOGLE_SA_KEY_B64" | base64 -d > secrets/service-account.json
           printf '%s' "$PTA_CONFIG_B64" | base64 -d > config.toml
 
-      - name: Resolve target month
-        id: month
-        env:
-          INPUT_MONTH: ${{ github.event.inputs.month }}
-        run: |
-          if [ -n "$INPUT_MONTH" ]; then
-            MONTH="$INPUT_MONTH"
-          else
-            MONTH="$(date -u -d 'last month' +%Y-%m)"
-          fi
-          echo "month=$MONTH" >> "$GITHUB_OUTPUT"
-
       - name: Generate report
-        run: uv run pta-finance report --month "${{ steps.month.outputs.month }}" --variant both
+        # The report targets the CURRENT fiscal year by default (no --fy needed); the CLI
+        # derives it from today's UTC date + the configured fiscal_year.start_month.
+        run: uv run pta-finance report --variant both
 
       - name: Upload report artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pta-report-${{ steps.month.outputs.month }}
+          name: pta-report-${{ github.run_id }}
           path: reports/output/
           if-no-files-found: warn
 

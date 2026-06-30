@@ -1,4 +1,4 @@
-"""Compute the monthly report data model from the analytics layer — two variants.
+"""Compute the fiscal-year report data model from the analytics layer — two variants.
 
 This module owns the **field-level contract** between the two report variants and the
 **runtime PII guard** that enforces it. Both variants are computed from the same analytics
@@ -10,20 +10,20 @@ Internal vs external field lists (pinned at build Step 6)
 ``InternalReport`` (full detail — treasurer / board eyes only):
 
 * ``organization`` / ``school_name`` — identity, from config.
-* ``month`` (``YYYY-MM``) + ``fiscal_year`` (int label) — the reporting period.
-* ``totals`` — income / expense / net for the month.
+* ``fiscal_year`` (int label) — the reporting period (a whole fiscal year).
+* ``totals`` — income / expense / net for the fiscal year.
 * ``by_category`` — per-category income/expense/net **with budget variance** for the FY.
 * ``by_grade`` — per-grade allocation.
 * ``fundraising`` — fundraising income raised vs the fundraiser budget target (progress).
 * ``budget_headline`` — total budgeted / total spent / remaining for the FY.
-* ``transactions`` — the month's ledger lines INCLUDING ``payee``, ``memo``,
+* ``transactions`` — the fiscal year's ledger lines INCLUDING ``payee``, ``memo``,
   ``receipt_id`` / ``receipt_url`` (Drive link), ``grade``, and ``entered_by``.
 
 ``ExternalReport`` (public-safe — PUBLIC, no identifying detail):
 
 * ``organization`` / ``school_name`` — the org's own name is public.
-* ``month`` + ``fiscal_year`` — the reporting period.
-* ``totals`` — income / expense / net for the month.
+* ``fiscal_year`` — the reporting period.
+* ``totals`` — income / expense / net for the fiscal year.
 * ``by_grade`` — per-grade allocation (aggregate dollars only).
 * ``fundraising`` — fundraising raised vs target (aggregate progress).
 * ``budget_headline`` — total budgeted / spent / remaining (aggregate headline numbers).
@@ -265,11 +265,10 @@ class ReportTransaction:
 
 @dataclass(frozen=True)
 class InternalReport:
-    """Full-detail monthly report (treasurer / board only). See module docstring."""
+    """Full-detail fiscal-year report (treasurer / board only). See module docstring."""
 
     organization: str
     school_name: str
-    month: str
     fiscal_year: int
     totals: ReportTotals
     by_category: tuple[CategoryLine, ...]
@@ -281,7 +280,7 @@ class InternalReport:
 
 @dataclass(frozen=True)
 class ExternalReport:
-    """Public-safe monthly report. Carries NO payee / receipt / memo / member PII.
+    """Public-safe fiscal-year report. Carries NO payee / receipt / memo / member PII.
 
     Enforced at runtime by :func:`_assert_external_safe` (called from
     :func:`build_external_report`). See module docstring for the exact field list.
@@ -289,7 +288,6 @@ class ExternalReport:
 
     organization: str
     school_name: str
-    month: str
     fiscal_year: int
     totals: ReportTotals
     by_grade: tuple[GradeLine, ...]
@@ -299,41 +297,26 @@ class ExternalReport:
 
 # --- Builders --------------------------------------------------------------
 
-# A category counts as "fundraising" income when its slug matches one of these. Kept generic
-# (no org-specific category names) so the toolkit stays reusable.
-_FUNDRAISER_SLUGS: frozenset[str] = frozenset({"fundraiser", "fundraising", "fundraisers"})
+# Budget rows carry their income/expense kind in the ``notes`` field (the report source sets
+# ``notes`` = the line's timeseries ``type``; the canonical budget tab did the same). The two
+# values seen in practice.
+_BUDGET_TYPE_EXPENSE = "expense"
+_BUDGET_TYPE_INCOME = "income"
 
 
-def _month_bounds(month: str) -> tuple[str, str]:
-    """Validate ``YYYY-MM`` and return its ``(YYYY-MM-01, last-day)`` ISO date strings."""
-    try:
-        year_s, mon_s = month.split("-")
-        year, mon = int(year_s), int(mon_s)
-    except (ValueError, AttributeError) as exc:
-        raise ValueError(f"month must be 'YYYY-MM', got {month!r}") from exc
-    if not 1 <= mon <= 12:
-        raise ValueError(f"month must be 'YYYY-MM' with month in 01..12, got {month!r}")
-    from calendar import monthrange
-    from datetime import date
+def _budget_rows_of_type(
+    budget_rows: Sequence[Mapping[str, str]], notes_type: str
+) -> list[Mapping[str, str]]:
+    """Budget rows whose ``notes`` field equals ``notes_type`` (``"income"`` / ``"expense"``).
 
-    last = monthrange(year, mon)[1]
-    return date(year, mon, 1).isoformat(), date(year, mon, last).isoformat()
-
-
-def _month_rows(
-    txn_rows: Iterable[Mapping[str, str]], first_iso: str, last_iso: str
-) -> list[dict[str, str]]:
-    """Filter ``transactions`` row dicts to those whose ``date`` falls within the month.
-
-    Compares ISO date strings (lexicographic order == chronological order for ``YYYY-MM-DD``).
-    Rows with a blank/unparseable date are excluded from the month (they cannot be placed).
+    Budget rows tag their kind in ``notes``. The budget *side* of the headline / per-category
+    variance must be EXPENSE-only — an income target (e.g. a fundraising-income budget) is not
+    spend and would inflate "total budgeted" / "remaining". The income side is used by the
+    fundraising-progress target instead.
     """
-    out: list[dict[str, str]] = []
-    for row in txn_rows:
-        d = str(row.get("date", "")).strip()
-        if first_iso <= d <= last_iso:
-            out.append(dict(row))
-    return out
+    return [
+        row for row in budget_rows if str(row.get("notes", "")).strip().casefold() == notes_type
+    ]
 
 
 def _grade_lines(frame: Any) -> tuple[GradeLine, ...]:
@@ -351,20 +334,22 @@ def _totals(frame: Any) -> ReportTotals:
 def _fundraising_progress(
     fy_frame: Any, budget_rows: Sequence[Mapping[str, str]], fiscal_year: int
 ) -> FundraisingProgress:
-    """Fundraising income raised this FY vs the budgeted fundraiser income target."""
-    raised = Decimal("0.00")
-    for cat in analytics.by_category(fy_frame):
-        if ids.slugify(cat.category) in _FUNDRAISER_SLUGS:
-            raised += cat.income
+    """Fundraising income raised this FY vs the budgeted income target.
+
+    The operator's data model is "all income = fundraising", so ``raised`` is the FY's TOTAL
+    income actual (from the frame) and ``target`` is the FY's TOTAL income proposed (the sum
+    of income budget rows, ``notes == "income"``). The old per-category fundraiser-slug
+    heuristic never matched real line names (e.g. ``"Walk-A-Thon Income"``) and read ~$0.
+    """
+    raised = analytics.totals(fy_frame).income
 
     target = Decimal("0.00")
-    for brow in budget_rows:
+    for brow in _budget_rows_of_type(budget_rows, _BUDGET_TYPE_INCOME):
         if aggregate._to_int(brow.get("fiscal_year")) != fiscal_year:
             continue
-        if ids.slugify(str(brow.get("category", ""))) in _FUNDRAISER_SLUGS:
-            amount = analytics_parse_amount(brow.get("budgeted_amount"))
-            if amount is not None:
-                target += amount
+        amount = analytics_parse_amount(brow.get("budgeted_amount"))
+        if amount is not None:
+            target += amount
 
     pct: Decimal | None = None
     if target > 0:
@@ -396,12 +381,15 @@ def _budget_headline(
 def _category_lines(
     fy_frame: Any, budget_rows: Sequence[Mapping[str, str]], fiscal_year: int
 ) -> tuple[tuple[CategoryLine, ...], tuple[aggregate.BudgetVariance, ...]]:
-    """Per-category lines (month frame) joined to FY budget variance, plus the variances.
+    """Per-category lines (fiscal-year frame) joined to FY budget variance, plus the variances.
 
     The income/expense/net figures are for the *reporting frame* passed in; budget variance
-    is the FY-to-date figure from :func:`analytics.budget_vs_actual` (budgets are annual).
+    is the FY figure from :func:`analytics.budget_vs_actual` (budgets are annual). The budget
+    SIDE is EXPENSE-only (``notes == "expense"``) — an income budget target is not spend, so an
+    income category surfaces from the frame with ``budgeted == 0`` rather than a variance row.
     """
-    variances = tuple(analytics.budget_vs_actual(fy_frame, budget_rows, fiscal_year))
+    expense_budget = _budget_rows_of_type(budget_rows, _BUDGET_TYPE_EXPENSE)
+    variances = tuple(analytics.budget_vs_actual(fy_frame, expense_budget, fiscal_year))
     variance_by_cat: dict[str, aggregate.BudgetVariance] = {}
     for bv in variances:
         # per_grade defaults False, so grade is None and category is the sole key.
@@ -425,7 +413,7 @@ def _category_lines(
     return tuple(lines), variances
 
 
-def _report_transactions(month_rows: Sequence[Mapping[str, str]]) -> tuple[ReportTransaction, ...]:
+def _report_transactions(fy_rows: Sequence[Mapping[str, str]]) -> tuple[ReportTransaction, ...]:
     """Build the internal transaction rows (full detail), date-then-id ordered.
 
     ``receipt_url`` is left blank in v1 (the ``transactions`` tab stores only a
@@ -435,7 +423,7 @@ def _report_transactions(month_rows: Sequence[Mapping[str, str]]) -> tuple[Repor
     from pta_finance import models
 
     out: list[ReportTransaction] = []
-    for row in month_rows:
+    for row in fy_rows:
         if models.parse_bool(row.get("needs_review")):
             continue
         out.append(
@@ -457,89 +445,115 @@ def _report_transactions(month_rows: Sequence[Mapping[str, str]]) -> tuple[Repor
     return tuple(out)
 
 
+def _fy_frame(txn_rows: Sequence[Mapping[str, str]], start_month: int, fiscal_year: int) -> Any:
+    """Build the analytics frame over ``txn_rows`` filtered to ``fiscal_year``.
+
+    The reporting frame for a fiscal-year report is the WHOLE fiscal year — every (non
+    ``needs_review``) transaction whose :data:`aggregate.FISCAL_YEAR_INT` equals
+    ``fiscal_year`` — used for totals, by-category, and by-grade.
+    """
+    built = analytics.build_frame(txn_rows, start_month=start_month).frame
+    return built[built[aggregate.FISCAL_YEAR_INT] == fiscal_year]
+
+
+def _fy_txn_rows(
+    txn_rows: Sequence[Mapping[str, str]], start_month: int, fiscal_year: int
+) -> list[dict[str, str]]:
+    """The raw transaction row dicts that fall in ``fiscal_year`` (for the internal lines).
+
+    Mirrors :func:`pta_finance.analytics.aggregate._resolve_fiscal_year`: trust a numeric
+    ``fiscal_year`` cell, else derive it from the row's date via
+    :func:`pta_finance.ids.fiscal_year_label`. Rows without a placeable fiscal year are
+    excluded.
+    """
+    from datetime import date as _date
+
+    out: list[dict[str, str]] = []
+    for row in txn_rows:
+        raw = str(row.get("fiscal_year", "")).strip()
+        row_fy: int | None = None
+        if raw:
+            try:
+                row_fy = int(raw)
+            except ValueError:
+                row_fy = None
+        if row_fy is None:
+            date_text = str(row.get("date", "")).strip()
+            try:
+                row_fy = ids.fiscal_year_label(_date.fromisoformat(date_text), start_month)
+            except ValueError:
+                continue
+        if row_fy == fiscal_year:
+            out.append(dict(row))
+    return out
+
+
 def build_internal_report(
     config: Config,
-    month: str,
+    fiscal_year: int,
     txn_rows: Iterable[Mapping[str, str]],
     budget_rows: Iterable[Mapping[str, str]],
 ) -> InternalReport:
-    """Compute the full-detail :class:`InternalReport` for ``month`` (``YYYY-MM``).
+    """Compute the full-detail :class:`InternalReport` for ``fiscal_year`` (an int label).
 
     Reads-only over the supplied ``transactions`` / ``budget`` row dicts (no Google I/O).
-    Monthly figures (totals, by-category income/expense, by-grade, the ledger lines) cover
-    the report month; budget variance, fundraising progress, and the headline cover the
-    fiscal year the month falls in (budgets are annual).
+    Every figure (totals, by-category, by-grade, the ledger lines, budget variance,
+    fundraising progress, and the headline) covers the WHOLE fiscal year — the frame is
+    built over all rows and filtered to those whose fiscal-year label equals ``fiscal_year``.
     """
     txn_rows = list(txn_rows)
     budget_rows = list(budget_rows)
-    first_iso, last_iso = _month_bounds(month)
-    month_rows = _month_rows(txn_rows, first_iso, last_iso)
-
     start_month = config.fiscal_year.start_month
-    from datetime import date
 
-    fiscal_year = ids.fiscal_year_label(date.fromisoformat(first_iso), start_month)
+    fy_frame = _fy_frame(txn_rows, start_month, fiscal_year)
+    fy_rows = _fy_txn_rows(txn_rows, start_month, fiscal_year)
 
-    month_frame = analytics.build_frame(month_rows, start_month=start_month).frame
-    fy_built = analytics.build_frame(txn_rows, start_month=start_month).frame
-    fy_frame = fy_built[fy_built[aggregate.FISCAL_YEAR_INT] == fiscal_year]
-
-    category_lines, variances = _category_lines(month_frame, budget_rows, fiscal_year)
+    category_lines, variances = _category_lines(fy_frame, budget_rows, fiscal_year)
     return InternalReport(
         organization=config.organization.name,
         school_name=config.organization.school_name,
-        month=month,
         fiscal_year=fiscal_year,
-        totals=_totals(month_frame),
+        totals=_totals(fy_frame),
         by_category=category_lines,
-        by_grade=_grade_lines(month_frame),
+        by_grade=_grade_lines(fy_frame),
         fundraising=_fundraising_progress(fy_frame, budget_rows, fiscal_year),
-        budget_headline=_budget_headline(
-            tuple(analytics.budget_vs_actual(fy_frame, budget_rows, fiscal_year)),
-            fiscal_year,
-        ),
-        transactions=_report_transactions(month_rows),
+        budget_headline=_budget_headline(variances, fiscal_year),
+        transactions=_report_transactions(fy_rows),
     )
 
 
 def build_external_report(
     config: Config,
-    month: str,
+    fiscal_year: int,
     txn_rows: Iterable[Mapping[str, str]],
     budget_rows: Iterable[Mapping[str, str]],
 ) -> ExternalReport:
-    """Compute the public-safe :class:`ExternalReport` for ``month`` (``YYYY-MM``).
+    """Compute the public-safe :class:`ExternalReport` for ``fiscal_year`` (an int label).
 
-    Carries only aggregate, non-identifying figures (see module docstring). Before returning,
-    it calls :func:`_assert_external_safe`, which recursively scans the assembled model for
-    any denylisted PII field and raises :class:`ExternalReportPIIError` if one is present.
-    The guard runs unconditionally — a contaminated external model never escapes this
-    function.
+    Carries only aggregate, non-identifying figures for the whole fiscal year (see module
+    docstring). Before returning, it calls :func:`_assert_external_safe`, which recursively
+    scans the assembled model for any denylisted PII field and raises
+    :class:`ExternalReportPIIError` if one is present. The guard runs unconditionally — a
+    contaminated external model never escapes this function.
     """
     txn_rows = list(txn_rows)
     budget_rows = list(budget_rows)
-    first_iso, last_iso = _month_bounds(month)
-    month_rows = _month_rows(txn_rows, first_iso, last_iso)
-
     start_month = config.fiscal_year.start_month
-    from datetime import date
 
-    fiscal_year = ids.fiscal_year_label(date.fromisoformat(first_iso), start_month)
-
-    month_frame = analytics.build_frame(month_rows, start_month=start_month).frame
-    fy_built = analytics.build_frame(txn_rows, start_month=start_month).frame
-    fy_frame = fy_built[fy_built[aggregate.FISCAL_YEAR_INT] == fiscal_year]
+    fy_frame = _fy_frame(txn_rows, start_month, fiscal_year)
+    # Budget headline reflects the EXPENSE budget only (income targets are not spend); the
+    # income budget feeds the fundraising-progress target instead.
+    expense_budget = _budget_rows_of_type(budget_rows, _BUDGET_TYPE_EXPENSE)
 
     model = ExternalReport(
         organization=config.organization.name,
         school_name=config.organization.school_name,
-        month=month,
         fiscal_year=fiscal_year,
-        totals=_totals(month_frame),
-        by_grade=_grade_lines(month_frame),
+        totals=_totals(fy_frame),
+        by_grade=_grade_lines(fy_frame),
         fundraising=_fundraising_progress(fy_frame, budget_rows, fiscal_year),
         budget_headline=_budget_headline(
-            tuple(analytics.budget_vs_actual(fy_frame, budget_rows, fiscal_year)),
+            tuple(analytics.budget_vs_actual(fy_frame, expense_budget, fiscal_year)),
             fiscal_year,
         ),
     )
@@ -550,7 +564,7 @@ def build_external_report(
 
 def build_reports(
     config: Config,
-    month: str,
+    fiscal_year: int,
     txn_rows: Iterable[Mapping[str, str]],
     budget_rows: Iterable[Mapping[str, str]],
 ) -> tuple[InternalReport, ExternalReport]:
@@ -558,6 +572,6 @@ def build_reports(
     txn_rows = list(txn_rows)
     budget_rows = list(budget_rows)
     return (
-        build_internal_report(config, month, txn_rows, budget_rows),
-        build_external_report(config, month, txn_rows, budget_rows),
+        build_internal_report(config, fiscal_year, txn_rows, budget_rows),
+        build_external_report(config, fiscal_year, txn_rows, budget_rows),
     )

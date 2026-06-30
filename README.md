@@ -55,8 +55,8 @@ cp config.example.toml config.toml
 # 4. Verify, then run
 uv run pta-finance check                                  # validate config + sheet round-trip
 uv run pta-finance normalize                              # legacy ledger -> clean schema
-uv run pta-finance analyze                                # run analytics
-uv run pta-finance report --month YYYY-MM --variant both  # generate reports
+uv run pta-finance analyze                                # run analytics (Budget Timeseries)
+uv run pta-finance report --fy YYYY --variant both        # fiscal-year reports (default: current FY)
 ```
 
 For the unattended monthly report, add two GitHub Actions secrets — `GOOGLE_SA_KEY_B64` (base64 of

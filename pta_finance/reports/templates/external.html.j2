@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>{{ report.organization }} — Financial Summary {{ report.month }}</title>
+  <title>{{ report.organization }} — Financial Summary FY{{ report.fiscal_year }}</title>
   <style>
     body { font-family: system-ui, Arial, sans-serif; margin: 2rem; color: #222; }
     h1, h2 { color: #2a4d69; }
@@ -16,8 +16,7 @@
 </head>
 <body>
   <h1>{{ report.organization }}</h1>
-  <p>{{ report.school_name }} — Public financial summary for {{ report.month }}
-     (fiscal year {{ report.fiscal_year }})</p>
+  <p>{{ report.school_name }} — Public financial summary for Fiscal Year {{ report.fiscal_year }}</p>
   <p class="note">This public summary reports aggregate figures only; it contains no
      vendor, payee, or member details.</p>
 

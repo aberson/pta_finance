@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>{{ report.organization }} — Internal Report {{ report.month }}</title>
+  <title>{{ report.organization }} — Internal Report FY{{ report.fiscal_year }}</title>
   <style>
     body { font-family: system-ui, Arial, sans-serif; margin: 2rem; color: #222; }
     h1, h2 { color: #2a4d69; }
@@ -19,8 +19,7 @@
   <p class="banner" data-section="confidential">CONFIDENTIAL — INTERNAL USE ONLY (contains payee &amp; receipt detail)</p>
 
   <h1>{{ report.organization }}</h1>
-  <p>{{ report.school_name }} — Internal financial report for {{ report.month }}
-     (fiscal year {{ report.fiscal_year }})</p>
+  <p>{{ report.school_name }} — Internal financial report for Fiscal Year {{ report.fiscal_year }}</p>
 
   <h2 data-section="totals">Totals</h2>
   <table data-section="totals-table">
@@ -76,7 +75,7 @@
     </tbody>
   </table>
 
-  <h2 data-section="transactions">Transactions ({{ report.month }})</h2>
+  <h2 data-section="transactions">Transactions (FY{{ report.fiscal_year }})</h2>
   <table data-section="transactions-table">
     <thead><tr><th>ID</th><th>Date</th><th>Type</th><th>Amount</th><th>Category</th>
                <th>Grade</th><th>Payee</th><th>Memo</th><th>Receipt</th><th>Entered by</th></tr></thead>
