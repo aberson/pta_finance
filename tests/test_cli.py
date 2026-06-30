@@ -51,7 +51,12 @@ def _write_config(tmp_path: Path, text: str = _CONFIG_TEXT) -> Path:
 
 
 class FakeCheckClient:
-    """A fake SheetsClient capturing the check round-trip: validate + upsert/read/delete."""
+    """A fake SheetsClient for the check round-trip: validate + read source + upsert/read/delete.
+
+    ``read_values`` serves the "Budget Timeseries" grid (so the source-readable check passes);
+    the report_log round-trip is keyed by the row's ``run_at`` cell (column 1), mirroring how
+    ``SheetsClient`` keys upsert/delete.
+    """
 
     instances: list[FakeCheckClient] = []
 
@@ -67,11 +72,20 @@ class FakeCheckClient:
         self.validated: list[str] = []
         self.upserts: list[tuple[str, Mapping[str, Mapping[str, str]]]] = []
         self.deletes: list[tuple[str, list[str]]] = []
+        self.read_values_calls: list[str] = []
         self._store: dict[str, dict[str, str]] = {}
         FakeCheckClient.instances.append(self)
 
     def validate_schema(self, tab: str) -> None:
         self.validated.append(tab)
+
+    def read_values(self, tab: str) -> list[list[str]]:
+        from pta_finance import report_source
+
+        self.read_values_calls.append(tab)
+        if tab == report_source.BUDGET_TIMESERIES_TAB:
+            return [list(r) for r in _TIMESERIES_GRID]
+        return []
 
     def upsert_rows(self, tab: str, rows_by_id: Mapping[str, Mapping[str, str]]) -> None:
         self.upserts.append((tab, rows_by_id))
@@ -87,9 +101,11 @@ class FakeCheckClient:
             self._store.pop(row_id, None)
 
 
-def test_check_validates_all_tabs_and_round_trips(
+def test_check_validates_required_tabs_and_round_trips(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    from pta_finance import report_source
+
     FakeCheckClient.instances = []
     monkeypatch.setattr(cli, "SheetsClient", FakeCheckClient)
     config_path = _write_config(tmp_path)
@@ -97,20 +113,49 @@ def test_check_validates_all_tabs_and_round_trips(
     rc = cli.main(["check", "--config", str(config_path)])
 
     assert rc == 0
-    # Two clients are built: one for prod schema validation, one for the test-sheet round-trip.
+    # Two clients are built: one for prod schema validation + source read, one for the round-trip.
     assert len(FakeCheckClient.instances) == 2
     prod, test = FakeCheckClient.instances
-    # All tabs validated on the prod client.
-    assert prod.validated == list(schema.TABS)
-    # Round-trip on the test client: one upsert, one read-back match, one delete cleanup.
+    # Only the LIVE-required tabs are validated (not all 5 canonical tabs).
+    assert prod.validated == list(schema.REQUIRED_TABS)
+    assert schema.TAB_TRANSACTIONS not in prod.validated
+    assert schema.TAB_BUDGET not in prod.validated
+    # The Budget Timeseries source was read + confirmed readable.
+    assert prod.read_values_calls == [report_source.BUDGET_TIMESERIES_TAB]
+    # Round-trip on the test client targets report_log, keyed by the run_at marker.
     assert test.spreadsheet_id == "fake-test-sheet-id"
     assert len(test.upserts) == 1
     upsert_tab, rows_by_id = test.upserts[0]
-    assert upsert_tab == schema.TAB_TRANSACTIONS
-    (probe_id,) = rows_by_id.keys()
-    assert test.deletes == [(schema.TAB_TRANSACTIONS, [probe_id])]
+    assert upsert_tab == schema.TAB_REPORT_LOG
+    (marker,) = rows_by_id.keys()
+    assert rows_by_id[marker]["run_at"] == marker
+    assert test.deletes == [(schema.TAB_REPORT_LOG, [marker])]
     out = capsys.readouterr().out
+    assert f"schema OK for {len(schema.REQUIRED_TABS)} required tab(s)" in out
+    assert "Budget Timeseries source OK" in out
     assert "round-trip OK" in out
+
+
+def test_check_fails_when_timeseries_source_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An empty Budget Timeseries source returns 1 and never builds the round-trip client."""
+
+    class _EmptySourceCheckClient(FakeCheckClient):
+        def read_values(self, tab: str) -> list[list[str]]:
+            self.read_values_calls.append(tab)
+            return []  # source missing/empty
+
+    FakeCheckClient.instances = []
+    monkeypatch.setattr(cli, "SheetsClient", _EmptySourceCheckClient)
+    config_path = _write_config(tmp_path)
+
+    rc = cli.main(["check", "--config", str(config_path)])
+
+    assert rc == 1
+    # Only the prod client was built — we never reached the round-trip step.
+    assert len(FakeCheckClient.instances) == 1
+    assert "missing or empty" in capsys.readouterr().out
 
 
 def test_check_skips_round_trip_without_test_sheet(
@@ -186,12 +231,12 @@ class FakeInitSheetClient:
         return "ok"
 
 
-def test_init_sheet_creates_all_tabs(
+def test_init_sheet_creates_required_tabs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """init-sheet drives ensure_tab through every canonical tab via the production entry point."""
+    """init-sheet drives ensure_tab through the LIVE-required tab(s) via the production caller."""
     FakeInitSheetClient.instances = []
-    FakeInitSheetClient.existing = {}  # empty spreadsheet — every tab is created
+    FakeInitSheetClient.existing = {}  # empty spreadsheet — every required tab is created
     monkeypatch.setattr(cli, "SheetsClient", FakeInitSheetClient)
     config_path = _write_config(tmp_path)
 
@@ -200,21 +245,23 @@ def test_init_sheet_creates_all_tabs(
     assert rc == 0
     (client,) = FakeInitSheetClient.instances
     assert client.spreadsheet_id is None  # default target = main
-    # Every canonical tab was reached end-to-end, in schema order.
-    assert client.ensured == list(schema.TABS)
+    # Only the live-required tab(s) were reached — the 4 unused canonical tabs are NOT created.
+    assert client.ensured == list(schema.REQUIRED_TABS)
+    assert schema.TAB_TRANSACTIONS not in client.ensured
+    assert schema.TAB_BUDGET not in client.ensured
     out = capsys.readouterr().out
-    for tab in schema.TABS:
+    for tab in schema.REQUIRED_TABS:
         assert f"init-sheet: {tab} -> created" in out
-    assert f"{len(schema.TABS)} created" in out
+    assert f"{len(schema.REQUIRED_TABS)} created" in out
 
 
 def test_init_sheet_dry_run_makes_no_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--dry-run reports the per-tab action and never calls ensure_tab (no writes)."""
+    """--dry-run reports the 'ok (no change)' action and never calls ensure_tab (no writes)."""
     FakeInitSheetClient.instances = []
-    # transactions already correct; the rest absent.
-    FakeInitSheetClient.existing = {schema.TAB_TRANSACTIONS: list(schema.TRANSACTIONS_COLUMNS)}
+    # report_log already correct -> "ok (no change)".
+    FakeInitSheetClient.existing = {schema.TAB_REPORT_LOG: list(schema.REPORT_LOG_COLUMNS)}
     monkeypatch.setattr(cli, "SheetsClient", FakeInitSheetClient)
     config_path = _write_config(tmp_path)
 
@@ -225,20 +272,16 @@ def test_init_sheet_dry_run_makes_no_writes(
     assert client.ensured == []  # NO writes
     out = capsys.readouterr().out
     assert "dry-run" in out
-    assert f"{schema.TAB_TRANSACTIONS} -> ok (no change)" in out
-    assert f"{schema.TAB_BUDGET} -> would create" in out
+    assert f"{schema.TAB_REPORT_LOG} -> ok (no change)" in out
     assert "no writes made" in out
 
 
-def test_init_sheet_dry_run_reports_mismatch_without_writes(
+def test_init_sheet_dry_run_would_create_absent_tab(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--dry-run on an existing tab with a non-empty mismatched header reports the mismatch
-    branch and makes no writes (the previously-uncovered 'would write headers / mismatch' case)."""
+    """--dry-run on an empty spreadsheet reports required tab(s) as 'would create', no writes."""
     FakeInitSheetClient.instances = []
-    # transactions exists with a non-empty WRONG header (not equal to the schema columns).
-    bad_header = ["id", "WRONG", *list(schema.TRANSACTIONS_COLUMNS[2:])]
-    FakeInitSheetClient.existing = {schema.TAB_TRANSACTIONS: bad_header}
+    FakeInitSheetClient.existing = {}  # required tab absent
     monkeypatch.setattr(cli, "SheetsClient", FakeInitSheetClient)
     config_path = _write_config(tmp_path)
 
@@ -248,7 +291,29 @@ def test_init_sheet_dry_run_reports_mismatch_without_writes(
     (client,) = FakeInitSheetClient.instances
     assert client.ensured == []  # NO writes
     out = capsys.readouterr().out
-    assert f"{schema.TAB_TRANSACTIONS} -> would write headers / mismatch" in out
+    assert f"{schema.TAB_REPORT_LOG} -> would create" in out
+    assert "no writes made" in out
+
+
+def test_init_sheet_dry_run_reports_mismatch_without_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--dry-run on an existing tab with a non-empty mismatched header reports the mismatch
+    branch and makes no writes (the previously-uncovered 'would write headers / mismatch' case)."""
+    FakeInitSheetClient.instances = []
+    # report_log exists with a non-empty WRONG header (not equal to the schema columns).
+    bad_header = ["run_at", "WRONG", *list(schema.REPORT_LOG_COLUMNS[2:])]
+    FakeInitSheetClient.existing = {schema.TAB_REPORT_LOG: bad_header}
+    monkeypatch.setattr(cli, "SheetsClient", FakeInitSheetClient)
+    config_path = _write_config(tmp_path)
+
+    rc = cli.main(["init-sheet", "--config", str(config_path), "--dry-run"])
+
+    assert rc == 0
+    (client,) = FakeInitSheetClient.instances
+    assert client.ensured == []  # NO writes
+    out = capsys.readouterr().out
+    assert f"{schema.TAB_REPORT_LOG} -> would write headers / mismatch" in out
     assert "no writes made" in out
 
 
@@ -279,16 +344,22 @@ def test_init_sheet_target_test_without_test_sheet_returns_1(
 
 
 class FakeSnapshotClient:
+    """A fake SheetsClient serving the live snapshot set: report_log + Budget Timeseries."""
+
     def __init__(self, config: Config, **_: object) -> None:
         self.config = config
+        self.read_tabs: list[str] = []
 
     def read_tab(self, tab: str) -> list[dict[str, str]]:
-        return []
+        self.read_tabs.append(tab)
+        return []  # both live tabs present (no WorksheetNotFound), simply empty
 
 
 def test_snapshot_writes_csvs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    from pta_finance import backup, report_source
+
     monkeypatch.setattr(cli, "SheetsClient", FakeSnapshotClient)
     config_path = _write_config(tmp_path)
     dest = tmp_path / "out"
@@ -299,13 +370,19 @@ def test_snapshot_writes_csvs(
     snapshot_root = dest / "snapshots"
     assert snapshot_root.is_dir()
     (run_dir,) = list(snapshot_root.iterdir())
-    for tab, columns in schema.TABS.items():
-        csv_path = run_dir / f"{tab}.csv"
-        assert csv_path.is_file()
-        with csv_path.open(encoding="utf-8", newline="") as fh:
-            rows = list(csv.reader(fh))
-        assert rows[0] == list(columns)
-    assert "snapshot: wrote" in capsys.readouterr().out
+    # The live snapshot set is report_log + the Budget Timeseries source.
+    written = {p.stem for p in run_dir.glob("*.csv")}
+    assert written == set(backup.LIVE_SNAPSHOT_TABS)
+    # report_log's CSV carries its canonical schema header.
+    with (run_dir / f"{schema.TAB_REPORT_LOG}.csv").open(encoding="utf-8", newline="") as fh:
+        rows = list(csv.reader(fh))
+    assert rows[0] == list(schema.REPORT_LOG_COLUMNS)
+    # The Budget Timeseries CSV carries the expected timeseries header.
+    ts_csv = run_dir / f"{report_source.BUDGET_TIMESERIES_TAB}.csv"
+    with ts_csv.open(encoding="utf-8", newline="") as fh:
+        ts_rows = list(csv.reader(fh))
+    assert ts_rows[0] == list(report_source.TIMESERIES_COLUMNS)
+    assert "snapshot: wrote 2 tab(s)" in capsys.readouterr().out
 
 
 # A "Budget Timeseries" long-dataset grid (header row 0, then data): FY2026 fundraiser

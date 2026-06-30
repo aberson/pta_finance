@@ -2,13 +2,19 @@
 
 Wired subcommands:
 
-    check      Step 3 — validate config + sheet schema; round-trip a test row (test sheet)
-    init-sheet bootstrap the spreadsheet with the 5 canonical tabs + their schema headers
-    snapshot   Step 3 — export CSV backups of all tabs under ``snapshots/<utc>/``
-    normalize  Step 4 — normalize legacy ledger -> canonical schema (snapshot first)
+    check      Step 3 — validate report_log schema + Budget Timeseries source; round-trip a row
+    init-sheet bootstrap the spreadsheet with the live-required tab(s) + their schema headers
+    snapshot   Step 3 — export CSV backups of the live tab set under ``snapshots/<utc>/``
+    normalize  Step 4 — (legacy) normalize legacy ledger -> canonical schema (snapshot first)
     analyze    Step 5 — run analytics over the "Budget Timeseries" tab; print a summary
     report     Step 6 — generate fiscal-year report(s); write HTML to reports/output/, log a run
-    import-budget  load a messy "budget" worksheet into the canonical budget tab (+ summary actuals)
+    import-budget  (legacy) load a messy "budget" worksheet into the canonical budget tab
+
+The LIVE data flow sources ``report`` / ``analyze`` from the operator-maintained "Budget
+Timeseries" tab and writes only ``report_log``; ``check`` / ``init-sheet`` / ``snapshot``
+provision/validate only :data:`schema.REQUIRED_TABS`. The canonical ``transactions`` /
+``receipts`` / ``budget`` / ``events`` tabs (and the ``normalize`` / ``import-budget`` commands
+that fill them) are LEGACY — superseded by the Budget Timeseries flow and safe to delete.
 """
 
 from __future__ import annotations
@@ -40,18 +46,48 @@ def _load(args: argparse.Namespace) -> Config:
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
-    """Validate config + every tab's schema, then round-trip one row on the TEST sheet.
+    """Validate the live-required schema + the Budget Timeseries source, then round-trip a row.
 
-    The round-trip (write -> read-back -> delete) runs only when a non-empty
-    ``test_spreadsheet_id`` is configured; it targets the throwaway test sheet, never
-    the production spreadsheet. Runs live only with real creds (M2); here it is unit
-    tested against a mocked client.
+    Three checks (the live deployment surface — the unused canonical tabs may be deleted):
+
+    1. **Schema** of every tab in :data:`schema.REQUIRED_TABS` (now just ``report_log``).
+    2. **Source readable.** :func:`report_source.read_timeseries` returns a non-empty list and
+       its header carries every :data:`report_source.TIMESERIES_COLUMNS` name — the data
+       ``report`` / ``analyze`` actually consume. A missing/empty/mis-shaped source returns 1.
+    3. **Write round-trip** on the TEST sheet's ``report_log`` (write -> read-back -> delete),
+       keyed by a unique ``run_at`` marker (``report_log``'s first column, the upsert/delete
+       key — ``SheetsClient`` keys by column 1). Runs only when ``test_spreadsheet_id`` is set;
+       it targets the throwaway test sheet, never production. Live only with real creds (M2);
+       here it is unit tested against a mocked client.
     """
     config = _load(args)
     client = SheetsClient(config)
-    for tab in schema.TABS:
+    for tab in schema.REQUIRED_TABS:
         client.validate_schema(tab)
-    print(f"check: schema OK for {len(schema.TABS)} tab(s) [{config.organization.name}]")
+    print(
+        f"check: schema OK for {len(schema.REQUIRED_TABS)} required tab(s) "
+        f"[{config.organization.name}]"
+    )
+
+    rows = report_source.read_timeseries(client)
+    if not rows:
+        print(
+            f"check: Budget Timeseries source ({report_source.BUDGET_TIMESERIES_TAB!r}) is "
+            "missing or empty — report/analyze have no data to read"
+        )
+        return 1
+    header = set(rows[0])
+    missing = [col for col in report_source.TIMESERIES_COLUMNS if col not in header]
+    if missing:
+        print(
+            f"check: Budget Timeseries source ({report_source.BUDGET_TIMESERIES_TAB!r}) is "
+            f"missing expected column(s): {', '.join(missing)}"
+        )
+        return 1
+    print(
+        f"check: Budget Timeseries source OK ({len(rows)} row(s) in "
+        f"{report_source.BUDGET_TIMESERIES_TAB!r})"
+    )
 
     test_id = config.sheets.test_spreadsheet_id
     if not test_id:
@@ -59,30 +95,35 @@ def _cmd_check(args: argparse.Namespace) -> int:
         return 0
 
     test_client = SheetsClient(config, spreadsheet_id=test_id)
-    tab = schema.TAB_TRANSACTIONS
+    tab = schema.TAB_REPORT_LOG
     columns = schema.TABS[tab]
-    probe_id = f"TXN-CHECK-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
+    # report_log's first column is ``run_at``; SheetsClient keys upsert/delete by column 1, so
+    # the marker is the run_at value.
+    marker = f"CHECK-{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}"
     probe = {col: "" for col in columns}
-    probe["id"] = probe_id
+    probe["run_at"] = marker
 
-    test_client.upsert_rows(tab, {probe_id: probe})
-    rows = test_client.read_tab(tab)
-    found = any(row.get("id") == probe_id for row in rows)
-    test_client.delete_rows_by_id(tab, [probe_id])
+    test_client.upsert_rows(tab, {marker: probe})
+    log_rows = test_client.read_tab(tab)
+    found = any(row.get("run_at") == marker for row in log_rows)
+    test_client.delete_rows_by_id(tab, [marker])
     if not found:
-        print(f"check: round-trip FAILED — wrote {probe_id} but did not read it back")
+        print(f"check: round-trip FAILED — wrote {marker} but did not read it back")
         return 1
-    print(f"check: round-trip OK on test sheet (wrote/read/deleted {probe_id})")
+    print(f"check: round-trip OK on test sheet (wrote/read/deleted {marker})")
     return 0
 
 
 def _cmd_init_sheet(args: argparse.Namespace) -> int:
-    """Bootstrap the spreadsheet with the 5 canonical tabs + their exact schema headers.
+    """Bootstrap the spreadsheet with the live-required tab(s) + their exact schema headers.
 
-    Iterates :data:`schema.TABS` in order and calls :meth:`SheetsClient.ensure_tab` on each,
-    which creates a missing worksheet (sized to the schema) and writes its header row, writes
-    the header into an existing tab whose row 1 is empty, or no-ops when the header already
-    matches. A pre-existing tab with a non-empty mismatched header raises (never clobbered).
+    Iterates :data:`schema.REQUIRED_TABS` (now just ``report_log``) and calls
+    :meth:`SheetsClient.ensure_tab` on each, which creates a missing worksheet (sized to the
+    schema) and writes its header row, writes the header into an existing tab whose row 1 is
+    empty, or no-ops when the header already matches. A pre-existing tab with a non-empty
+    mismatched header raises (never clobbered). The unused canonical tabs are NOT created — the
+    toolkit sources ``report`` / ``analyze`` from the operator-maintained "Budget Timeseries"
+    tab instead.
 
     ``--target test`` bootstraps ``test_spreadsheet_id`` instead of the production sheet (and
     fails fast when that id is blank). ``--dry-run`` reports the action each tab WOULD take —
@@ -102,7 +143,8 @@ def _cmd_init_sheet(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         existing = set(client.list_worksheet_titles())
-        for tab, columns in schema.TABS.items():
+        for tab in schema.REQUIRED_TABS:
+            columns = schema.TABS[tab]
             if tab not in existing:
                 action = "would create"
             elif tuple(client.read_header(tab)) == columns:
@@ -110,11 +152,11 @@ def _cmd_init_sheet(args: argparse.Namespace) -> int:
             else:
                 action = "would write headers / mismatch"
             print(f"init-sheet [dry-run]: {tab} -> {action}")
-        print(f"init-sheet [dry-run]: {len(schema.TABS)} tab(s) inspected, no writes made")
+        print(f"init-sheet [dry-run]: {len(schema.REQUIRED_TABS)} tab(s) inspected, no writes made")
         return 0
 
     counts = {"created": 0, "headers-written": 0, "ok": 0}
-    for tab in schema.TABS:
+    for tab in schema.REQUIRED_TABS:
         status = client.ensure_tab(tab)
         counts[status] += 1
         print(f"init-sheet: {tab} -> {status}")
@@ -128,12 +170,18 @@ def _cmd_init_sheet(args: argparse.Namespace) -> int:
 
 
 def _cmd_snapshot(args: argparse.Namespace) -> int:
-    """Export a CSV snapshot of every tab under ``snapshots/<utc>/``."""
+    """Export a CSV snapshot of the live tab set under ``snapshots/<utc>/``.
+
+    Backs up :data:`backup.LIVE_SNAPSHOT_TABS` — the live-required tab(s) plus the operator-
+    maintained "Budget Timeseries" source — and skips any of those tabs the spreadsheet does
+    not have (so it keeps working once the unused canonical tabs are deleted).
+    """
     config = _load(args)
     client = SheetsClient(config)
     dest = Path(args.dest)
     snapshot_dir = backup.snapshot_all_tabs(client, dest)
-    print(f"snapshot: wrote {len(schema.TABS)} tab(s) to {snapshot_dir}")
+    written = sorted(p.name for p in snapshot_dir.glob("*.csv"))
+    print(f"snapshot: wrote {len(written)} tab(s) to {snapshot_dir}")
     return 0
 
 
@@ -308,7 +356,11 @@ def _fiscal_year_end_date(fy: int, start_month: int) -> date:
 
 
 def _cmd_import_budget(args: argparse.Namespace) -> int:
-    """Load a messy human "budget" worksheet into the canonical ``budget`` tab.
+    """(Legacy) Load a messy human "budget" worksheet into the canonical ``budget`` tab.
+
+    Superseded by the LIVE flow, which sources ``report`` / ``analyze`` from the operator-
+    maintained "Budget Timeseries" tab; this command (and the canonical tabs it writes) is
+    retained for the older budget-import path and is not part of the live deployment surface.
 
     Reads the source worksheet named by ``--from-tab`` as a raw grid
     (:meth:`SheetsClient.read_values`), parses it with the pure
@@ -367,8 +419,9 @@ def _cmd_import_budget(args: argparse.Namespace) -> int:
         print("import-budget [dry-run]: no writes made")
         return 0
 
-    # Snapshot BEFORE any mutation (corruption protection).
-    backup.snapshot_all_tabs(client, Path("."))
+    # Snapshot BEFORE any mutation (corruption protection). This legacy path writes the
+    # canonical budget/transactions tabs, so snapshot the full canonical registry.
+    backup.snapshot_all_tabs(client, Path("."), tabs=schema.TABS)
     client.upsert_rows(schema.TAB_BUDGET, plan.budget_rows)
     if args.with_actuals and plan.txn_rows:
         client.upsert_rows(schema.TAB_TRANSACTIONS, plan.txn_rows)
@@ -408,7 +461,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_check.set_defaults(func=_cmd_check)
 
     p_init_sheet = sub.add_parser(
-        "init-sheet", help="create the 5 canonical tabs + schema headers in the spreadsheet"
+        "init-sheet", help="create the live-required tab(s) + schema headers in the spreadsheet"
     )
     _add_config_arg(p_init_sheet)
     p_init_sheet.add_argument(
@@ -424,7 +477,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_init_sheet.set_defaults(func=_cmd_init_sheet)
 
-    p_snapshot = sub.add_parser("snapshot", help="export CSV backups of all tabs")
+    p_snapshot = sub.add_parser("snapshot", help="export CSV backups of the live tab set")
     _add_config_arg(p_snapshot)
     p_snapshot.add_argument(
         "--dest",
@@ -434,7 +487,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_snapshot.set_defaults(func=_cmd_snapshot)
 
     p_normalize = sub.add_parser(
-        "normalize", help="normalize legacy/raw ledger -> canonical schema (assign IDs, dedup)"
+        "normalize",
+        help="(legacy) normalize legacy/raw ledger -> canonical schema (assign IDs, dedup)",
     )
     _add_config_arg(p_normalize)
     p_normalize.add_argument(

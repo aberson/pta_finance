@@ -11,9 +11,14 @@ The whole path is five stages:
 0. Install            1. Google Cloud (M1)      2. config.toml (M2)
    uv sync               service account +          fill in your values
                          share the sheet
-                                          3. init-sheet            4. check + load data
-                                             create the 5 tabs        verify + ingest
+                                          3. init-sheet            4. check + run
+                                             create report_log        verify + report
 ```
+
+The live toolkit needs only the `report_log` tab plus a user-maintained **Budget Timeseries**
+tab (the tidy long dataset `analyze` / `report` read). The older canonical tabs
+(`transactions` / `receipts` / `budget` / `events`) are **optional/legacy** — you may leave
+them out or delete them.
 
 ---
 
@@ -100,13 +105,17 @@ satisfies validation.
 
 ---
 
-## 3. Create the tabs — `init-sheet`
+## 3. Create the tab — `init-sheet`
 
-The toolkit expects five worksheet tabs with **exact** headers: `transactions`, `receipts`,
-`budget`, `events`, `report_log`. The `init-sheet` command creates any that are missing and
-writes their header rows for you. It is **idempotent** and **corruption-safe** — it never
-overwrites a tab that already has a *different* non-empty header (it raises instead, so it
-can't clobber real data).
+The live toolkit provisions only the `report_log` tab (with its **exact** header). The
+`init-sheet` command creates it if missing and writes its header row for you. It is
+**idempotent** and **corruption-safe** — it never overwrites a tab that already has a
+*different* non-empty header (it raises instead, so it can't clobber real data).
+
+You also need a user-maintained **Budget Timeseries** tab (the tidy long dataset that
+`analyze` / `report` read); create that tab yourself with your data — `init-sheet` does not
+manage it. The older canonical tabs (`transactions` / `receipts` / `budget` / `events`) are
+optional/legacy and are no longer created.
 
 Preview first (no writes), then apply:
 
@@ -128,16 +137,24 @@ You'll see one line per tab (`created` / `headers-written` / `ok`) and a summary
 
 ---
 
-## 4. Verify the link, then load data
+## 4. Verify the link, then run
 
-**Verify** config + schema + a real read/write round-trip:
+**Verify** the live-required schema + that the Budget Timeseries source is readable + a real
+read/write round-trip:
 
 ```bash
 uv run pta-finance check
 ```
 
-Expected: `schema OK for 5 tab(s) [<your org>]` and (if `test_spreadsheet_id` is set) a
-round-trip `OK` line — it wrote, read back, and deleted a probe row on the test sheet.
+Expected: `schema OK for 1 required tab(s) [<your org>]`, a `Budget Timeseries source OK` line,
+and (if `test_spreadsheet_id` is set) a round-trip `OK` line — it wrote, read back, and deleted a
+probe row in `report_log` on the test sheet.
+
+### Legacy data loads (optional)
+
+The `normalize` and `import-budget` commands fill the older canonical tabs and are **legacy** —
+superseded by the Budget Timeseries flow. Skip this section unless you are maintaining the
+canonical-tab data.
 
 **Load your ledger** (normalizes legacy rows, assigns IDs, dedups; snapshots first):
 
@@ -162,12 +179,12 @@ uv run pta-finance import-budget --from-tab "<your budget tab>" --fy <YYYY> --wi
 - `--fy` is the fiscal-year **label** (e.g. `2026` = the 2025–2026 year when `start_month` is a
   school-year month).
 - `--with-actuals` also writes one summary "actual" transaction per line item (from the `Actual`
-  column) so `analyze`/`report` show real spend, not just the budget. Omit it to load only the budget.
-- A line whose `Type` cell is blank is **kept but flagged `needs_review`** (and excluded from analytics)
-  until you fill in the type and re-run — the import is idempotent, so re-running is safe.
+  column) into the canonical tabs. Omit it to load only the budget.
+- A line whose `Type` cell is blank is **kept but flagged `needs_review`** until you fill in the
+  type and re-run — the import is idempotent, so re-running is safe.
 - Per-transaction detail (beyond these summary actuals) is a separate, later load.
 
-**Then analyze / report:**
+## 5. Analyze / report
 
 ```bash
 uv run pta-finance analyze --fy 2026
@@ -175,8 +192,9 @@ uv run pta-finance report --fy 2026 --variant both   # omit --fy to target the c
 ```
 
 `analyze` and `report` source from the **Budget Timeseries** tab (a tidy long dataset), not the
-canonical `budget` / `transactions` tabs, and `report` is FISCAL-YEAR scoped.
-Reports are written to `reports/output/` (gitignored — reports never enter the repo).
+canonical `budget` / `transactions` tabs, and `report` is FISCAL-YEAR scoped. Each `report` run
+appends one row per variant to `report_log`. Reports are written to `reports/output/` (gitignored
+— reports never enter the repo).
 
 ---
 

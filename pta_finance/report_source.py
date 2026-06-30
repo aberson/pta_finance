@@ -52,6 +52,7 @@ __all__ = [
     "SOURCE_TAB",
     "MEASURE_PROPOSED",
     "MEASURE_ACTUAL",
+    "TIMESERIES_COLUMNS",
     "read_timeseries",
     "to_inputs",
 ]
@@ -73,6 +74,22 @@ SOURCE_TAB = "source_tab"
 # The two values the ``measure`` column carries.
 MEASURE_PROPOSED = "proposed"
 MEASURE_ACTUAL = "actual"
+
+# The header columns the "Budget Timeseries" tab is expected to carry (the live data source
+# the toolkit reports/analyzes from). Used by ``check`` to confirm the source is readable AND
+# correctly shaped before a run; ``read_timeseries`` keys row dicts by the sheet's real header,
+# so these are the names downstream projection (:func:`to_inputs`) looks up.
+TIMESERIES_COLUMNS: tuple[str, ...] = (
+    FISCAL_YEAR,
+    CATEGORY_GROUP,
+    TYPE,
+    MEASURE,
+    AMOUNT,
+    IS_FUNDRAISER,
+    GRADE,
+    RAW_CATEGORY,
+    SOURCE_TAB,
+)
 
 
 def read_timeseries(client: SheetsClient) -> list[dict[str, str]]:

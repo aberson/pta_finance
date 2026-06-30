@@ -23,6 +23,7 @@ __all__ = [
     "EVENTS_COLUMNS",
     "REPORT_LOG_COLUMNS",
     "TABS",
+    "REQUIRED_TABS",
 ]
 
 # --- Tab (worksheet) names -------------------------------------------------
@@ -106,3 +107,13 @@ TABS: dict[str, tuple[str, ...]] = {
     TAB_EVENTS: EVENTS_COLUMNS,
     TAB_REPORT_LOG: REPORT_LOG_COLUMNS,
 }
+
+# --- Live-required subset ---------------------------------------------------
+#
+# The tabs the LIVE toolkit creates + validates. The full :data:`TABS` registry remains the
+# column-shape source of truth (used by report_source's canonical-shape projection);
+# ``REQUIRED_TABS`` is the subset the toolkit actually provisions/validates now that
+# ``report`` + ``analyze`` source the "Budget Timeseries" tab. The other canonical tabs
+# (``transactions`` / ``receipts`` / ``budget`` / ``events``) are optional/legacy and may be
+# deleted from the spreadsheet without breaking ``check`` / ``init-sheet`` / ``snapshot``.
+REQUIRED_TABS: tuple[str, ...] = (TAB_REPORT_LOG,)

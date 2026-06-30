@@ -113,3 +113,14 @@ def test_registry_references_same_tuple_objects_by_identity() -> None:
     assert schema.TABS[schema.TAB_BUDGET] is schema.BUDGET_COLUMNS
     assert schema.TABS[schema.TAB_EVENTS] is schema.EVENTS_COLUMNS
     assert schema.TABS[schema.TAB_REPORT_LOG] is schema.REPORT_LOG_COLUMNS
+
+
+def test_required_tabs_is_a_subset_of_the_registry() -> None:
+    # REQUIRED_TABS is the live-provisioned subset; every entry must still be a known tab in
+    # the full TABS registry (the column-shape source of truth).
+    assert set(schema.REQUIRED_TABS) <= set(schema.TABS)
+
+
+def test_report_log_is_required() -> None:
+    # report_log is the one tab the live toolkit always writes (one row per report run).
+    assert schema.TAB_REPORT_LOG in schema.REQUIRED_TABS

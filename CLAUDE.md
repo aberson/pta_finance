@@ -58,11 +58,16 @@ config.toml         gitignored private config; config.example.toml ships fake va
 
 ## 5. Architecture
 
-- **Data layer** (`sheets.py`, `schema.py`, `models.py`, `ids.py`): one Google Spreadsheet, one
-  tab per entity (`transactions`, `receipts`, `budget`, `events`, `report_log`). `schema.py`
-  (column lists) and `ids.py` (ID formats) are **single sources of truth** — tests assert column
-  identity with `is`. IDs are stable, human-readable, fiscal-year-scoped (`TXN-FY26-0001`); Python
-  assigns missing IDs and never rewrites existing ones.
+- **Data layer** (`sheets.py`, `schema.py`, `models.py`, `ids.py`): one Google Spreadsheet.
+  `schema.py` (column lists) and `ids.py` (ID formats) are **single sources of truth** — tests
+  assert column identity with `is`. The full `schema.TABS` registry (`transactions`, `receipts`,
+  `budget`, `events`, `report_log`) remains the column-shape source of truth, but the LIVE toolkit
+  provisions/validates only `schema.REQUIRED_TABS` (just `report_log`) via `check` / `init-sheet`
+  / `snapshot`. `report` / `analyze` source from the operator-maintained **Budget Timeseries** tab
+  (`report_source.py`) and `report` writes one row per run to `report_log`; the other canonical
+  tabs (filled by the legacy `normalize` / `import-budget`) are optional and may be deleted. IDs
+  are stable, human-readable, fiscal-year-scoped (`TXN-FY26-0001`); Python assigns missing IDs and
+  never rewrites existing ones.
 - **ETL** (`etl.py`): normalize legacy rows, assign IDs, dedup via `(date|amount|payee)` hash,
   flag ambiguous rows `needs_review`, snapshot-before-write. Idempotent.
 - **Analytics** (`analytics/`): pandas aggregations + multi-year trends.

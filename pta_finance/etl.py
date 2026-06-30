@@ -270,8 +270,9 @@ def normalize(
 
     base = Path(dest_dir) if dest_dir is not None else Path.cwd()
 
-    # 1. Snapshot BEFORE any mutation.
-    backup.snapshot_all_tabs(client, base)
+    # 1. Snapshot BEFORE any mutation. Legacy path mutates the canonical tabs, so snapshot the
+    #    full canonical registry (not just the live set).
+    backup.snapshot_all_tabs(client, base, tabs=schema.TABS)
 
     # 2. Read + normalize.
     tab = schema.TAB_TRANSACTIONS

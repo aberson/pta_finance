@@ -70,6 +70,14 @@ and § Appendix). Both the writer (ETL) and readers (analytics, reports) import 
 lists; regression tests assert column-list identity with `is`, not `==`, so future re-duplication
 fails CI (workspace `code-quality` rule: one source of truth for data-shape constants).
 
+**Live-required subset.** The LIVE toolkit provisions/validates only `schema.REQUIRED_TABS`
+(currently just `report_log`) via `check` / `init-sheet` / `snapshot`. `report` / `analyze`
+source from the operator-maintained **Budget Timeseries** tab (a tidy long dataset, read via
+`report_source.py`), and `report` appends one row per run to `report_log`. The full `schema.TABS`
+registry above remains the column-shape source of truth (used by `report_source`'s canonical-shape
+projection), but the `transactions` / `receipts` / `budget` / `events` tabs — filled by the legacy
+`normalize` / `import-budget` commands — are optional and may be deleted from the spreadsheet.
+
 ### Identifiers
 
 IDs are human-readable, fiscal-year-scoped, and **stable**. Defined once in `pta_finance/ids.py`:
@@ -172,7 +180,8 @@ path.
 - **`sheets.py`** — `gspread` service-account client wrapper: open spreadsheet, read a tab to
   records, atomic `batch_update` writes with 429 backoff + jitter, schema validation. The only
   module that talks to Google.
-- **`backup.py`** — CSV snapshot export of all tabs (corruption protection).
+- **`backup.py`** — CSV snapshot export (corruption protection); defaults to the live tab set
+  (`report_log` + Budget Timeseries, skipping any absent tab), with `tabs=` for legacy callers.
 - **`etl.py`** — normalize legacy/raw rows → canonical schema; assign missing IDs; dedup;
   `needs_review` flagging; snapshot-before-write.
 - **`analytics/`** — `aggregate.py`, `trends.py` (pandas).
@@ -185,9 +194,9 @@ path.
 
 | Command | Action |
 |---|---|
-| `pta-finance check` | Validate config + sheet schema; real round-trip read/write/delete of a test row (smoke) |
-| `pta-finance snapshot` | Export CSV backups of all tabs |
-| `pta-finance normalize` | Normalize legacy/raw ledger → canonical schema, assign IDs, dedup (snapshot first) |
+| `pta-finance check` | Validate `report_log` schema + Budget Timeseries source readability; real round-trip read/write/delete of a test row in `report_log` (smoke) |
+| `pta-finance snapshot` | Export CSV backups of the live tab set (`report_log` + Budget Timeseries; skips absent tabs) |
+| `pta-finance normalize` | (legacy) Normalize legacy/raw ledger → canonical schema, assign IDs, dedup (snapshot first) |
 | `pta-finance analyze [--fy YYYY]` | Run analytics over the Budget Timeseries tab; print summary |
 | `pta-finance report [--fy YYYY] [--variant internal\|external\|both]` | Generate fiscal-year report(s) from the Budget Timeseries tab (default: current FY) |
 

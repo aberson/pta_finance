@@ -53,11 +53,15 @@ cp config.example.toml config.toml
 #    share the spreadsheet + Drive folder with the service-account email (Editor)
 
 # 4. Verify, then run
-uv run pta-finance check                                  # validate config + sheet round-trip
-uv run pta-finance normalize                              # legacy ledger -> clean schema
+uv run pta-finance check                                  # validate report_log + Budget Timeseries source
 uv run pta-finance analyze                                # run analytics (Budget Timeseries)
 uv run pta-finance report --fy YYYY --variant both        # fiscal-year reports (default: current FY)
 ```
+
+The live toolkit provisions/validates only the `report_log` tab and sources `analyze` / `report`
+from the operator-maintained **Budget Timeseries** tab; the canonical `transactions` / `receipts` /
+`budget` / `events` tabs (and the `normalize` / `import-budget` commands that fill them) are
+**optional/legacy** and may be deleted from the spreadsheet.
 
 For the unattended monthly report, add two GitHub Actions secrets — `GOOGLE_SA_KEY_B64` (base64 of
 the service-account JSON) and `PTA_CONFIG_B64` (base64 of `config.toml`) — and the
