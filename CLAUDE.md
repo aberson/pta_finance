@@ -47,7 +47,8 @@ uv run pta-finance report --fy YYYY --variant both        # fiscal-year reports 
 
 ```
 pta_finance/        package (flat layout): config, ids, schema, models, sheets,
-                    backup, etl, cli, analytics/, reports/(templates/)
+                    backup, etl, cli, receipt_ingest (Phase-4 prototype),
+                    analytics/, reports/(templates/)
 tests/              fake-org fixtures + mocked gspread; test_smoke_pipeline.py is the wiring gate
 .github/            last-run.txt (scheduler keepalive) + workflows/ci.yml (PR gate)
                     + workflows/monthly-report.yml (cron)
