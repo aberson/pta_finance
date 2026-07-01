@@ -9,6 +9,14 @@ service-account*.json
 snapshots/
 reports/output/
 
+# --- Private treasurer/email samples & PII source docs (NEVER commit) ---
+# Real receipts/emails carry names, addresses, order + card fragments. Committed
+# docs belong under documentation/ or docs/, not here.
+doc/
+mail_samples/
+*.eml
+*.mbox
+
 # --- Python ---
 .venv/
 __pycache__/
