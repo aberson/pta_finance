@@ -596,3 +596,45 @@ worktrees); pushed `cbeeecc..193bed2`.**
 | Drive deviation | Live Drive upload deferred to Phase 2 (needs `google-api-python-client` per §8); v1 = local `reports/output/` + the CI artifact. |
 | Money | Aggregated as exact integer cents — never binary floats. |
 | Next | Operator-gated Manual Steps M1–M3 (real Google credentials) — see §11 Manual Steps. |
+
+---
+
+## Phase 4 (prototype) — Receipt ingestion (preview-only)
+
+**Preview slice only — NOT a completed phase. Credential-free + write-free. 178 tests passing
+(+1 skipped, pyyaml-gated). Zero type errors (`mypy --strict`). Zero lint violations. Built on
+`main`.**
+
+### What was built
+- **`receipt_ingest.py`** — a credential-free, write-free parser for reimbursement-form `.eml`
+  emails (e.g. Wix form-submission notifications). Recognizes a submission **structurally**
+  (labeled Total + numbered *Date / Category / Description / Amount* line items) with an optional
+  operator-supplied subject-substring filter; tolerant of inconsistent label spacing and missing
+  fields. Exposes `LineItem` / `Submission` dataclasses, `parse_submission` / `iter_eml`, and
+  `line_item_total` / `stated_total` / `total_reconciles` reconciliation helpers.
+- **`ingest-receipts` CLI** (`cli.py`) — reads a `.eml` file or directory, prints one block per
+  recognized submission (requestor, line items, stated-vs-line-item total reconciliation, receipt
+  links/attachments), counts non-matching emails as skipped, and can dump a flat
+  one-row-per-line-item CSV to a gitignored path. Self-labeled "(prototype)".
+
+### Not yet built (remaining Phase-4 work)
+- Mapping a `Submission` onto the canonical `transactions` / `receipts` row shapes and writing it
+  to the Sheet (idempotent, `needs_review` on total mismatch).
+- Live Drive fetch of the linked receipt PDFs.
+- Validated only on synthetic `.eml` fixtures; real-inbox backfill has open decisions.
+
+### Files changed
+
+| File | Change |
+|---|---|
+| `pta_finance/receipt_ingest.py` | New — `.eml` reimbursement-form parser (structural recognition, no identity hard-coded) |
+| `pta_finance/cli.py` | New `ingest-receipts` subcommand (preview + optional gitignored CSV) |
+| `tests/test_receipt_ingest.py` | New — 14 tests over synthetic `.eml` fixtures (fake placeholders) |
+
+### Fresh-context notes
+
+| Issue | Detail |
+|---|---|
+| Prototype scope | Preview/parse only — **no Sheet writes, no credentials**. Downstream mapping + backfill deferred. |
+| Identity rule | Recognition is structural; no org/person/email in code or tests. Real `.eml` samples stay gitignored (default source `./mail_samples`). |
+| Sheet-side work | Related dashboard work (chart recolor, FY2025/27 `raw_category` canonicalization, the Group Explorer tab) lives in the Google Sheet, not this repo. |

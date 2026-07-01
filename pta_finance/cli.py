@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import calendar
+import csv
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -32,6 +33,7 @@ from pta_finance import (
     etl,
     ids,
     models,
+    receipt_ingest,
     report_source,
     reports,
     schema,
@@ -437,6 +439,161 @@ def _cmd_import_budget(args: argparse.Namespace) -> int:
     return 0
 
 
+def _fy_for(date_str: str, start_month: int) -> str:
+    """Fiscal-year label for a raw line-item date string, or ``""`` if it does not parse."""
+    try:
+        parsed = models.parse_date(date_str)
+    except ValueError:
+        return ""
+    return f"FY{ids.fiscal_year_label(parsed, start_month)}"
+
+
+def _money(raw: str) -> str:
+    """Render a raw amount for preview: ``$1,234.56`` when parseable, else ``<raw>?``."""
+    if raw.strip() == "":
+        return "(blank)"
+    try:
+        value = models.parse_amount(raw)
+    except ValueError:
+        return f"{raw}?"
+    return f"${value:,.2f}"
+
+
+def _cmd_ingest_receipts(args: argparse.Namespace) -> int:
+    """(Phase-4 prototype) Parse reimbursement-form ``.eml`` files and PREVIEW what is extracted.
+
+    Credential-free and WRITE-FREE: reads raw ``.eml`` files from ``--source`` (a directory or
+    a single file), recognizes reimbursement-form submissions structurally
+    (:func:`pta_finance.receipt_ingest.parse_submission`), and prints one block per submission —
+    requestor, each numbered line item (date / fiscal-year / category / amount / description),
+    the stated Total vs. the summed line items (reconciliation check), and the count of linked
+    receipt URLs + attachments. Emails that are not reimbursement forms are counted as skipped.
+
+    Nothing is written to the Google Sheet: this step exists so the operator can eyeball the
+    extraction on a few real emails before we decide where the rows land. ``--limit`` caps the
+    number of RECOGNIZED submissions shown; ``--subject-filter`` narrows recognition to emails
+    whose subject contains a substring; ``--csv`` also writes a flat one-row-per-line-item CSV
+    (to a gitignored path) for spreadsheet review. ``--start-month`` (default 1) drives the
+    fiscal-year derivation without needing a config/credentials.
+    """
+    source = Path(args.source)
+    if not source.exists():
+        print(f"ingest-receipts: source not found: {source}")
+        print("  (download a few reimbursement emails as .eml into that folder — see SETUP.md)")
+        return 1
+
+    start_month = args.start_month
+    subject_filter = args.subject_filter or None
+
+    scanned = 0
+    recognized = 0
+    shown = 0
+    csv_rows: list[dict[str, str]] = []
+
+    for path, msg in receipt_ingest.iter_eml(source):
+        scanned += 1
+        sub = receipt_ingest.parse_submission(msg, subject_filter=subject_filter)
+        if sub is None:
+            continue
+        recognized += 1
+
+        for item in sub.line_items:
+            csv_rows.append(
+                {
+                    "source_file": path.name,
+                    "message_id": sub.message_id,
+                    "received": sub.received,
+                    "requestor_name": sub.requestor_name,
+                    "requestor_email": sub.requestor_email,
+                    "company": sub.company,
+                    "item_index": str(item.index),
+                    "date": item.date,
+                    "fiscal_year": _fy_for(item.date, start_month),
+                    "category": item.category,
+                    "description": item.description,
+                    "amount": item.amount,
+                    "total_stated": sub.total,
+                    "receipt_urls": " | ".join(sub.receipt_urls),
+                    "attachments": " | ".join(sub.attachments),
+                }
+            )
+
+        if args.limit is not None and shown >= args.limit:
+            continue
+        shown += 1
+
+        print(f"[{shown}] {path.name}")
+        who = sub.requestor_name or "(no name)"
+        if sub.requestor_email:
+            who = f"{who} <{sub.requestor_email}>"
+        print(f"  requestor : {who}")
+        meta = [
+            f"company {sub.company}" if sub.company else "",
+            f"phone {sub.phone}" if sub.phone else "",
+        ]
+        meta_line = "  ".join(m for m in meta if m)
+        if meta_line:
+            print(f"  details   : {meta_line}")
+        print(f"  received  : {sub.received or '(no Date header)'}")
+        print(f"  line items ({len(sub.line_items)}):")
+        for item in sub.line_items:
+            fy = _fy_for(item.date, start_month)
+            date_cell = f"{item.date or '(no date)':<12}"
+            fy_cell = f"{fy:<7}"
+            cat_cell = f"{(item.category or '(no category)'):<16}"
+            amt_cell = f"{_money(item.amount):>12}"
+            desc = item.description or "(no description)"
+            if len(desc) > 60:
+                desc = desc[:57] + "..."
+            print(f"    #{item.index}  {date_cell} {fy_cell} {cat_cell} {amt_cell}  {desc}")
+
+        items_sum = receipt_ingest.line_item_total(sub)
+        stated = receipt_ingest.stated_total(sub)
+        reconciles = receipt_ingest.total_reconciles(sub)
+        recon = {True: "YES", False: "NO — MISMATCH", None: "n/a"}[reconciles]
+        sum_txt = "n/a" if items_sum is None else f"${items_sum:,.2f}"
+        stated_txt = "n/a" if stated is None else f"${stated:,.2f}"
+        print(f"  totals    : stated {stated_txt}   line-item sum {sum_txt}   reconciles {recon}")
+        print(
+            f"  receipts  : {len(sub.receipt_urls)} link(s), {len(sub.attachments)} attachment(s)"
+        )
+        print("")
+
+    print(
+        f"ingest-receipts: scanned {scanned} email(s), "
+        f"recognized {recognized} reimbursement form(s), "
+        f"skipped {scanned - recognized} non-matching"
+    )
+
+    if args.csv:
+        csv_path = Path(args.csv)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        fieldnames = [
+            "source_file",
+            "message_id",
+            "received",
+            "requestor_name",
+            "requestor_email",
+            "company",
+            "item_index",
+            "date",
+            "fiscal_year",
+            "category",
+            "description",
+            "amount",
+            "total_stated",
+            "receipt_urls",
+            "attachments",
+        ]
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(csv_rows)
+        print(f"ingest-receipts: wrote {len(csv_rows)} line-item row(s) to {csv_path}")
+
+    return 0
+
+
 def _add_config_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--config",
@@ -556,6 +713,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the parsed plan + counts, make no writes and no snapshot",
     )
     p_import_budget.set_defaults(func=_cmd_import_budget)
+
+    p_ingest = sub.add_parser(
+        "ingest-receipts",
+        help="(prototype) parse reimbursement-form .eml files and preview what is extracted",
+    )
+    p_ingest.add_argument(
+        "--source",
+        default="mail_samples",
+        help="a .eml file or a directory of .eml files (default: ./mail_samples)",
+    )
+    p_ingest.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="cap how many recognized submissions are printed (CSV still gets all)",
+    )
+    p_ingest.add_argument(
+        "--subject-filter",
+        default=None,
+        help="only treat emails whose subject contains this substring as reimbursement forms",
+    )
+    p_ingest.add_argument(
+        "--start-month",
+        type=int,
+        default=1,
+        help="fiscal-year start month for FY derivation (default: 1 = calendar year)",
+    )
+    p_ingest.add_argument(
+        "--csv",
+        default=None,
+        help="also write a flat one-row-per-line-item CSV to this (gitignored) path",
+    )
+    p_ingest.set_defaults(func=_cmd_ingest_receipts)
 
     return parser
 

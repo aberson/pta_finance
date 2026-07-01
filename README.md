@@ -102,6 +102,13 @@ GitHub Actions report workflow. 113 tests passing (+1 skipped), 0 type errors (`
 0 lint violations. First-run setup needs the Google service account (see Setup) — then
 `uv run pta-finance check`.
 
+**Receipt-ingestion prototype (Phase 4, preview-only)** — a credential-free, write-free `.eml`
+parser (`receipt_ingest.py`) plus an `ingest-receipts` CLI that reads reimbursement-form emails and
+prints the parsed submissions (requestor, numbered line items, stated-vs-line-item total
+reconciliation, receipt links/attachments), with an optional gitignored CSV dump. It does **not** yet
+map onto the canonical `transactions`/`receipts` rows or write to the Sheet — that mapping + backfill
+is the remaining Phase-4 work. 178 tests passing (+1 skipped), 0 type errors, 0 lint violations.
+
 Roadmap beyond v1: Apps Script automation (nag emails, calendar, sign-in), an admin web UI, then
 forecasting / receipt ingestion / bank imports / wiki / live Drive upload (`google-api-python-client`).
 
