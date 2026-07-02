@@ -396,3 +396,46 @@ def test_ensure_tab_propagates_non_duplicate_400(fake_config: Config) -> None:
 
     with pytest.raises(APIError):
         client.ensure_tab(_TXN)
+
+
+# --- schema-independent writes (Budget Timeseries reconcile) ----------------
+
+
+def test_update_cells_writes_user_entered(fake_config: Config) -> None:
+    """update_cells writes USER_ENTERED so a numeric amount string lands as a NUMBER — the
+    operator tab's native SUM/QUERY formulas skip a text cell (regression: RAW stored '10000'
+    as text and Group Explorer under-counted it)."""
+    ws = FakeWorksheet([["fiscal_year", "amount"]])
+    client = _client(fake_config, ws)
+
+    client.update_cells(_TXN, {"E246": "10000", "N246": "a note"})
+
+    assert ws.batch_update_vios == ["USER_ENTERED"]
+    (requests,) = ws.batch_update_calls
+    ranges = {r["range"]: r["values"][0][0] for r in requests}
+    assert ranges == {"E246": "10000", "N246": "a note"}
+
+
+def test_update_cells_noop_when_empty(fake_config: Config) -> None:
+    ws = FakeWorksheet([["a"]])
+    client = _client(fake_config, ws)
+    client.update_cells(_TXN, {})
+    assert ws.batch_update_calls == []
+
+
+def test_append_raw_rows_writes_user_entered(fake_config: Config) -> None:
+    """append_raw_rows writes USER_ENTERED so an appended amount is a number, not text."""
+    ws = FakeWorksheet([["fiscal_year", "amount"]])
+    client = _client(fake_config, ws)
+
+    client.append_raw_rows(_TXN, [["2027", "500"]])
+
+    assert ws.append_rows_vios == ["USER_ENTERED"]
+    assert ws.append_rows_calls == [[["2027", "500"]]]
+
+
+def test_append_raw_rows_noop_when_empty(fake_config: Config) -> None:
+    ws = FakeWorksheet([["a"]])
+    client = _client(fake_config, ws)
+    client.append_raw_rows(_TXN, [])
+    assert ws.append_rows_calls == []

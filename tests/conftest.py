@@ -102,6 +102,9 @@ class FakeWorksheet:
         self.grid: list[list[str]] = grid if grid is not None else []
         self.title = title
         self.batch_update_calls: list[list[dict[str, Any]]] = []
+        # value_input_option recorded per batch_update / append_rows call (None = gspread default).
+        self.batch_update_vios: list[str | None] = []
+        self.append_rows_vios: list[str | None] = []
         self.append_rows_calls: list[list[list[str]]] = []
         self.delete_rows_calls: list[int] = []
         self.update_calls: list[tuple[str, list[list[str]]]] = []
@@ -138,15 +141,21 @@ class FakeWorksheet:
 
     # --- writes -------------------------------------------------------------
 
-    def batch_update(self, data: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    def batch_update(
+        self, data: Iterable[Mapping[str, Any]], value_input_option: str | None = None
+    ) -> dict[str, Any]:
         self._maybe_fail("batch_update")
         requests = [dict(req) for req in data]
         self.batch_update_calls.append(requests)
+        self.batch_update_vios.append(value_input_option)
         return {"replies": [{} for _ in requests]}
 
-    def append_rows(self, values: list[list[str]]) -> dict[str, Any]:
+    def append_rows(
+        self, values: list[list[str]], value_input_option: str | None = None
+    ) -> dict[str, Any]:
         self._maybe_fail("append_rows")
         self.append_rows_calls.append([list(v) for v in values])
+        self.append_rows_vios.append(value_input_option)
         self.grid.extend(list(v) for v in values)
         return {}
 

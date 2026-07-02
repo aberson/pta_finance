@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 import gspread
 from gspread.exceptions import APIError
-from gspread.utils import rowcol_to_a1
+from gspread.utils import ValueInputOption, rowcol_to_a1
 
 from pta_finance import schema
 
@@ -359,32 +359,43 @@ class SheetsClient:
     def update_cells(self, tab: str, cell_values: Mapping[str, str]) -> None:
         """Atomically overwrite specific A1 cells in ``tab`` (schema-INDEPENDENT).
 
-        ``cell_values`` maps an A1 cell (e.g. ``"E42"``) to its new string value; all writes
-        land in one ``worksheet.batch_update`` (all-or-nothing). Unlike :meth:`upsert_rows`
-        (which assumes an ``id`` key column + ``schema.TABS`` column order), this targets
-        arbitrary cells and never assumes a column layout — so it can reconcile edits into the
-        operator-maintained "Budget Timeseries" tab, whose 14-column shape is NOT in
-        ``schema.TABS``. A no-op when empty.
+        ``cell_values`` maps an A1 cell (e.g. ``"E42"``) to its new value; all writes land in
+        one ``worksheet.batch_update`` (all-or-nothing). Unlike :meth:`upsert_rows` (which
+        assumes an ``id`` key column + ``schema.TABS`` column order), this targets arbitrary
+        cells and never assumes a column layout — so it can reconcile edits into the operator-
+        maintained "Budget Timeseries" tab, whose 14-column shape is NOT in ``schema.TABS``.
+
+        Writes with ``value_input_option="USER_ENTERED"`` (NOT gspread's default ``RAW``): a
+        numeric string like an amount ``"10000"`` must be stored as a **number**, or the
+        operator tab's native ``SUM`` / ``QUERY`` / pivot formulas (e.g. the "Group Explorer"
+        tab) silently skip the text cell and under-count. A no-op when empty.
         """
         if not cell_values:
             return
         ws = self.worksheet(tab)
         requests = [{"range": a1, "values": [[value]]} for a1, value in cell_values.items()]
-        self._with_retry(lambda: ws.batch_update(requests))
+        self._with_retry(
+            lambda: ws.batch_update(requests, value_input_option=ValueInputOption.user_entered)
+        )
 
     def append_raw_rows(self, tab: str, rows: Sequence[Sequence[str]]) -> None:
         """Append pre-ordered raw ``rows`` to ``tab`` (schema-INDEPENDENT).
 
         Unlike :meth:`append_rows` (which orders a dict of cells by ``schema.TABS[tab]``), the
         rows here are already cell-ordered to the tab's LIVE header — for appending to a tab,
-        like "Budget Timeseries", that is not in the canonical schema registry. A no-op when
-        empty. Counts as a single API request.
+        like "Budget Timeseries", that is not in the canonical schema registry.
+
+        Writes with ``value_input_option="USER_ENTERED"`` (NOT gspread's default ``RAW``) so an
+        appended amount string is stored as a **number** the operator tab's native SUM/QUERY/
+        pivot formulas can total (see :meth:`update_cells`). A no-op when empty. One API request.
         """
         if not rows:
             return
         ws = self.worksheet(tab)
         values = [list(r) for r in rows]
-        self._with_retry(lambda: ws.append_rows(values))
+        self._with_retry(
+            lambda: ws.append_rows(values, value_input_option=ValueInputOption.user_entered)
+        )
 
     def update_rows_by_index(
         self, tab: str, rows_by_index: Mapping[int, Mapping[str, str]]
