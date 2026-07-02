@@ -50,6 +50,7 @@ __all__ = [
     "GRADE",
     "RAW_CATEGORY",
     "SOURCE_TAB",
+    "NOTES",
     "MEASURE_PROPOSED",
     "MEASURE_ACTUAL",
     "TIMESERIES_COLUMNS",
@@ -70,6 +71,11 @@ IS_FUNDRAISER = "is_fundraiser"
 GRADE = "grade"
 RAW_CATEGORY = "raw_category"
 SOURCE_TAB = "source_tab"
+# ``notes`` is an OPTIONAL free-text column the operator keeps on the live "Budget Timeseries"
+# tab (alongside other enrichment columns like ``strategic_group``). It is NOT part of the
+# required :data:`TIMESERIES_COLUMNS` set that ``check`` validates, but budget-sync reconciles
+# it, so its name lives here (single source of truth for the column name).
+NOTES = "notes"
 
 # The two values the ``measure`` column carries.
 MEASURE_PROPOSED = "proposed"

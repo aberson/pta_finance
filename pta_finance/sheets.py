@@ -356,6 +356,36 @@ class SheetsClient:
         # Single atomic batch — all ranges land together or not at all.
         self._with_retry(lambda: ws.batch_update(requests))
 
+    def update_cells(self, tab: str, cell_values: Mapping[str, str]) -> None:
+        """Atomically overwrite specific A1 cells in ``tab`` (schema-INDEPENDENT).
+
+        ``cell_values`` maps an A1 cell (e.g. ``"E42"``) to its new string value; all writes
+        land in one ``worksheet.batch_update`` (all-or-nothing). Unlike :meth:`upsert_rows`
+        (which assumes an ``id`` key column + ``schema.TABS`` column order), this targets
+        arbitrary cells and never assumes a column layout — so it can reconcile edits into the
+        operator-maintained "Budget Timeseries" tab, whose 14-column shape is NOT in
+        ``schema.TABS``. A no-op when empty.
+        """
+        if not cell_values:
+            return
+        ws = self.worksheet(tab)
+        requests = [{"range": a1, "values": [[value]]} for a1, value in cell_values.items()]
+        self._with_retry(lambda: ws.batch_update(requests))
+
+    def append_raw_rows(self, tab: str, rows: Sequence[Sequence[str]]) -> None:
+        """Append pre-ordered raw ``rows`` to ``tab`` (schema-INDEPENDENT).
+
+        Unlike :meth:`append_rows` (which orders a dict of cells by ``schema.TABS[tab]``), the
+        rows here are already cell-ordered to the tab's LIVE header — for appending to a tab,
+        like "Budget Timeseries", that is not in the canonical schema registry. A no-op when
+        empty. Counts as a single API request.
+        """
+        if not rows:
+            return
+        ws = self.worksheet(tab)
+        values = [list(r) for r in rows]
+        self._with_retry(lambda: ws.append_rows(values))
+
     def update_rows_by_index(
         self, tab: str, rows_by_index: Mapping[int, Mapping[str, str]]
     ) -> None:

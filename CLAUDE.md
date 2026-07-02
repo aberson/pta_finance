@@ -41,6 +41,8 @@ uv run pta-finance check                                  # validate config + sh
 uv run pta-finance normalize                              # legacy → canonical schema
 uv run pta-finance analyze                                # run analytics (Budget Timeseries)
 uv run pta-finance report --fy YYYY --variant both        # fiscal-year reports (default: current FY)
+uv run pta-finance sync-budget --fy 2027                  # preview edits to the "FY2027 Budget" tab
+uv run pta-finance sync-budget --fy 2027 --apply          # write those edits back to Budget Timeseries
 ```
 
 ## 4. Directory layout
@@ -48,6 +50,7 @@ uv run pta-finance report --fy YYYY --variant both        # fiscal-year reports 
 ```
 pta_finance/        package (flat layout): config, ids, schema, models, sheets,
                     backup, etl, cli, receipt_ingest (Phase-4 prototype),
+                    budget_sync (editable-budget-tab → Budget Timeseries reconcile),
                     analytics/, reports/(templates/)
 tests/              fake-org fixtures + mocked gspread; test_smoke_pipeline.py is the wiring gate
 .github/            last-run.txt (scheduler keepalive) + workflows/ci.yml (PR gate)
@@ -69,6 +72,13 @@ config.toml         gitignored private config; config.example.toml ships fake va
   tabs (filled by the legacy `normalize` / `import-budget`) are optional and may be deleted. IDs
   are stable, human-readable, fiscal-year-scoped (`TXN-FY26-0001`); Python assigns missing IDs and
   never rewrites existing ones.
+- **Editable budget ↔ DB** (`budget_sync.py`): the operator hand-edits a readable **"FY&lt;fy&gt; Budget"**
+  tab (styled after the hidden "Budget Share" tab); `sync-budget` reconciles those edits back into
+  the Budget Timeseries. PURE `parse_budget_tab` + `plan_budget_sync` (matches `(type, raw_category)`
+  within `(fy, proposed)`), CLI orchestrates. Default dry-run diff; `--apply` snapshots first
+  (`backup.snapshot_raw_tab`, faithful full grid) then writes ONLY changed amount/notes cells +
+  appends new lines via schema-independent `SheetsClient.update_cells` / `append_raw_rows`. Never
+  touches actuals, other years, or enrichment columns; removed lines are flagged, never deleted.
 - **ETL** (`etl.py`): normalize legacy rows, assign IDs, dedup via `(date|amount|payee)` hash,
   flag ambiguous rows `needs_review`, snapshot-before-write. Idempotent.
 - **Analytics** (`analytics/`): pandas aggregations + multi-year trends.
@@ -83,10 +93,14 @@ config.toml         gitignored private config; config.example.toml ships fake va
 
 **v1 automated build COMPLETE (Steps 1–8, issues #1–#8 closed).** The full pipeline works end-to-end
 under test: Sheets client, ETL/normalize, analytics, internal/external reports (runtime PII guard),
-smoke gate, and the monthly GitHub Actions workflow. 178 tests + 1 skipped; `mypy --strict` + ruff
+smoke gate, and the monthly GitHub Actions workflow. 199 tests + 1 skipped; `mypy --strict` + ruff
 clean. A **Phase-4 receipt-ingestion prototype** has also landed: `receipt_ingest.py` (credential-free,
 write-free `.eml` reimbursement-form parser) + an `ingest-receipts` CLI that previews parsed
-submissions — it does **not** yet map to `transactions`/`receipts` or write to the Sheet. **Next =
+submissions — it does **not** yet map to `transactions`/`receipts` or write to the Sheet. A
+**`sync-budget` command** (`budget_sync.py`) also landed: it reconciles an editable, operator-
+maintained **"FY&lt;fy&gt; Budget"** Sheet tab back into the Budget Timeseries (dry-run diff by default;
+`--apply` snapshots first, then writes only changed amount/notes cells + appends new lines; never
+touches actuals/other-years/enrichment; removed lines flagged not deleted). **Next =
 operator-gated manual steps** (need real Google credentials): M1 service-account setup → M2
 `pta-finance check` real-sheet smoke → M3 monthly-report observation (plan §11 Manual Steps). Live
 Drive upload is deferred to Phase 2 (`google-api-python-client`).

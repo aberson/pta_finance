@@ -8,6 +8,7 @@ Wired subcommands:
     normalize  Step 4 — (legacy) normalize legacy ledger -> canonical schema (snapshot first)
     analyze    Step 5 — run analytics over the "Budget Timeseries" tab; print a summary
     report     Step 6 — generate fiscal-year report(s); write HTML to reports/output/, log a run
+    sync-budget    reconcile the editable "FY<fy> Budget" tab back into the Budget Timeseries DB
     import-budget  (legacy) load a messy "budget" worksheet into the canonical budget tab
 
 The LIVE data flow sources ``report`` / ``analyze`` from the operator-maintained "Budget
@@ -30,6 +31,7 @@ from pta_finance import (
     analytics,
     backup,
     budget_import,
+    budget_sync,
     etl,
     ids,
     models,
@@ -594,6 +596,121 @@ def _cmd_ingest_receipts(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_sync_budget(args: argparse.Namespace) -> int:
+    """Reconcile the editable "FY<fy> Budget" tab back into the "Budget Timeseries" DB.
+
+    Reads the per-fiscal-year budget tab (:func:`budget_sync.budget_tab_name`) and the live
+    "Budget Timeseries" tab, plans the diff with the PURE
+    :func:`pta_finance.budget_sync.plan_budget_sync`, and PRINTS it (amount changes / note
+    changes / new lines / flagged-removed / unchanged). The default is a DRY RUN — no writes.
+
+    With ``--apply`` it snapshots the "Budget Timeseries" tab FIRST (a faithful full-grid
+    :func:`pta_finance.backup.snapshot_raw_tab` backup — every column, so nothing is lost),
+    then writes ONLY the changed ``amount`` / ``notes`` cells and appends new lines. Only
+    ``measure == "proposed"`` rows of ``--fy`` are touched; all enrichment columns are
+    preserved, and a line present in the DB but absent from the tab is FLAGGED, never deleted.
+
+    ``--fy`` defaults to the current fiscal year (:func:`pta_finance.ids.fiscal_year_label` of
+    today's UTC date under ``fiscal_year.start_month``); the tab it reads is ``FY<fy> Budget``.
+    """
+    config = _load(args)
+    fy: int = (
+        args.fy
+        if args.fy is not None
+        else ids.fiscal_year_label(datetime.now(UTC).date(), config.fiscal_year.start_month)
+    )
+    client = SheetsClient(config)
+    tab = budget_sync.budget_tab_name(fy)
+
+    tab_grid = client.read_values(tab)
+    if not tab_grid:
+        print(f"sync-budget: {tab!r} is empty or missing — build/seed the FY{fy} budget tab first")
+        return 1
+    parsed = budget_sync.parse_budget_tab(tab_grid)
+    if parsed.section_count == 0:
+        print(
+            f"sync-budget: {tab!r} has NO 'INCOME'/'EXPENSE' section banner — the layout looks "
+            "broken (nothing can be reconciled). Fix the tab and re-run. No writes made."
+        )
+        return 1
+    timeseries_grid = client.read_values(report_source.BUDGET_TIMESERIES_TAB)
+    plan = budget_sync.plan_budget_sync(timeseries_grid, parsed.lines, fy=fy)
+
+    rename_old = {old for _t, old, _n in plan.suspected_renames}
+    print(
+        f"sync-budget: {tab!r} -> {report_source.BUDGET_TIMESERIES_TAB!r} "
+        f"(FY{fy} proposed) [{config.organization.name}]"
+    )
+    print(f"  parsed {len(parsed.lines)} budget line(s) from the tab")
+    print(
+        f"  {len(plan.changed)} amount change(s), {len(plan.notes_changed)} note change(s), "
+        f"{len(plan.added)} new line(s), {len(plan.removed)} flagged-removed, "
+        f"{plan.unchanged} unchanged"
+    )
+    for c_typ, c_item, c_old, c_new in plan.changed:
+        print(f"    ~ [{c_typ}] {c_item}: {c_old:,.2f} -> {c_new:,.2f}")
+    for a_typ, a_group, a_item, a_amt in plan.added:
+        print(
+            f"    + [{a_typ}] {a_item}: {a_amt:,.2f}  (group={a_group or '?'}; NEEDS tagging in DB)"
+        )
+    for r_typ, r_item, r_amt in plan.removed:
+        note = " (looks like a RENAME — do NOT delete; see below)" if r_item in rename_old else ""
+        print(f"    ! [{r_typ}] {r_item}: {r_amt:,.2f} in DB, absent from tab — NOT deleted{note}")
+
+    # Warnings — surface anything that could silently corrupt the sync so it is never invisible.
+    for sr_typ, sr_old, sr_new in plan.suspected_renames:
+        print(
+            f"    ~rename? [{sr_typ}] {sr_old!r} -> {sr_new!r}: appears as remove+add and will "
+            "NOT carry the old row's strategic tags. If it IS a rename, edit raw_category in the "
+            "Budget Timeseries directly instead of renaming on the tab."
+        )
+    for sk_item, sk_amt in parsed.skipped:
+        print(f"    ? SKIPPED {sk_item!r}: amount {sk_amt!r} is not a number — fix it and re-run")
+    for or_item, or_amt in parsed.orphaned:
+        print(
+            f"    ? ORPHAN {or_item!r} ({or_amt!r}): not under any INCOME/EXPENSE section — ignored"
+        )
+    for d_typ, d_item in plan.duplicates:
+        print(f"    x DUPLICATE [{d_typ}] {d_item}: listed more than once on the tab")
+
+    if plan.duplicates:
+        print(
+            f"sync-budget: {len(plan.duplicates)} duplicate line(s) on the tab — the intended "
+            "value is ambiguous. Remove the duplicate rows, then re-run. No writes made."
+        )
+        return 1
+
+    if not args.apply:
+        print("sync-budget [dry-run]: no writes made. Re-run with --apply to write to the DB.")
+        return 0
+    if not plan.has_writes():
+        print("sync-budget: nothing to write.")
+        return 0
+
+    # Snapshot the FULL "Budget Timeseries" grid BEFORE any mutation (corruption protection;
+    # faithful — keeps every enrichment column, unlike snapshot_all_tabs).
+    backup.snapshot_raw_tab(client, report_source.BUDGET_TIMESERIES_TAB, Path(args.dest))
+    client.update_cells(report_source.BUDGET_TIMESERIES_TAB, plan.cell_updates)
+    client.append_raw_rows(report_source.BUDGET_TIMESERIES_TAB, plan.append_rows)
+    print(
+        f"sync-budget: applied {len(plan.cell_updates)} cell update(s) + "
+        f"{len(plan.append_rows)} new row(s) to {report_source.BUDGET_TIMESERIES_TAB!r} "
+        "(snapshot saved under snapshots/)"
+    )
+    if plan.added:
+        print(
+            f"sync-budget: {len(plan.added)} new line(s) need category_group / strategic tags "
+            "filled in the Budget Timeseries tab"
+        )
+    if plan.removed:
+        print(
+            f"sync-budget: {len(plan.removed)} line(s) are in the DB but not on the tab — a "
+            "flagged line may be a RENAME (its strategic tags cannot be recovered if deleted); "
+            "verify before removing anything manually"
+        )
+    return 0
+
+
 def _add_config_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--config",
@@ -713,6 +830,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the parsed plan + counts, make no writes and no snapshot",
     )
     p_import_budget.set_defaults(func=_cmd_import_budget)
+
+    p_sync_budget = sub.add_parser(
+        "sync-budget",
+        help="reconcile the editable 'FY<fy> Budget' tab back into the Budget Timeseries DB",
+    )
+    _add_config_arg(p_sync_budget)
+    p_sync_budget.add_argument(
+        "--fy",
+        type=int,
+        default=None,
+        help="fiscal year of the budget tab, e.g. 2027 (default: current fiscal year)",
+    )
+    p_sync_budget.add_argument(
+        "--apply",
+        action="store_true",
+        help="write the changes to the DB (default: dry-run — print the diff, make no writes)",
+    )
+    p_sync_budget.add_argument(
+        "--dest",
+        default=".",
+        help="base dir for the pre-write snapshots/<utc>/ backup (default: .)",
+    )
+    p_sync_budget.set_defaults(func=_cmd_sync_budget)
 
     p_ingest = sub.add_parser(
         "ingest-receipts",

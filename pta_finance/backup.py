@@ -30,6 +30,7 @@ from pta_finance.sheets import SheetsClient
 
 __all__ = [
     "snapshot_all_tabs",
+    "snapshot_raw_tab",
     "LIVE_SNAPSHOT_TABS",
 ]
 
@@ -113,3 +114,30 @@ def snapshot_all_tabs(
                 writer.writerow([record.get(col, "") for col in columns])
 
     return snapshot_dir
+
+
+def snapshot_raw_tab(
+    client: SheetsClient,
+    tab: str,
+    dest_dir: Path,
+    *,
+    timestamp: str | None = None,
+) -> Path:
+    """Faithfully snapshot ONE tab's FULL raw grid (every column) to a CSV.
+
+    Unlike :func:`snapshot_all_tabs` — which writes only a tab's *known* columns via
+    :func:`_columns_for`, and so would DROP the "Budget Timeseries" tab's extra operator
+    columns (``strategic_group``, ``strategic_goal``, ``notes``, ...) — this dumps the grid
+    EXACTLY as :meth:`SheetsClient.read_values` returns it (every row, every column). So a
+    pre-mutation backup of an operator-maintained tab loses nothing. Writes
+    ``dest_dir/snapshots/<timestamp>/<tab>.csv`` and returns its path. Reads only.
+    """
+    stamp = timestamp or _utc_stamp()
+    snapshot_dir = Path(dest_dir) / "snapshots" / stamp
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    grid = client.read_values(tab)
+    out_path = snapshot_dir / f"{tab}.csv"
+    with out_path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerows(grid)
+    return out_path
