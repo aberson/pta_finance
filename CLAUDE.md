@@ -100,10 +100,10 @@ submissions — it does **not** yet map to `transactions`/`receipts` or write to
 **`sync-budget` command** (`budget_sync.py`) also landed: it reconciles an editable, operator-
 maintained **"FY&lt;fy&gt; Budget"** Sheet tab back into the Budget Timeseries (dry-run diff by default;
 `--apply` snapshots first, then writes only changed amount/notes cells + appends new lines; never
-touches actuals/other-years/enrichment; removed lines flagged not deleted). **Next =
-operator-gated manual steps** (need real Google credentials): M1 service-account setup → M2
-`pta-finance check` real-sheet smoke → M3 monthly-report observation (plan §11 Manual Steps). Live
-Drive upload is deferred to Phase 2 (`google-api-python-client`).
+touches actuals/other-years/enrichment; removed lines flagged not deleted). **Google credentials are configured + working** — `secrets/service-account.json` (gitignored) +
+`config.toml`; `pta-finance check` round-trips read+write against the live Sheet (M1 service-account
+setup + M2 real-sheet smoke are DONE). **Next = operator-gated observation:** M3 monthly-report run
+(plan §11 Manual Steps). Live Drive upload is deferred to Phase 2 (`google-api-python-client`).
 
 ## 7. Environment requirements
 

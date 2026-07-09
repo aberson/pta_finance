@@ -36,6 +36,7 @@ from pta_finance import (
     ids,
     models,
     receipt_ingest,
+    receipt_map,
     report_source,
     reports,
     schema,
@@ -686,6 +687,86 @@ def _cmd_ingest_receipts(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_map_receipts(args: argparse.Namespace) -> int:
+    """(Phase-4) Map reimbursement submissions onto flat "Reimbursements" ledger rows (PREVIEW).
+
+    Credential-free and WRITE-FREE: parses ``--source`` (originals only — ``Re:``/``Fwd:`` thread
+    duplicates dropped), loads the category map, projects to flat one-row-per-line-item ledger rows
+    via :func:`pta_finance.receipt_map.map_submissions` (carry-forward blank category/date, skip
+    blank-amount lines, canonical-category lookup, dedup, ``needs_review``), and prints a summary.
+    ``--csv`` writes the full flat ledger to a gitignored path for review; ``--limit`` previews the
+    first N rows. Writing the rows to a Sheet tab is a later step.
+    """
+    source = Path(args.source)
+    if not source.exists():
+        print(f"map-receipts: source not found: {source}")
+        return 1
+    map_path = Path(args.category_map)
+    if not map_path.exists():
+        print(f"map-receipts: category map not found: {map_path}")
+        print("  (build it with: ingest-receipts --profile --csv <path>, then fill in")
+        print("   the canonical_category column)")
+        return 1
+
+    category_map = receipt_map.load_category_map(map_path)
+    form_defaults = receipt_map.load_form_defaults(map_path)
+    start_month = args.start_month
+    subject_filter = args.subject_filter or None
+
+    subs: list[receipt_ingest.Submission] = []
+    scanned = 0
+    replies = 0
+    for _label, msg in receipt_ingest.iter_source(source):
+        scanned += 1
+        sub = receipt_ingest.parse_submission(msg, subject_filter=subject_filter)
+        if sub is None:
+            continue
+        if receipt_ingest.is_reply_or_forward(sub.subject):
+            replies += 1
+            continue
+        subs.append(sub)
+
+    rows = receipt_map.map_submissions(
+        subs, category_map=category_map, form_defaults=form_defaults, start_month=start_month
+    )
+
+    flagged = sum(1 for row in rows if row["needs_review"])
+    unmapped = sum(1 for row in rows if "unmapped-category" in row["needs_review"])
+    total = 0.0
+    for row in rows:
+        try:
+            total += float(row["amount"])
+        except ValueError:
+            pass
+    print(
+        f"map-receipts: {len(subs)} submission(s) (originals; {replies} Re:/Fwd: skipped) "
+        f"-> {len(rows)} ledger row(s)"
+    )
+    print(f"  category map : {len(category_map)} mapping(s), {len(form_defaults)} form default(s)")
+    print(f"  needs_review : {flagged} row(s) ({unmapped} unmapped-category)")
+    print(f"  total amount : ${total:,.2f}")
+
+    if args.limit:
+        print(f"  first {args.limit} row(s):")
+        for row in rows[: args.limit]:
+            label = (row["canonical_category"] or row["raw_category"] or "(blank)")[:34]
+            form = row["form_type"].split()[0] if row["form_type"] else "?"
+            print(
+                f"    {row['date'] or '(no date)':<11} {form:<8} {label:<34} "
+                f"${row['amount']:>10}  {row['needs_review']}"
+            )
+
+    if args.csv:
+        csv_path = Path(args.csv)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        with csv_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(receipt_map.FIELDNAMES))
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"map-receipts: wrote {len(rows)} row(s) to {csv_path}")
+    return 0
+
+
 def _cmd_sync_budget(args: argparse.Namespace) -> int:
     """Reconcile the editable "FY<fy> Budget" tab back into the "Budget Timeseries" DB.
 
@@ -990,6 +1071,46 @@ def build_parser() -> argparse.ArgumentParser:
         help="also write a flat one-row-per-line-item CSV to this (gitignored) path",
     )
     p_ingest.set_defaults(func=_cmd_ingest_receipts)
+
+    p_map = sub.add_parser(
+        "map-receipts",
+        help="(prototype) map reimbursement submissions to flat 'Reimbursements' ledger rows",
+    )
+    p_map.add_argument(
+        "--source",
+        default="mail_samples",
+        help="a .eml file, a directory of .eml/.mbox files, or a Takeout .mbox "
+        "(default: ./mail_samples)",
+    )
+    p_map.add_argument(
+        "--category-map",
+        default="reports/output/category_map.csv",
+        help="category-map CSV: raw_category -> canonical_category "
+        "(default: reports/output/category_map.csv)",
+    )
+    p_map.add_argument(
+        "--start-month",
+        type=int,
+        default=1,
+        help="fiscal-year start month for FY derivation (July-start org: 7; default: 1)",
+    )
+    p_map.add_argument(
+        "--subject-filter",
+        default=None,
+        help="only treat emails whose subject contains this substring as reimbursement forms",
+    )
+    p_map.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="preview the first N ledger rows",
+    )
+    p_map.add_argument(
+        "--csv",
+        default=None,
+        help="write the full flat ledger to this (gitignored) path",
+    )
+    p_map.set_defaults(func=_cmd_map_receipts)
 
     return parser
 

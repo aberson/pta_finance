@@ -50,6 +50,7 @@ __all__ = [
     "attachment_names",
     "looks_like_reimbursement",
     "is_reply_or_forward",
+    "form_type",
     "parse_submission",
     "iter_eml",
     "iter_mbox",
@@ -495,7 +496,7 @@ def total_reconciles(sub: Submission) -> bool | None:
 _SUBMISSION_MARKER = "got a new submission"
 
 
-def _form_type(subject: str) -> str:
+def form_type(subject: str) -> str:
     """Normalize a submission subject to its form name, e.g. ``"Main Reimbursement Form"``.
 
     Form-notification subjects look like ``"<Form Name> got a new submission"``; strip that
@@ -562,7 +563,7 @@ def profile(subs: Iterable[Submission], *, start_month: int = 1) -> Profile:
 
     for sub in subs:
         recognized += 1
-        form_types[_form_type(sub.subject)] += 1
+        form_types[form_type(sub.subject)] += 1
         payment_types[sub.payment_type.strip() or "(blank)"] += 1
         who = sub.requestor_email.strip().casefold() or sub.requestor_name.strip().casefold()
         if who:
