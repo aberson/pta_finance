@@ -461,21 +461,92 @@ def _money(raw: str) -> str:
     return f"${value:,.2f}"
 
 
+def _print_receipt_profile(
+    prof: receipt_ingest.Profile, scanned: int, replies_skipped: int = 0
+) -> None:
+    """Render a PII-free aggregate profile of a batch of parsed submissions to stdout.
+
+    Names/emails/phones are never printed — only the COUNT of distinct requestors. The category
+    list is the seed for the assumptions-tab category map (raw form categories -> canonical lines).
+    ``replies_skipped`` (Re:/Fwd: thread duplicates dropped by ``--originals-only``) is reported
+    separately so it is never conflated with genuinely non-matching email.
+    """
+    non_matching = scanned - replies_skipped - prof.recognized
+    reply_note = f", {replies_skipped} Re:/Fwd: duplicate(s) skipped" if replies_skipped else ""
+    print(
+        f"profile: scanned {scanned} email(s), recognized {prof.recognized} "
+        f"reimbursement form(s), {non_matching} non-matching{reply_note}"
+    )
+    print(f"  distinct requestors : {prof.distinct_requestors} (names not listed — PII)")
+    print(f"  line items          : {prof.line_items}")
+
+    print("  form types:")
+    for name, count in prof.form_types:
+        print(f"    {count:>6}  {name}")
+
+    print(
+        f"  reconciliation      : {prof.reconcile_yes} reconcile, "
+        f"{prof.reconcile_no} MISMATCH (-> needs_review), {prof.reconcile_na} n/a"
+    )
+    print(
+        f"  blank line fields   : category {prof.blank_category_items}, "
+        f"amount {prof.blank_amount_items}, no-date {prof.no_date_items} "
+        f"(of {prof.line_items} line items)"
+    )
+    print(
+        f"  parse anomalies     : {prof.unparseable_amounts} bad amount(s), "
+        f"{prof.unparseable_dates} bad date(s)"
+    )
+    print(f"  zero-receipt subs   : {prof.zero_receipt_submissions}")
+
+    if prof.payment_types:
+        print("  payment types:")
+        for name, count in prof.payment_types:
+            print(f"    {count:>6}  {name}")
+
+    if prof.fiscal_years:
+        print("  fiscal years (by line-item date):")
+        for name, count in prof.fiscal_years:
+            print(f"    {count:>6}  {name}")
+
+    print(f"  distinct categories : {len(prof.categories)} (seed for the assumptions category map)")
+    for name, count in prof.categories:
+        print(f"    {count:>6}  {name}")
+
+
+def _write_category_csv(prof: receipt_ingest.Profile, path: Path) -> None:
+    """Write the category distribution to a gitignored CSV — the seed for the assumptions map.
+
+    One row per distinct raw form category (with its line-item count) plus an empty
+    ``canonical_category`` column for the operator to fill in when building the mapping.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["raw_category", "line_item_count", "canonical_category (fill in)"])
+        for name, count in prof.categories:
+            writer.writerow([name, count, ""])
+    print(f"ingest-receipts: wrote {len(prof.categories)} category row(s) to {path}")
+
+
 def _cmd_ingest_receipts(args: argparse.Namespace) -> int:
-    """(Phase-4 prototype) Parse reimbursement-form ``.eml`` files and PREVIEW what is extracted.
+    """(Phase-4 prototype) Parse reimbursement-form emails and PREVIEW or PROFILE what is extracted.
 
-    Credential-free and WRITE-FREE: reads raw ``.eml`` files from ``--source`` (a directory or
-    a single file), recognizes reimbursement-form submissions structurally
-    (:func:`pta_finance.receipt_ingest.parse_submission`), and prints one block per submission —
-    requestor, each numbered line item (date / fiscal-year / category / amount / description),
-    the stated Total vs. the summed line items (reconciliation check), and the count of linked
-    receipt URLs + attachments. Emails that are not reimbursement forms are counted as skipped.
+    Credential-free and WRITE-FREE. ``--source`` may be a single ``.eml``, a directory of
+    ``.eml``/``.mbox`` files, or a Google Takeout ``.mbox``
+    (:func:`pta_finance.receipt_ingest.iter_source`). Recognizes reimbursement-form submissions
+    structurally (:func:`pta_finance.receipt_ingest.parse_submission`). Two modes:
 
-    Nothing is written to the Google Sheet: this step exists so the operator can eyeball the
-    extraction on a few real emails before we decide where the rows land. ``--limit`` caps the
-    number of RECOGNIZED submissions shown; ``--subject-filter`` narrows recognition to emails
-    whose subject contains a substring; ``--csv`` also writes a flat one-row-per-line-item CSV
-    (to a gitignored path) for spreadsheet review. ``--start-month`` (default 1) drives the
+    * **default (preview)** — prints one block per recognized submission (requestor, each numbered
+      line item, stated-vs-summed total reconciliation, receipt-link/attachment counts). ``--limit``
+      caps blocks shown; ``--csv`` also writes a flat one-row-per-line-item CSV (gitignored).
+    * **``--profile`` (meta load)** — prints an AGGREGATE, PII-free profile of the whole batch
+      (form types, the full category vocabulary, blank-field rates, reconciliation pass/fail, FY
+      span, parse anomalies) so the canonical schema + category map can be designed once against the
+      true distribution. In this mode ``--csv`` writes the category-distribution seed instead.
+
+    Nothing is written to the Google Sheet. Emails that are not reimbursement forms are counted as
+    skipped; ``--subject-filter`` narrows recognition; ``--start-month`` (default 1) drives the
     fiscal-year derivation without needing a config/credentials.
     """
     source = Path(args.source)
@@ -487,22 +558,40 @@ def _cmd_ingest_receipts(args: argparse.Namespace) -> int:
     start_month = args.start_month
     subject_filter = args.subject_filter or None
 
+    # One read pass: parse every message, keep the recognized submissions (with a display label).
+    # ``--originals-only`` drops Re:/Fwd: thread duplicates (same reimbursement, different
+    # Message-ID) so message_id idempotency never sees them and profile numbers aren't inflated.
     scanned = 0
-    recognized = 0
-    shown = 0
-    csv_rows: list[dict[str, str]] = []
-
-    for path, msg in receipt_ingest.iter_eml(source):
+    replies_skipped = 0
+    labeled_subs: list[tuple[str, receipt_ingest.Submission]] = []
+    for label, msg in receipt_ingest.iter_source(source):
         scanned += 1
         sub = receipt_ingest.parse_submission(msg, subject_filter=subject_filter)
         if sub is None:
             continue
-        recognized += 1
+        if args.originals_only and receipt_ingest.is_reply_or_forward(sub.subject):
+            replies_skipped += 1
+            continue
+        labeled_subs.append((label, sub))
+    recognized = len(labeled_subs)
 
+    if args.profile:
+        prof = receipt_ingest.profile(
+            [sub for _label, sub in labeled_subs], start_month=start_month
+        )
+        _print_receipt_profile(prof, scanned, replies_skipped)
+        if args.csv:
+            _write_category_csv(prof, Path(args.csv))
+        return 0
+
+    shown = 0
+    csv_rows: list[dict[str, str]] = []
+
+    for label, sub in labeled_subs:
         for item in sub.line_items:
             csv_rows.append(
                 {
-                    "source_file": path.name,
+                    "source_file": label,
                     "message_id": sub.message_id,
                     "received": sub.received,
                     "requestor_name": sub.requestor_name,
@@ -524,7 +613,7 @@ def _cmd_ingest_receipts(args: argparse.Namespace) -> int:
             continue
         shown += 1
 
-        print(f"[{shown}] {path.name}")
+        print(f"[{shown}] {label}")
         who = sub.requestor_name or "(no name)"
         if sub.requestor_email:
             who = f"{who} <{sub.requestor_email}>"
@@ -561,10 +650,11 @@ def _cmd_ingest_receipts(args: argparse.Namespace) -> int:
         )
         print("")
 
+    reply_note = f", {replies_skipped} Re:/Fwd: duplicate(s) skipped" if replies_skipped else ""
     print(
         f"ingest-receipts: scanned {scanned} email(s), "
         f"recognized {recognized} reimbursement form(s), "
-        f"skipped {scanned - recognized} non-matching"
+        f"{scanned - replies_skipped - recognized} non-matching{reply_note}"
     )
 
     if args.csv:
@@ -856,12 +946,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_ingest = sub.add_parser(
         "ingest-receipts",
-        help="(prototype) parse reimbursement-form .eml files and preview what is extracted",
+        help="(prototype) parse reimbursement-form emails; preview each or --profile the batch",
     )
     p_ingest.add_argument(
         "--source",
         default="mail_samples",
-        help="a .eml file or a directory of .eml files (default: ./mail_samples)",
+        help="a .eml file, a directory of .eml/.mbox files, or a Takeout .mbox "
+        "(default: ./mail_samples)",
+    )
+    p_ingest.add_argument(
+        "--profile",
+        action="store_true",
+        help="meta load: print an aggregate PII-free profile of the whole batch (form types, "
+        "category vocabulary, blank-field rates, reconciliation, FY span); --csv writes the "
+        "category-map seed instead of the per-line-item CSV",
+    )
+    p_ingest.add_argument(
+        "--originals-only",
+        action="store_true",
+        help="skip Re:/Fwd: thread duplicates (a reply re-quotes the form -> same reimbursement, "
+        "different Message-ID); recommended for a true count and for the eventual backfill",
     )
     p_ingest.add_argument(
         "--limit",

@@ -13,6 +13,8 @@ in the gitignored ``mail_samples/``).
 
 from __future__ import annotations
 
+import mailbox
+from dataclasses import fields
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -207,3 +209,117 @@ def test_attachments_are_listed() -> None:
     sub = receipt_ingest.parse_submission(msg)
     assert sub is not None
     assert sub.attachments == ("receipt-a.pdf",)
+
+
+# --- reply / forward detection (thread-duplicate guard) --------------------
+
+
+def test_is_reply_or_forward() -> None:
+    assert receipt_ingest.is_reply_or_forward("Re: Main Reimbursement Form got a new submission")
+    assert receipt_ingest.is_reply_or_forward("Fwd: Teacher Reimbursement Form")
+    assert receipt_ingest.is_reply_or_forward("  fw : quoted")
+    assert not receipt_ingest.is_reply_or_forward("Main Reimbursement Form got a new submission")
+    assert not receipt_ingest.is_reply_or_forward("Reimbursement Form got a new submission")
+
+
+# --- iter_mbox / iter_source (Takeout backfill path) -----------------------
+
+
+def test_iter_mbox_reads_and_reparses_messages(tmp_path: Path) -> None:
+    box = mailbox.mbox(str(tmp_path / "export.mbox"))
+    box.add(bytes(_reimbursement_email()))
+    box.add(bytes(_non_reimbursement_email()))
+    box.flush()
+    box.close()
+
+    parsed = [
+        receipt_ingest.parse_submission(msg)
+        for _label, msg in receipt_ingest.iter_mbox(tmp_path / "export.mbox")
+    ]
+    recognized = [sub for sub in parsed if sub is not None]
+    assert len(parsed) == 2
+    assert len(recognized) == 1
+    assert recognized[0].total == "1415.13"
+
+
+def test_iter_source_mixes_eml_and_mbox(tmp_path: Path) -> None:
+    (tmp_path / "one.eml").write_bytes(bytes(_reimbursement_email()))
+    box = mailbox.mbox(str(tmp_path / "more.mbox"))
+    box.add(bytes(_reimbursement_email()))
+    box.flush()
+    box.close()
+
+    recognized = [
+        sub
+        for _label, msg in receipt_ingest.iter_source(tmp_path)
+        if (sub := receipt_ingest.parse_submission(msg)) is not None
+    ]
+    assert len(recognized) == 2
+
+
+# --- profile (the "meta load") ---------------------------------------------
+
+
+def _email_with(subject: str, *, requestor_email: str) -> EmailMessage:
+    """A reimbursement-form email with a chosen subject + requestor email (fake identity)."""
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = "forms@wix-forms.com"
+    msg["Date"] = "Sun, 28 Jun 2026 09:09:00 -0700"
+    msg["Message-ID"] = f"<{requestor_email}@example.org>"
+    msg.set_content(_HTML_BODY.replace("jane.doe@example.org", requestor_email), subtype="html")
+    return msg
+
+
+def test_profile_aggregates_pii_free() -> None:
+    subs = []
+    for subject, who in [
+        ("Main Reimbursement Form got a new submission", "a@example.org"),
+        ("Main Reimbursement Form got a new submission", "b@example.org"),
+        ("Teacher Reimbursement Form got a new submission", "a@example.org"),
+    ]:
+        sub = receipt_ingest.parse_submission(_email_with(subject, requestor_email=who))
+        assert sub is not None
+        subs.append(sub)
+
+    prof = receipt_ingest.profile(subs, start_month=7)
+
+    assert prof.recognized == 3
+    assert {name for name, _ in prof.form_types} == {
+        "Main Reimbursement Form",
+        "Teacher Reimbursement Form",
+    }
+    assert dict(prof.form_types)["Main Reimbursement Form"] == 2
+    # a@ appears twice -> 2 distinct requestors, and only the COUNT is retained
+    assert prof.distinct_requestors == 2
+    # each fixture has 3 line items; item 3 omits the category
+    assert prof.line_items == 9
+    assert prof.blank_category_items == 3
+    assert prof.reconcile_yes == 3
+    # dated items (2 per email, 2026-06-25) fall in FY2026 under a July start
+    assert dict(prof.fiscal_years) == {"FY2026": 6}
+    # the Profile must carry NO requestor identity — only the distinct count
+    banned = {"requestor_name", "requestor_email", "requestors", "phone"}
+    assert not {f.name for f in fields(receipt_ingest.Profile)} & banned
+
+
+def test_profile_counts_blank_amount_and_category() -> None:
+    # Item 2 has a category but no amount; item 3 has neither category nor date.
+    sub = receipt_ingest.parse_submission(_reimbursement_email())
+    assert sub is not None
+    blanked = receipt_ingest.Submission(
+        **{
+            **sub.__dict__,
+            "line_items": (
+                sub.line_items[0],
+                receipt_ingest.LineItem(
+                    index=2, date="2026-06-25", category="Garden Club", description="", amount=""
+                ),
+                sub.line_items[2],
+            ),
+        }
+    )
+    prof = receipt_ingest.profile([blanked], start_month=7)
+    assert prof.blank_amount_items == 1
+    assert prof.no_date_items == 1
+    assert prof.blank_category_items == 1

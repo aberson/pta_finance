@@ -29,15 +29,17 @@ from __future__ import annotations
 
 import email
 import email.policy
+import mailbox
 import re
-from collections.abc import Iterator
+from collections import Counter
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from decimal import Decimal
 from email.message import Message
 from html.parser import HTMLParser
 from pathlib import Path
 
-from pta_finance import models
+from pta_finance import ids, models
 
 __all__ = [
     "LineItem",
@@ -47,11 +49,16 @@ __all__ = [
     "message_text",
     "attachment_names",
     "looks_like_reimbursement",
+    "is_reply_or_forward",
     "parse_submission",
     "iter_eml",
+    "iter_mbox",
+    "iter_source",
     "line_item_total",
     "stated_total",
     "total_reconciles",
+    "Profile",
+    "profile",
 ]
 
 
@@ -340,6 +347,22 @@ def looks_like_reimbursement(subject: str, text: str, *, subject_filter: str | N
     return has_total and has_item
 
 
+# A reply/forward subject prefix (``Re:`` / ``Fwd:`` / ``Fw:``), case-insensitive.
+_REPLY_PREFIX = re.compile(r"^\s*(re|fwd|fw)\s*:", re.IGNORECASE)
+
+
+def is_reply_or_forward(subject: str) -> bool:
+    """True when ``subject`` carries a reply/forward prefix (``Re:`` / ``Fwd:`` / ``Fw:``).
+
+    Reply/forward notifications re-quote the original form body, so the parser recognizes them as
+    submissions too — but they are THREAD DUPLICATES of an original submission: a different
+    ``Message-ID`` for the *same* reimbursement, so ``message_id`` idempotency will NOT catch them.
+    Callers ingesting submissions should skip these; the profile counts them separately so the
+    duplicate volume stays visible.
+    """
+    return _REPLY_PREFIX.match(subject) is not None
+
+
 def parse_submission(msg: Message, *, subject_filter: str | None = None) -> Submission | None:
     """Parse an email into a :class:`Submission`, or ``None`` if it is not a reimbursement form.
 
@@ -390,6 +413,45 @@ def iter_eml(source: Path) -> Iterator[tuple[Path, Message]]:
         yield path, msg
 
 
+def iter_mbox(path: Path) -> Iterator[tuple[str, Message]]:
+    """Yield ``(label, message)`` for every message in an ``mbox`` file (a Google Takeout export).
+
+    Reads each member's raw bytes and re-parses it under the modern email policy (so the messages
+    are the same shape :func:`iter_eml` produces), rather than relying on ``mailbox``'s legacy
+    compat32 message factory. ``label`` is ``<mbox-filename>#<n>`` for display/provenance.
+    """
+    box = mailbox.mbox(str(path))
+    try:
+        for key in box.iterkeys():
+            raw = box.get_bytes(key)
+            msg = email.message_from_bytes(raw, policy=email.policy.default)
+            yield f"{path.name}#{key}", msg
+    finally:
+        box.close()
+
+
+def iter_source(source: Path) -> Iterator[tuple[str, Message]]:
+    """Yield ``(label, message)`` for every email under ``source`` — ``.eml`` files OR an ``.mbox``.
+
+    Dispatches on ``source``: a single ``.mbox`` file (e.g. a Google Takeout export) is read via
+    :func:`iter_mbox`; a directory yields every ``*.eml`` then every ``*.mbox`` inside it; anything
+    else is treated as a single ``.eml`` file. ``label`` is a display string (filename, or
+    ``<mbox>#<n>`` for mbox members) — the general entry point the CLI iterates, so one batch can
+    mix hand-downloaded ``.eml`` samples and a full ``.mbox`` backfill transparently.
+    """
+    if source.is_file() and source.suffix.lower() == ".mbox":
+        yield from iter_mbox(source)
+        return
+    if source.is_dir():
+        for path, msg in iter_eml(source):
+            yield path.name, msg
+        for mbox_path in sorted(source.glob("*.mbox")):
+            yield from iter_mbox(mbox_path)
+        return
+    for path, msg in iter_eml(source):
+        yield path.name, msg
+
+
 # --- Reconciliation helpers (preview-time sanity, not yet a write gate) -----
 
 
@@ -425,3 +487,134 @@ def total_reconciles(sub: Submission) -> bool | None:
     if items is None or stated is None:
         return None
     return items == stated
+
+
+# --- Profiling (the "meta load": aggregate, PII-free) ----------------------
+
+
+_SUBMISSION_MARKER = "got a new submission"
+
+
+def _form_type(subject: str) -> str:
+    """Normalize a submission subject to its form name, e.g. ``"Main Reimbursement Form"``.
+
+    Form-notification subjects look like ``"<Form Name> got a new submission"``; strip that
+    trailing boilerplate so submissions group by form. Falls back to the whole (stripped) subject
+    when the marker is absent, or ``"(no subject)"`` when empty.
+    """
+    lowered = subject.casefold()
+    cut = lowered.find(_SUBMISSION_MARKER)
+    name = (subject[:cut] if cut != -1 else subject).strip()
+    return name or "(no subject)"
+
+
+@dataclass(frozen=True)
+class Profile:
+    """Aggregate, PII-free profile of a batch of parsed submissions (the "meta load").
+
+    Counts and distributions only — NO requestor names/emails/phones are retained (only the COUNT
+    of distinct requestors). Built by :func:`profile`, rendered by ``ingest-receipts --profile``.
+    Its purpose is to reveal the full data spread — every form type, the complete category
+    vocabulary, field-blank rates, reconciliation failures, fiscal-year span — so the canonical
+    schema + category map can be designed ONCE against the true distribution instead of a handful
+    of samples. Each ``*_counts``/distribution tuple is ``(key, count)`` sorted by count desc.
+    """
+
+    recognized: int
+    form_types: tuple[tuple[str, int], ...]
+    reconcile_yes: int
+    reconcile_no: int
+    reconcile_na: int
+    line_items: int
+    blank_category_items: int
+    blank_amount_items: int
+    no_date_items: int
+    zero_receipt_submissions: int
+    categories: tuple[tuple[str, int], ...]
+    payment_types: tuple[tuple[str, int], ...]
+    fiscal_years: tuple[tuple[str, int], ...]
+    unparseable_amounts: int
+    unparseable_dates: int
+    distinct_requestors: int
+
+
+def _sorted_counts(counter: Counter[str]) -> tuple[tuple[str, int], ...]:
+    """A ``Counter`` as ``(key, count)`` sorted by count desc then key asc (deterministic)."""
+    return tuple(sorted(counter.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def profile(subs: Iterable[Submission], *, start_month: int = 1) -> Profile:
+    """Aggregate parsed submissions into a PII-free :class:`Profile` (PURE — no I/O).
+
+    ``start_month`` buckets line-item dates into fiscal years (a July-start org passes ``7``).
+    Requestors are tallied by email (falling back to name), casefolded, but only the DISTINCT
+    COUNT is kept — no identity is stored on the returned :class:`Profile`.
+    """
+    recognized = 0
+    reconcile_yes = reconcile_no = reconcile_na = 0
+    line_items = blank_category = blank_amount = no_date = 0
+    zero_receipts = bad_amounts = bad_dates = 0
+    form_types: Counter[str] = Counter()
+    categories: Counter[str] = Counter()
+    payment_types: Counter[str] = Counter()
+    fiscal_years: Counter[str] = Counter()
+    requestors: set[str] = set()
+
+    for sub in subs:
+        recognized += 1
+        form_types[_form_type(sub.subject)] += 1
+        payment_types[sub.payment_type.strip() or "(blank)"] += 1
+        who = sub.requestor_email.strip().casefold() or sub.requestor_name.strip().casefold()
+        if who:
+            requestors.add(who)
+        if not sub.receipt_urls and not sub.attachments:
+            zero_receipts += 1
+
+        recon = total_reconciles(sub)
+        if recon is True:
+            reconcile_yes += 1
+        elif recon is False:
+            reconcile_no += 1
+        else:
+            reconcile_na += 1
+
+        for item in sub.line_items:
+            line_items += 1
+            categories[item.category.strip() or "(blank)"] += 1
+            if item.category.strip() == "":
+                blank_category += 1
+            if item.amount.strip() == "":
+                blank_amount += 1
+            else:
+                try:
+                    models.parse_amount(item.amount)
+                except ValueError:
+                    bad_amounts += 1
+            if item.date.strip() == "":
+                no_date += 1
+            else:
+                try:
+                    parsed = models.parse_date(item.date)
+                except ValueError:
+                    bad_dates += 1
+                else:
+                    fiscal_years[f"FY{ids.fiscal_year_label(parsed, start_month)}"] += 1
+
+    return Profile(
+        recognized=recognized,
+        form_types=_sorted_counts(form_types),
+        reconcile_yes=reconcile_yes,
+        reconcile_no=reconcile_no,
+        reconcile_na=reconcile_na,
+        line_items=line_items,
+        blank_category_items=blank_category,
+        blank_amount_items=blank_amount,
+        no_date_items=no_date,
+        zero_receipt_submissions=zero_receipts,
+        categories=_sorted_counts(categories),
+        payment_types=_sorted_counts(payment_types),
+        fiscal_years=_sorted_counts(fiscal_years),
+        unparseable_amounts=bad_amounts,
+        unparseable_dates=bad_dates,
+        distinct_requestors=len(requestors),
+    )
