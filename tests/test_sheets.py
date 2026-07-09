@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pytest
 from gspread.exceptions import APIError
+from gspread.utils import ValueInputOption
 
 from pta_finance import schema
 from pta_finance.config import Config
@@ -44,6 +45,35 @@ def _row_for(txn_id: str) -> dict[str, str]:
 
 
 # --- Integration test through the production caller -------------------------
+
+
+def test_replace_tab_grid_creates_then_writes_amount_numeric(fake_config: Config) -> None:
+    """replace_tab_grid adds an absent machine-owned tab, writes the whole grid RAW, then
+    re-writes the amount column USER_ENTERED so it totals in the Sheet's native SUM/QUERY."""
+    spreadsheet = FakeSpreadsheet({})  # no tabs yet
+    client = SheetsClient(fake_config, gspread_client=FakeClient(spreadsheet))  # type: ignore[arg-type]
+
+    status = client.replace_tab_grid(
+        "Reimbursements",
+        ["message_id", "amount", "month"],
+        [["<a@x>", "10.00", "2026-06"], ["<b@x>", "20.50", "2026-05"]],
+        numeric_columns=["amount"],
+    )
+
+    assert status == "created"
+    assert [t for (t, _r, _c) in spreadsheet.add_worksheet_calls] == ["Reimbursements"]
+
+    ws = spreadsheet.worksheet("Reimbursements")
+    # Two update passes: the full grid RAW, then just the amount column USER_ENTERED.
+    assert len(ws.update_calls) == 2
+    grid_range, grid_values = ws.update_calls[0]
+    assert grid_range == "A1:C3"
+    assert grid_values[0] == ["message_id", "amount", "month"]
+    assert ws.update_vios[0] == ValueInputOption.raw
+    amount_range, amount_values = ws.update_calls[1]
+    assert amount_range == "B2:B3"  # amount is column B, data rows 2..3
+    assert amount_values == [["10.00"], ["20.50"]]
+    assert ws.update_vios[1] == ValueInputOption.user_entered
 
 
 def test_upsert_rows_issues_single_row_targeted_batch_update(fake_config: Config) -> None:

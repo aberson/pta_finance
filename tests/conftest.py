@@ -108,6 +108,8 @@ class FakeWorksheet:
         self.append_rows_calls: list[list[list[str]]] = []
         self.delete_rows_calls: list[int] = []
         self.update_calls: list[tuple[str, list[list[str]]]] = []
+        # value_input_option recorded per update call (None = gspread default).
+        self.update_vios: list[Any] = []
         # method-name -> list of exceptions to raise (one per leading call), then succeed.
         self._fail_first: MutableMapping[str, list[BaseException]] = dict(fail_first or {})
 
@@ -178,12 +180,18 @@ class FakeWorksheet:
         if values is None or range_name is None:
             raise TypeError("update() requires values= and range_name= (v6 named-arg contract)")
         self.update_calls.append((range_name, [list(v) for v in values]))
+        self.update_vios.append(kwargs.get("value_input_option"))
         start_row = _a1_start_row(range_name)
         for offset, row in enumerate(values):
             idx = start_row - 1 + offset
             while len(self.grid) <= idx:
                 self.grid.append([])
             self.grid[idx] = list(row)
+        return {}
+
+    def clear(self) -> dict[str, Any]:
+        self._maybe_fail("clear")
+        self.grid = []
         return {}
 
     def delete_rows(self, start: int, end: int | None = None) -> dict[str, Any]:

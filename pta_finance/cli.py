@@ -690,12 +690,13 @@ def _cmd_ingest_receipts(args: argparse.Namespace) -> int:
 def _cmd_map_receipts(args: argparse.Namespace) -> int:
     """(Phase-4) Map reimbursement submissions onto flat "Reimbursements" ledger rows (PREVIEW).
 
-    Credential-free and WRITE-FREE: parses ``--source`` (originals only — ``Re:``/``Fwd:`` thread
-    duplicates dropped), loads the category map, projects to flat one-row-per-line-item ledger rows
-    via :func:`pta_finance.receipt_map.map_submissions` (carry-forward blank category/date, skip
+    Credential-free, write-free by default: parses ``--source`` (originals only — ``Re:``/``Fwd:``
+    dropped), loads the category map, projects to flat one-row-per-line-item ledger rows via
+    :func:`pta_finance.receipt_map.map_submissions` (carry-forward blank category/date, skip
     blank-amount lines, canonical-category lookup, dedup, ``needs_review``), and prints a summary.
     ``--csv`` writes the full flat ledger to a gitignored path for review; ``--limit`` previews the
-    first N rows. Writing the rows to a Sheet tab is a later step.
+    first N rows. ``--write-tab NAME`` additionally creates/replaces a **machine-owned** Sheet tab
+    with the ledger (this is the only mode that needs credentials + touches the Sheet).
     """
     source = Path(args.source)
     if not source.exists():
@@ -755,6 +756,20 @@ def _cmd_map_receipts(args: argparse.Namespace) -> int:
                 f"    {row['date'] or '(no date)':<11} {form:<8} {label:<34} "
                 f"${row['amount']:>10}  {row['needs_review']}"
             )
+
+    if args.write_tab:
+        config = _load(args)
+        client = SheetsClient(config)
+        if args.write_tab in client.list_worksheet_titles():
+            backup.snapshot_raw_tab(client, args.write_tab, Path(args.dest))
+        ordered = [[row[col] for col in receipt_map.FIELDNAMES] for row in rows]
+        status = client.replace_tab_grid(
+            args.write_tab,
+            list(receipt_map.FIELDNAMES),
+            ordered,
+            numeric_columns=["amount"],
+        )
+        print(f"map-receipts: {status} tab {args.write_tab!r} with {len(rows)} row(s)")
 
     if args.csv:
         csv_path = Path(args.csv)
@@ -1110,6 +1125,19 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="write the full flat ledger to this (gitignored) path",
     )
+    p_map.add_argument(
+        "--write-tab",
+        default=None,
+        metavar="NAME",
+        help="also create/replace a machine-owned Sheet tab NAME with the ledger "
+        "(needs credentials)",
+    )
+    p_map.add_argument(
+        "--dest",
+        default=".",
+        help="base dir for the pre-write snapshots/<utc>/ backup when --write-tab replaces a tab",
+    )
+    _add_config_arg(p_map)
     p_map.set_defaults(func=_cmd_map_receipts)
 
     return parser

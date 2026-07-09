@@ -397,6 +397,66 @@ class SheetsClient:
             lambda: ws.append_rows(values, value_input_option=ValueInputOption.user_entered)
         )
 
+    def _update_range(
+        self,
+        ws: gspread.Worksheet,
+        range_name: str,
+        values: list[list[str]],
+        vio: ValueInputOption,
+    ) -> None:
+        """One retried ``ws.update`` with a value-input option (v6 named-arg contract).
+
+        Captures its PARAMETERS (bound per call), so it is safe to call in a loop — unlike a lambda
+        that closes over a loop variable.
+        """
+        self._with_retry(
+            lambda: ws.update(range_name=range_name, values=values, value_input_option=vio)
+        )
+
+    def replace_tab_grid(
+        self,
+        tab: str,
+        header: Sequence[str],
+        rows: Sequence[Sequence[str]],
+        *,
+        numeric_columns: Sequence[str] = (),
+    ) -> str:
+        """Create ``tab`` (if absent) and replace its ENTIRE contents with ``header`` + ``rows``.
+
+        Schema-INDEPENDENT, for **machine-owned** tabs ONLY: it clears the tab first, so never point
+        it at an operator-maintained tab. The grid is written ``RAW`` (so month/date/id strings are
+        not coerced into dates); then each ``numeric_columns`` column is re-written ``USER_ENTERED``
+        so its cells land as numbers the Sheet's native ``SUM`` / ``QUERY`` can total (text amounts
+        are skipped). Returns ``"created"`` or ``"replaced"``.
+        """
+        header_row = [str(cell) for cell in header]
+        data = [[str(cell) for cell in row] for row in rows]
+        ncols = len(header_row)
+        nrows = len(data) + 1
+
+        existed = tab in self.list_worksheet_titles()
+        if not existed:
+            self._with_retry(
+                lambda: self.connect().add_worksheet(
+                    title=tab, rows=max(nrows, 10), cols=max(ncols, 1)
+                )
+            )
+        ws = self.worksheet(tab)
+        if existed:
+            self._with_retry(lambda: ws.clear())
+
+        self._update_range(
+            ws, f"A1:{rowcol_to_a1(nrows, ncols)}", [header_row, *data], ValueInputOption.raw
+        )
+        for col_name in numeric_columns:
+            if col_name not in header_row or not data:
+                continue
+            col_idx = header_row.index(col_name) + 1
+            col_range = f"{rowcol_to_a1(2, col_idx)}:{rowcol_to_a1(nrows, col_idx)}"
+            col_values = [[row[col_idx - 1]] for row in data]
+            self._update_range(ws, col_range, col_values, ValueInputOption.user_entered)
+        return "replaced" if existed else "created"
+
     def update_rows_by_index(
         self, tab: str, rows_by_index: Mapping[int, Mapping[str, str]]
     ) -> None:
