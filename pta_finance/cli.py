@@ -480,6 +480,9 @@ def _print_receipt_profile(
     )
     print(f"  distinct requestors : {prof.distinct_requestors} (names not listed — PII)")
     print(f"  line items          : {prof.line_items}")
+    lo, hi = prof.received_span
+    if lo:
+        print(f"  email date span     : {lo} -> {hi}  (when forms were SUBMITTED — check for gaps)")
 
     print("  form types:")
     for name, count in prof.form_types:

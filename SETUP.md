@@ -198,6 +198,15 @@ appends one row per variant to `report_log`. Reports are written to `reports/out
 
 ---
 
+## Loading reimbursement receipts
+
+To turn the reimbursement-form emails in the treasurer inbox into a **Reimbursements** ledger tab
+(and the interactive **Receipts Explorer** dashboard), follow
+**[docs/loading-receipts.md](docs/loading-receipts.md)** — Gmail label → Google Takeout →
+`map-receipts --write-tab`, with a built-in **completeness check** so you don't miss any submissions.
+
+---
+
 ## Troubleshooting
 
 | Symptom | Cause / fix |

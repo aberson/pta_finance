@@ -34,8 +34,10 @@ import re
 from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal
 from email.message import Message
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -522,6 +524,7 @@ class Profile:
     """
 
     recognized: int
+    received_span: tuple[str, str]
     form_types: tuple[tuple[str, int], ...]
     reconcile_yes: int
     reconcile_no: int
@@ -560,10 +563,17 @@ def profile(subs: Iterable[Submission], *, start_month: int = 1) -> Profile:
     payment_types: Counter[str] = Counter()
     fiscal_years: Counter[str] = Counter()
     requestors: set[str] = set()
+    received_dates: list[date] = []
 
     for sub in subs:
         recognized += 1
         form_types[form_type(sub.subject)] += 1
+        try:
+            received_dt = parsedate_to_datetime(sub.received)
+        except (TypeError, ValueError):
+            received_dt = None
+        if received_dt is not None:
+            received_dates.append(received_dt.date())
         payment_types[sub.payment_type.strip() or "(blank)"] += 1
         who = sub.requestor_email.strip().casefold() or sub.requestor_name.strip().casefold()
         if who:
@@ -601,8 +611,14 @@ def profile(subs: Iterable[Submission], *, start_month: int = 1) -> Profile:
                 else:
                     fiscal_years[f"FY{ids.fiscal_year_label(parsed, start_month)}"] += 1
 
+    received_span = (
+        (min(received_dates).isoformat(), max(received_dates).isoformat())
+        if received_dates
+        else ("", "")
+    )
     return Profile(
         recognized=recognized,
+        received_span=received_span,
         form_types=_sorted_counts(form_types),
         reconcile_yes=reconcile_yes,
         reconcile_no=reconcile_no,

@@ -285,6 +285,8 @@ def test_profile_aggregates_pii_free() -> None:
     prof = receipt_ingest.profile(subs, start_month=7)
 
     assert prof.recognized == 3
+    # all three fixtures carry the same Date header -> a single-day received span
+    assert prof.received_span == ("2026-06-28", "2026-06-28")
     assert {name for name, _ in prof.form_types} == {
         "Main Reimbursement Form",
         "Teacher Reimbursement Form",
