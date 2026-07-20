@@ -16,6 +16,24 @@ LLM, no Google Apps Script**. The design keeps recurring work in a cloud (GitHub
 Apps Script in a later phase) so the operational core never depends on a server anyone must pay for
 or keep alive — which is what lets a non-technical successor operate it later with only a browser.
 
+## How to use this documentation
+
+New here? Read only the guide that matches what you need — you do **not** have to read them all.
+
+| If you want to… | Read | Who it's for |
+|---|---|---|
+| Understand what this is | this README | everyone |
+| **Work with the spreadsheet day-to-day** — change the budget, read the dashboards | **[docs/using-the-spreadsheet.md](docs/using-the-spreadsheet.md)** | **non-technical operators** |
+| Connect the toolkit to your Google Sheet (one-time) | [SETUP.md](SETUP.md) | whoever runs the tools |
+| Load reimbursement receipts from email | [docs/loading-receipts.md](docs/loading-receipts.md) | whoever runs the tools |
+
+**The one rule that saves everyone time:** the spreadsheet _is_ the database, and there is exactly
+**one** place to change a year's budget — the tab named **"FY&lt;year&gt; Budget"** (e.g.
+`FY2027 Budget`). Make your changes there. **Never copy, duplicate, or edit an old budget sheet** —
+those aren't connected to anything, so changes made on them have to be re-typed by hand before they
+count. The full plain-language tour — every tab, how to change the budget, and how to hand over a
+sheet you already edited — is in **[docs/using-the-spreadsheet.md](docs/using-the-spreadsheet.md)**.
+
 ## Stack
 
 | Layer | Tool | Why |
