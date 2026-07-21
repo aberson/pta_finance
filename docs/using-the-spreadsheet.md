@@ -8,6 +8,9 @@ change a budget, and how the charts and dashboards get made.
 > This guide is **generic** — it never names a real organization, school, or person. Your own
 > details live only in the private setup, not in this public repository.
 
+> **Prefer to just ask?** You can paste ready-made prompts into ChatGPT or Claude instead of
+> reading this — see **[ask-an-ai-assistant.md](ask-an-ai-assistant.md)**.
+
 ---
 
 ## The one rule that saves everyone time

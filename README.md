@@ -24,6 +24,7 @@ New here? Read only the guide that matches what you need — you do **not** have
 |---|---|---|
 | Understand what this is | this README | everyone |
 | **Work with the spreadsheet day-to-day** — change the budget, read the dashboards | **[docs/using-the-spreadsheet.md](docs/using-the-spreadsheet.md)** | **non-technical operators** |
+| **Just ask an AI** (ChatGPT/Claude) instead of reading — ready-made prompts | **[docs/ask-an-ai-assistant.md](docs/ask-an-ai-assistant.md)** | **anyone** |
 | Connect the toolkit to your Google Sheet (one-time) | [SETUP.md](SETUP.md) | whoever runs the tools |
 | Load reimbursement receipts from email | [docs/loading-receipts.md](docs/loading-receipts.md) | whoever runs the tools |
 
