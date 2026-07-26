@@ -49,7 +49,8 @@ uv run pta-finance sync-budget --fy 2027 --apply          # write those edits ba
 
 ```
 pta_finance/        package (flat layout): config, ids, schema, models, sheets,
-                    backup, etl, cli, receipt_ingest (Phase-4 prototype),
+                    backup, etl, cli, receipt_ingest (.eml/.mbox parser + profiler),
+                    receipt_map (Submission → flat "Reimbursements" ledger rows),
                     budget_sync (editable-budget-tab → Budget Timeseries reconcile),
                     analytics/, reports/(templates/)
 tests/              fake-org fixtures + mocked gspread; test_smoke_pipeline.py is the wiring gate
@@ -93,10 +94,13 @@ config.toml         gitignored private config; config.example.toml ships fake va
 
 **v1 automated build COMPLETE (Steps 1–8, issues #1–#8 closed).** The full pipeline works end-to-end
 under test: Sheets client, ETL/normalize, analytics, internal/external reports (runtime PII guard),
-smoke gate, and the monthly GitHub Actions workflow. 199 tests + 1 skipped; `mypy --strict` + ruff
-clean. A **Phase-4 receipt-ingestion prototype** has also landed: `receipt_ingest.py` (credential-free,
-write-free `.eml` reimbursement-form parser) + an `ingest-receipts` CLI that previews parsed
-submissions — it does **not** yet map to `transactions`/`receipts` or write to the Sheet. A
+smoke gate, and the monthly GitHub Actions workflow. 217 tests + 1 skipped; `mypy --strict` + ruff
+clean. **Phase-4 receipt ingestion has shipped end-to-end:** `receipt_ingest.py` (`.eml`/`.mbox`
+parser + PII-free batch `Profile` + `Re:`/`Fwd:` dedup) + `receipt_map.py` (`Submission` → flat ledger
+rows) drive the `ingest-receipts` (preview / `--profile`) and `map-receipts` (`--write-tab`) CLIs,
+which land receipts in a flat **Reimbursements** Sheet tab (via `SheetsClient.replace_tab_grid`) that a
+dropdown-driven **Receipts Explorer** dashboard reads; operator load guide in `docs/loading-receipts.md`.
+Remaining: Budget Timeseries roll-up + Gmail-OAuth monthly cron. A
 **`sync-budget` command** (`budget_sync.py`) also landed: it reconciles an editable, operator-
 maintained **"FY&lt;fy&gt; Budget"** Sheet tab back into the Budget Timeseries (dry-run diff by default;
 `--apply` snapshots first, then writes only changed amount/notes cells + appends new lines; never

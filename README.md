@@ -121,12 +121,15 @@ GitHub Actions report workflow. 113 tests passing (+1 skipped), 0 type errors (`
 0 lint violations. First-run setup needs the Google service account (see Setup) — then
 `uv run pta-finance check`.
 
-**Receipt-ingestion prototype (Phase 4, preview-only)** — a credential-free, write-free `.eml`
-parser (`receipt_ingest.py`) plus an `ingest-receipts` CLI that reads reimbursement-form emails and
-prints the parsed submissions (requestor, numbered line items, stated-vs-line-item total
-reconciliation, receipt links/attachments), with an optional gitignored CSV dump. It does **not** yet
-map onto the canonical `transactions`/`receipts` rows or write to the Sheet — that mapping + backfill
-is the remaining Phase-4 work. 178 tests passing (+1 skipped), 0 type errors, 0 lint violations.
+**Receipt ingestion (Phase 4)** — a credential-free `.eml`/`.mbox` parser (`receipt_ingest.py`) with
+two CLIs: `ingest-receipts --profile` scans a whole mailbox and reports the data spread (form types,
+category vocabulary, blank-field rates, reconciliation, and the **email-date span** that catches a
+gappy export), and `map-receipts` projects the parsed submissions onto a flat **Reimbursements**
+ledger (carry-forward blank categories, per-form defaults, `Message-ID` + content-hash dedup,
+`needs_review` flags) and writes it to the Sheet with `--write-tab`. A dropdown-driven **Receipts
+Explorer** dashboard reads that ledger. See [docs/loading-receipts.md](docs/loading-receipts.md) for
+the end-to-end load (Gmail label → Google Takeout → `map-receipts`) with a completeness check.
+217 tests passing (+1 skipped), 0 type errors, 0 lint violations.
 
 Roadmap beyond v1: Apps Script automation (nag emails, calendar, sign-in), an admin web UI, then
 forecasting / receipt ingestion / bank imports / wiki / live Drive upload (`google-api-python-client`).

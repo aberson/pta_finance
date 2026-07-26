@@ -599,37 +599,51 @@ worktrees); pushed `cbeeecc..193bed2`.**
 
 ---
 
-## Phase 4 (prototype) — Receipt ingestion (preview-only)
+## Phase 4 — Receipt ingestion (shipped: profiler + mapping engine + Reimbursements ledger + Receipts Explorer)
 
-**Preview slice only — NOT a completed phase. Credential-free + write-free. 178 tests passing
-(+1 skipped, pyyaml-gated). Zero type errors (`mypy --strict`). Zero lint violations. Built on
-`main`.**
+**Shipped end-to-end against a real 240-email Takeout mailbox (180 originals → 521 ledger rows,
+$53,293.75, all categorized). 217 tests passing (+1 skipped, pyyaml-gated). Zero type errors
+(`mypy --strict`). Zero lint violations. Built on `main`.**
 
 ### What was built
-- **`receipt_ingest.py`** — a credential-free, write-free parser for reimbursement-form `.eml`
-  emails (e.g. Wix form-submission notifications). Recognizes a submission **structurally**
-  (labeled Total + numbered *Date / Category / Description / Amount* line items) with an optional
-  operator-supplied subject-substring filter; tolerant of inconsistent label spacing and missing
-  fields. Exposes `LineItem` / `Submission` dataclasses, `parse_submission` / `iter_eml`, and
-  `line_item_total` / `stated_total` / `total_reconciles` reconciliation helpers.
-- **`ingest-receipts` CLI** (`cli.py`) — reads a `.eml` file or directory, prints one block per
-  recognized submission (requestor, line items, stated-vs-line-item total reconciliation, receipt
-  links/attachments), counts non-matching emails as skipped, and can dump a flat
-  one-row-per-line-item CSV to a gitignored path. Self-labeled "(prototype)".
+- **`receipt_ingest.py`** — a credential-free parser for reimbursement-form `.eml`/`.mbox` emails
+  (e.g. Wix form-submission notifications). Recognizes a submission **structurally** (labeled Total +
+  numbered *Date / Category / Description / Amount* line items); tolerant of inconsistent label
+  spacing and missing fields. Adds `.mbox`/Takeout reading (`iter_mbox` / `iter_source`), a PII-free
+  batch **`Profile`** (form types, category vocabulary, blank-field rates, reconciliation, FY span,
+  and the **email-date span** for completeness), and `is_reply_or_forward` (drops `Re:`/`Fwd:` thread
+  duplicates that `Message-ID` dedup can't catch).
+- **`receipt_map.py`** — pure `Submission` → flat **Reimbursements** ledger rows: carry-forward blank
+  category/date, skip blank-amount lines, canonical-category lookup + per-form default,
+  `Message-ID` + content-hash dedup, `needs_review` reasons.
+- **`ingest-receipts` CLI** — preview each submission, or `--profile` the whole batch (`--csv` writes
+  a category-map seed). **`map-receipts` CLI** — build the ledger; `--write-tab` creates/replaces a
+  machine-owned Sheet tab via `SheetsClient.replace_tab_grid` (RAW grid + USER_ENTERED amount so it
+  totals in native SUM/QUERY).
+- **Receipts Explorer** (Sheet-side, not repo code) — a dropdown-driven QUERY+pie dashboard over the
+  Reimbursements tab: Panel A breaks down by dimension, Panel B drills into one category. Operator
+  load procedure: [docs/loading-receipts.md](docs/loading-receipts.md).
+
+### Deliberate design choice
+Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready), NOT the canonical
+`transactions`/`receipts` schema — so no schema change was needed and the dashboard reads it directly.
 
 ### Not yet built (remaining Phase-4 work)
-- Mapping a `Submission` onto the canonical `transactions` / `receipts` row shapes and writing it
-  to the Sheet (idempotent, `needs_review` on total mismatch).
-- Live Drive fetch of the linked receipt PDFs.
-- Validated only on synthetic `.eml` fixtures; real-inbox backfill has open decisions.
+- **Budget Timeseries roll-up** — aggregate the ledger's per-category actuals into Budget Timeseries
+  so reimbursement spend appears in the monthly/FY reports (which read Budget Timeseries, not this tab).
+- **Monthly automation** — Gmail OAuth so the cron ingests new reimbursements without a manual Takeout.
+- **Live Drive fetch** of the linked receipt PDFs.
 
 ### Files changed
 
 | File | Change |
 |---|---|
-| `pta_finance/receipt_ingest.py` | New — `.eml` reimbursement-form parser (structural recognition, no identity hard-coded) |
-| `pta_finance/cli.py` | New `ingest-receipts` subcommand (preview + optional gitignored CSV) |
-| `tests/test_receipt_ingest.py` | New — 14 tests over synthetic `.eml` fixtures (fake placeholders) |
+| `pta_finance/receipt_ingest.py` | `.eml`/`.mbox` parser + PII-free `Profile` + `is_reply_or_forward` (structural recognition, no identity hard-coded) |
+| `pta_finance/receipt_map.py` | New — pure `Submission` → flat Reimbursements ledger rows (dedup, carry-forward, per-form default, `needs_review`) |
+| `pta_finance/sheets.py` | New `replace_tab_grid` — schema-independent create/replace of a machine-owned tab (RAW grid + USER_ENTERED numeric column) |
+| `pta_finance/cli.py` | `ingest-receipts` (+ `--profile` / `--originals-only`) + new `map-receipts` (+ `--write-tab`) |
+| `tests/test_receipt_ingest.py`, `test_receipt_map.py`, `test_sheets.py` | Parser / profiler / mapper / writer coverage over synthetic fixtures |
+| `docs/loading-receipts.md`, `SETUP.md` | Operator load how-to (Gmail → Takeout → `map-receipts`) + completeness check |
 
 ### Fresh-context notes
 
