@@ -129,7 +129,7 @@ ledger (carry-forward blank categories, per-form defaults, `Message-ID` + conten
 `needs_review` flags) and writes it to the Sheet with `--write-tab`. A dropdown-driven **Receipts
 Explorer** dashboard reads that ledger. See [docs/loading-receipts.md](docs/loading-receipts.md) for
 the end-to-end load (Gmail label → Google Takeout → `map-receipts`) with a completeness check.
-217 tests passing (+1 skipped), 0 type errors, 0 lint violations.
+219 tests passing (+1 skipped), 0 type errors, 0 lint violations.
 
 Roadmap beyond v1: Apps Script automation (nag emails, calendar, sign-in), an admin web UI, then
 forecasting / receipt ingestion / bank imports / wiki / live Drive upload (`google-api-python-client`).

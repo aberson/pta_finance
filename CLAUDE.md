@@ -43,6 +43,9 @@ uv run pta-finance analyze                                # run analytics (Budge
 uv run pta-finance report --fy YYYY --variant both        # fiscal-year reports (default: current FY)
 uv run pta-finance sync-budget --fy 2027                  # preview edits to the "FY2027 Budget" tab
 uv run pta-finance sync-budget --fy 2027 --apply          # write those edits back to Budget Timeseries
+uv run pta-finance snapshot                               # CSV backups of the live tab set
+uv run pta-finance ingest-receipts --source <path> --profile     # scan .eml/.mbox, PII-free batch profile
+uv run pta-finance map-receipts --source <path> --write-tab Reimbursements   # write the flat ledger tab
 ```
 
 ## 4. Directory layout
@@ -52,6 +55,7 @@ pta_finance/        package (flat layout): config, ids, schema, models, sheets,
                     backup, etl, cli, receipt_ingest (.eml/.mbox parser + profiler),
                     receipt_map (Submission → flat "Reimbursements" ledger rows),
                     budget_sync (editable-budget-tab → Budget Timeseries reconcile),
+                    report_source (Budget Timeseries → report/analyze inputs),
                     analytics/, reports/(templates/)
 tests/              fake-org fixtures + mocked gspread; test_smoke_pipeline.py is the wiring gate
 .github/            last-run.txt (scheduler keepalive) + workflows/ci.yml (PR gate)
@@ -94,7 +98,7 @@ config.toml         gitignored private config; config.example.toml ships fake va
 
 **v1 automated build COMPLETE (Steps 1–8, issues #1–#8 closed).** The full pipeline works end-to-end
 under test: Sheets client, ETL/normalize, analytics, internal/external reports (runtime PII guard),
-smoke gate, and the monthly GitHub Actions workflow. 217 tests + 1 skipped; `mypy --strict` + ruff
+smoke gate, and the monthly GitHub Actions workflow. 219 tests + 1 skipped; `mypy --strict` + ruff
 clean. **Phase-4 receipt ingestion has shipped end-to-end:** `receipt_ingest.py` (`.eml`/`.mbox`
 parser + PII-free batch `Profile` + `Re:`/`Fwd:` dedup) + `receipt_map.py` (`Submission` → flat ledger
 rows) drive the `ingest-receipts` (preview / `--profile`) and `map-receipts` (`--write-tab`) CLIs,
