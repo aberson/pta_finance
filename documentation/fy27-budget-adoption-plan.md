@@ -162,6 +162,22 @@ _(Generic — all real amounts and line names live in the private companion file
 **Still open:** (a) the `FY27 Strategic Budget` tab still reflects the pre-adoption scenario — refresh
 or archive it separately; (b) Phase 4 archive of the old disconnected copies + the members' source tab.
 
+## Execution log (2026-08-18) — member-facing publication
+
+_(Generic — all real amounts live in the sheet, not this repo.)_
+
+- **`FY2027 - Public Budget` tab generated** from the adopted budget: prior-year **actuals**
+  (from `Budget Timeseries`) next to the FY2027 **proposed** amounts (from `FY2027 Budget`,
+  rationale notes carried verbatim), with per-line deltas, category subtotals, and
+  TOTAL INCOME / TOTAL EXPENSE / NET — all native formulas. Every per-fundraiser expense line
+  (the cost side of each revenue-generating activity) is combined into one "Fundraising
+  Expenses" row per year; a CD + cash reserve line sits outside the totals. Grand totals
+  reconcile to `FY2027 Budget` and to the timeseries to the cent (machine-verified before and
+  after the write; generation recipe recorded in the project memory).
+- This gives members a shareable view without touching the live editable tab — the one-rule
+  ("edit only `FY<year> Budget`") is unchanged, and the operator guide's tab table now lists
+  the new tab as share-only.
+
 ## Not doing (and why)
 
 - **No importer tool for the members' tab.** A one-time transcription through the existing, safe
