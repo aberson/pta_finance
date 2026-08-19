@@ -59,11 +59,12 @@ def _cmd_check(args: argparse.Namespace) -> int:
     2. **Source readable.** :func:`report_source.read_timeseries` returns a non-empty list and
        its header carries every :data:`report_source.TIMESERIES_COLUMNS` name — the data
        ``report`` / ``analyze`` actually consume. A missing/empty/mis-shaped source returns 1.
-    3. **Write round-trip** on the TEST sheet's ``report_log`` (write -> read-back -> delete),
-       keyed by a unique ``run_at`` marker (``report_log``'s first column, the upsert/delete
-       key — ``SheetsClient`` keys by column 1). Runs only when ``test_spreadsheet_id`` is set;
-       it targets the throwaway test sheet, never production. Live only with real creds (M2);
-       here it is unit tested against a mocked client.
+    3. **Write round-trip** on the ``test_spreadsheet_id`` sheet's ``report_log`` (write ->
+       read-back -> delete), keyed by a unique ``run_at`` marker (``report_log``'s first
+       column, the upsert/delete key — ``SheetsClient`` keys by column 1). Runs only when
+       ``test_spreadsheet_id`` is set; that is a throwaway test sheet by default, though the
+       config permits pointing it at the production sheet (the probe row is deleted either
+       way). Live only with real creds (M2); here it is unit tested against a mocked client.
     """
     config = _load(args)
     client = SheetsClient(config)
