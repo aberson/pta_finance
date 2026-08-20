@@ -102,6 +102,7 @@ the service-account JSON) and `PTA_CONFIG_B64` (base64 of `config.toml`) — and
 
 ```
 pta_finance/        package: config, ids, schema, models, sheets, backup, etl, cli,
+                    budget_sync, report_source, receipt_ingest, receipt_map,
                     analytics/, reports/(templates/)
 tests/              fake-org fixtures + mocked gspread; an end-to-end wiring smoke gate
 .github/workflows/  ci.yml (PR gate) + monthly-report.yml (cron)
@@ -131,8 +132,12 @@ Explorer** dashboard reads that ledger. See [docs/loading-receipts.md](docs/load
 the end-to-end load (Gmail label → Google Takeout → `map-receipts`) with a completeness check.
 219 tests passing (+1 skipped), 0 type errors, 0 lint violations.
 
+The live `map-receipts --write-tab` path was revalidated on 2026-08-20 with a pre-write snapshot
+and a semantic read-back reconciliation. Private mailbox counts, financial totals, and generated
+reports remain outside this public repository.
+
 Roadmap beyond v1: Apps Script automation (nag emails, calendar, sign-in), an admin web UI, then
-forecasting / receipt ingestion / bank imports / wiki / live Drive upload (`google-api-python-client`).
+forecasting / receipt automation / bank imports / wiki / live Drive upload (`google-api-python-client`).
 
 ## License
 

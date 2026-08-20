@@ -156,8 +156,11 @@ Templates are authored in HTML (Jinja2 autoescape on); outputs are **HTML** alwa
 optionally (the `[pdf]` extra runs WeasyPrint over the rendered HTML). A Markdown/plain-text
 variant is a Phase-2 nicety, not v1.
 
-> **Open question pinned at build Step 6:** the exact field list for each variant. The split
-> above is the working default; the precise columns are confirmed during the report step.
+> **Field split resolved at build Step 6:** the internal model includes identity, totals,
+> by-category variance, by-grade allocation, fundraising progress, budget headlines, and full
+> transaction detail. The external model includes only organization identity plus aggregate totals,
+> by-grade allocation, fundraising progress, and budget headlines. A recursive runtime guard rejects
+> payee, memo, receipt, entered-by, and other person-name fields from the external model.
 
 Charts are matplotlib (Agg) PNGs embedded in the HTML. **Reports are never committed to the public
 repo.** They are written to `reports/output/` (gitignored) locally and (in CI) attached as an
@@ -184,6 +187,12 @@ path.
   (`report_log` + Budget Timeseries, skipping any absent tab), with `tabs=` for legacy callers.
 - **`etl.py`** — normalize legacy/raw rows → canonical schema; assign missing IDs; dedup;
   `needs_review` flagging; snapshot-before-write.
+- **`budget_import.py` / `budget_sync.py`** — legacy budget import plus dry-run-first reconciliation
+  from an editable `FY<fy> Budget` tab back into Budget Timeseries.
+- **`report_source.py`** — project Budget Timeseries rows into the canonical shapes consumed by
+  `analyze` and `report`.
+- **`receipt_ingest.py` / `receipt_map.py`** — parse `.eml`/`.mbox` form submissions and map them
+  into the flat, machine-owned Reimbursements ledger.
 - **`analytics/`** — `aggregate.py`, `trends.py` (pandas).
 - **`reports/`** — `builder.py` (compute report data model), `render.py` (Jinja2 → HTML, optional
   WeasyPrint PDF), `charts.py` (matplotlib Agg), `templates/` (`internal.html.j2`, `external.html.j2`).
@@ -195,10 +204,15 @@ path.
 | Command | Action |
 |---|---|
 | `pta-finance check` | Validate `report_log` schema + Budget Timeseries source readability; real round-trip read/write/delete of a test row in `report_log` (smoke) |
+| `pta-finance init-sheet [--target production\|test]` | Create the live-required tab and headers in the selected spreadsheet |
 | `pta-finance snapshot` | Export CSV backups of the live tab set (`report_log` + Budget Timeseries; skips absent tabs) |
 | `pta-finance normalize` | (legacy) Normalize legacy/raw ledger → canonical schema, assign IDs, dedup (snapshot first) |
 | `pta-finance analyze [--fy YYYY]` | Run analytics over the Budget Timeseries tab; print summary |
 | `pta-finance report [--fy YYYY] [--variant internal\|external\|both]` | Generate fiscal-year report(s) from the Budget Timeseries tab (default: current FY) |
+| `pta-finance import-budget` | (legacy) Load a budget worksheet into the canonical budget tab |
+| `pta-finance sync-budget --fy YYYY [--apply]` | Preview or apply editable-budget changes to Budget Timeseries; snapshots before writes |
+| `pta-finance ingest-receipts --source <path> [--profile]` | Parse or profile reimbursement-form `.eml`/`.mbox` exports |
+| `pta-finance map-receipts --source <path> [--write-tab Reimbursements]` | Map submissions to the flat ledger and optionally replace its machine-owned Sheet tab |
 
 ## 6. API Route Contract
 
@@ -211,6 +225,9 @@ pta_finance/                      # repo root (standalone public repo)
 ├── plan.md                       # this document
 ├── CLAUDE.md                     # project context for future sessions (generic)
 ├── README.md                     # generic toolkit readme
+├── SETUP.md                      # one-time Google + local setup guide
+├── docs/                         # operator guides: spreadsheet, receipt loading, AI prompts
+├── documentation/                # public-safe planning/playbook documents
 ├── pyproject.toml                # uv + hatchling + ruff + mypy(strict) + pytest
 ├── config.example.toml           # committed template with FAKE placeholders
 ├── .gitignore                    # ignores config.toml, secrets/, *.json keys, .env, caches
@@ -227,8 +244,13 @@ pta_finance/                      # repo root (standalone public repo)
 │   ├── models.py
 │   ├── sheets.py
 │   ├── backup.py
+│   ├── budget_import.py
+│   ├── budget_sync.py
 │   ├── etl.py
 │   ├── cli.py
+│   ├── receipt_ingest.py
+│   ├── receipt_map.py
+│   ├── report_source.py
 │   ├── analytics/
 │   │   ├── __init__.py
 │   │   ├── aggregate.py
@@ -251,8 +273,13 @@ pta_finance/                      # repo root (standalone public repo)
 │   ├── test_models.py
 │   ├── test_sheets.py
 │   ├── test_backup.py
+│   ├── test_budget_import.py
+│   ├── test_budget_sync.py
 │   ├── test_etl.py
 │   ├── test_analytics.py
+│   ├── test_receipt_ingest.py
+│   ├── test_receipt_map.py
+│   ├── test_report_source.py
 │   ├── test_reports.py
 │   ├── test_cli.py
 │   ├── test_workflows.py         # static safety guards on monthly-report.yml
@@ -288,7 +315,7 @@ pta_finance/                      # repo root (standalone public repo)
 
 | Item | Risk | Mitigation |
 |---|---|---|
-| Exact internal vs external report fields | Wrong fields leak PII or omit needed detail | Pin field lists at build Step 6; external template excludes payee/receipt/PII by default |
+| Future report-model changes | A new field could leak PII or omit needed detail | Step 6 pinned both field lists; the external builder recursively rejects payee/receipt/member fields at runtime |
 | Legacy sheet structure unknown until inspected | ETL mis-maps messy multi-year data | M1 shares the legacy sheet; ETL is inspection-driven and flags ambiguous rows `needs_review` (never silently drops) |
 | WeasyPrint native deps on Windows | PDF generation friction blocks the operator | PDF is an optional `[pdf]` extra; the primary output is HTML |
 | Sheets API quota (300/min project, 60/min user) on large legacy import | HTTP 429 mid-import | Batch 10–50 rows; exponential backoff + jitter; atomic batches |
@@ -337,7 +364,7 @@ uv run pta-finance report --fy 2026 --variant both
 |---|---|---|
 | **2 — Apps Script cloud layer** | Nag emails + calendar reminders (time-driven triggers), Chrome-editable config (Sheet tab / Script Properties), Google Sign-In allowlist plumbing; flexible/config-driven charts (Vega-Lite) | All recurring compute stays in a cloud (Google) — the handoff-safety layer |
 | **3 — Admin web UI** | React (or Apps Script HtmlService) admin surface; Google Sign-In gated to the config allowlist | Front-end deferred so the schema settles first |
-| **4 — Power features** | One-year-ahead forecasting; receipt-email ingestion; bank-CSV / QuickBooks import; LLM report narrative + people-friendly wiki rendering; board-ramp wiki (LLM-friendly + people-friendly) | LLM token enters config here |
+| **4 — Power features** | One-year-ahead forecasting; Gmail-OAuth receipt automation + linked-file fetch; bank-CSV / QuickBooks import; LLM report narrative + people-friendly wiki rendering; board-ramp wiki (LLM-friendly + people-friendly) | Credential-free receipt parsing/mapping is shipped; automation and Drive fetch remain |
 
 ## 11. Development Process
 
@@ -437,8 +464,9 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 *(These run after `/build-phase` completes. Operator drives.)*
 
 ### Step M1: Google Cloud + service-account setup
+- **Type:** operator
 - **Source step:** prerequisite for M2/M3
-- **Issue:** #
+- **Issue:** N/A (operator step)
 - **Commands:**
   ```text
   In Google Cloud Console (browser):
@@ -457,10 +485,12 @@ quality bar for producer→consumer pipelines and scheduled jobs.
   | Sheets API + Drive API status | Both show "Enabled" |
   | Downloaded key | `secrets/service-account.json` exists; `git status` does NOT list it |
   | Sharing | Spreadsheet, Drive folder, and test sheet each list the SA email as Editor |
+- **Status:** DONE (2026-06-24)
 
 ### Step M2: Real-sheet smoke (round-trip)
+- **Type:** operator
 - **Source step:** Step 7 (real-credentials variant)
-- **Issue:** #
+- **Issue:** N/A (operator step)
 - **Commands:**
   ```powershell
   uv run pta-finance check
@@ -471,14 +501,15 @@ quality bar for producer→consumer pipelines and scheduled jobs.
   | Config + schema validation | Passes; reports the resolved org from config (not hard-coded) |
   | Round-trip | Writes a test row to the test sheet, reads it back, deletes it — no exception, exit 0 |
   | Quota behavior | No HTTP 429; if hit, backoff retries and still exits 0 |
+- **Status:** DONE (2026-07-08; reverified 2026-08-20)
 
 ### Step M3: Monthly-report observation run (end-to-end)
+- **Type:** operator
 - **Source step:** Step 8 (scheduled job, exercised end-to-end); requires Step 7 smoke gate green and Step M2 passed
-- **Issue:** #
+- **Issue:** N/A (operator step)
 - **Commands:**
   ```powershell
   # Local end-to-end:
-  uv run pta-finance normalize
   uv run pta-finance report --fy 2026 --variant both
   # CI end-to-end (after adding GOOGLE_SA_KEY_B64 + PTA_CONFIG_B64 secrets):
   gh workflow run monthly-report.yml
@@ -486,12 +517,12 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 - **What to look for:**
   | Check | Expected outcome |
   |---|---|
-  | Internal report | Full detail renders: ledger, payee names, receipt links, per-line variance; charts present |
+  | Internal report | Full-detail schema renders from Budget Timeseries; charts and transaction table are present |
   | External report | Public-safe: totals, by-grade allocation, fundraising progress; **no payee names, no receipt links, no PII** |
-  | Output destination | Reports in `reports/output/` + private Drive folder; **not** committed to the repo; `report_log` row appended |
+  | Output destination | Reports in gitignored `reports/output/` + the ephemeral CI artifact; **not** committed; `report_log` row appended (live Drive upload is deferred) |
   | CI logs | No service-account JSON or config value echoed anywhere in the run log |
 
-**Please run M1 next** once the Automated Steps complete.
+**Next manual step: M3** — observe one local and one dispatched monthly-report run end-to-end.
 
 ## 12. Appendix
 
@@ -595,15 +626,16 @@ worktrees); pushed `cbeeecc..193bed2`.**
 | Review-caught fixes | Step 3: header row is never a data-write target (upsert/delete). Step 4: malformed id-less rows persist `needs_review` by sheet position via `SheetsClient.update_rows_by_index`. |
 | Drive deviation | Live Drive upload deferred to Phase 2 (needs `google-api-python-client` per §8); v1 = local `reports/output/` + the CI artifact. |
 | Money | Aggregated as exact integer cents — never binary floats. |
-| Next | Operator-gated Manual Steps M1–M3 (real Google credentials) — see §11 Manual Steps. |
+| Next | Operator-gated Manual Step M3 (monthly-report observation run) — see §11 Manual Steps. |
 
 ---
 
 ## Phase 4 — Receipt ingestion (shipped: profiler + mapping engine + Reimbursements ledger + Receipts Explorer)
 
-**Shipped end-to-end against a real 240-email Takeout mailbox (180 originals → 521 ledger rows,
-$53,293.75, all categorized). 217 tests passing (+1 skipped, pyyaml-gated). Zero type errors
-(`mypy --strict`). Zero lint violations. Built on `main`.**
+**Shipped end-to-end against a real, gitignored Takeout mailbox and live Sheet with all categories
+mapped. 219 tests passing (+1 skipped, pyyaml-gated). Zero type errors (`mypy --strict`). Zero lint
+violations. Built on `main`; the live write path was revalidated with snapshot + semantic read-back
+reconciliation on 2026-08-20. Private mailbox counts and financial totals remain outside the repo.**
 
 ### What was built
 - **`receipt_ingest.py`** — a credential-free parser for reimbursement-form `.eml`/`.mbox` emails
@@ -649,6 +681,6 @@ Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready),
 
 | Issue | Detail |
 |---|---|
-| Prototype scope | Preview/parse only — **no Sheet writes, no credentials**. Downstream mapping + backfill deferred. |
+| Operational scope | Parsing, mapping, and `--write-tab` are shipped. Gmail OAuth automation and linked Drive-file retrieval remain deferred. |
 | Identity rule | Recognition is structural; no org/person/email in code or tests. Real `.eml` samples stay gitignored (default source `./mail_samples`). |
 | Sheet-side work | Related dashboard work (chart recolor, FY2025/27 `raw_category` canonicalization, the Group Explorer tab) lives in the Google Sheet, not this repo. |
