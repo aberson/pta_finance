@@ -29,5 +29,10 @@ drive_reports_folder_id  = "<private-drive-folder-id>"     # report outputs (nev
 [google]
 service_account_file = "secrets/service-account.json"
 
+# [gmail]                                    # optional - omit entirely if unused
+# client_secrets_file = "secrets/gmail-client-secret.json"   # OAuth Desktop-app client
+# token_file          = "secrets/gmail-token.json"           # written at first consent
+# inbox_dir           = "mail_samples"                       # fetched .eml land here
+
 # [llm]            # Phase 4
 # api_key_env = "ANTHROPIC_API_KEY"

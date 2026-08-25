@@ -10,6 +10,8 @@ dependencies = [
     "pandas",
     "matplotlib",
     "jinja2",
+    "google-api-python-client>=2.199.0",
+    "google-auth-oauthlib>=1.4.0",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +51,10 @@ module = [
     "gspread",
     "gspread.*",
     "google.*",
+    # Neither of these is matched by "google.*" — they are distinct top-level packages
+    # and both are untyped, so `mypy --strict` errors without their own entries.
+    "googleapiclient.*",
+    "google_auth_oauthlib.*",
     "matplotlib",
     "matplotlib.*",
     "pandas",

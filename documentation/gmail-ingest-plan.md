@@ -234,6 +234,7 @@ explicitly so reviewers can confirm the classification rather than infer it.)*
 - **Produces:** `pta_finance/gmail_source.py`, modified `config.py` / `config.example.toml` / `pyproject.toml`, `tests/test_gmail_source.py`
 - **Done when:** `uv sync --extra dev` is run first (this step adds two dependencies and a fresh worktree does not inherit `.venv` — per the workspace `worktree-hygiene.md` rule: fresh worktrees do not inherit `.venv`); then `uv run pytest -q` passes with the full suite at ≥218 tests plus new ones; a test asserts `gmail_source.SCOPES == ("https://www.googleapis.com/auth/gmail.readonly",)` by **exact equality**; a test asserts a token carrying an extra scope is rejected; a test asserts `load_config()` on a config with **no** `[gmail]` section yields `cfg.gmail is None` and does not raise; `mypy --strict pta_finance` and `ruff check .` clean.
 - **Depends on:** none
+- **Status:** DONE (2026-08-25)
 
 <!-- autofix-applied: 2026-08-25 -->
 ### Step 10: `fetch-mail` command + idempotent `.eml` writer

@@ -6,7 +6,8 @@ module reads that private file into typed, frozen dataclasses and fails fast wit
 clear :class:`ConfigError` naming the missing field.
 
 Secrets posture: this module resolves the service-account key *path* (relative to the
-config file's directory) but NEVER reads, logs, or prints the key's contents.
+config file's directory) but NEVER reads, logs, or prints the key's contents. The same
+holds for the optional ``[gmail]`` block's OAuth client-secrets and token files.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ __all__ = [
     "Grades",
     "Sheets",
     "Google",
+    "Gmail",
     "Config",
     "load_config",
 ]
@@ -83,6 +85,25 @@ class Google:
 
 
 @dataclass(frozen=True)
+class Gmail:
+    """The OPTIONAL ``[gmail]`` block — read-only mail ingestion (see ``gmail_source``).
+
+    Absent from ``config.toml`` for any org that never wires up Gmail, in which case
+    ``Config.gmail`` is ``None`` and nothing else changes. As with :class:`Google`, the
+    ``*_path`` fields are resolved relative to the config file's directory and are PATHS
+    ONLY — neither the OAuth client-secrets file nor the minted token file is ever read,
+    logged, or printed here.
+    """
+
+    client_secrets_file: str
+    token_file: str
+    inbox_dir: str
+    client_secrets_path: Path
+    token_path: Path
+    inbox_path: Path
+
+
+@dataclass(frozen=True)
 class Config:
     organization: Organization
     contacts: Contacts
@@ -90,6 +111,8 @@ class Config:
     grades: Grades
     sheets: Sheets
     google: Google
+    # Optional section: ``None`` when ``config.toml`` has no ``[gmail]`` block.
+    gmail: Gmail | None = None
 
 
 def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -127,6 +150,17 @@ def _require_str_list(section: dict[str, Any], key: str, dotted: str) -> tuple[s
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ConfigError(dotted, f"expected a list of strings for {dotted}")
     return tuple(value)
+
+
+def _resolve_path(raw: str, base_dir: Path) -> Path:
+    """Resolve a config-declared path relative to the config file's directory.
+
+    An already-absolute path is returned untouched. The file is never opened here.
+    """
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        return candidate
+    return (base_dir / candidate).resolve()
 
 
 def load_config(path: Path) -> Config:
@@ -184,13 +218,14 @@ def load_config(path: Path) -> Config:
     service_account_file = _require_str(
         google_s, "service_account_file", "google.service_account_file"
     )
-    sa_path = Path(service_account_file)
-    if not sa_path.is_absolute():
-        sa_path = (path.parent / sa_path).resolve()
     google = Google(
         service_account_file=service_account_file,
-        service_account_path=sa_path,
+        service_account_path=_resolve_path(service_account_file, path.parent),
     )
+
+    # [gmail] is OPTIONAL: `data.get` (never `_section`, which raises) so a config
+    # without the block loads unchanged and `Config.gmail` is None.
+    gmail = _load_gmail(data.get("gmail"), path.parent)
 
     return Config(
         organization=organization,
@@ -199,4 +234,29 @@ def load_config(path: Path) -> Config:
         grades=grades,
         sheets=sheets,
         google=google,
+        gmail=gmail,
+    )
+
+
+def _load_gmail(raw: Any, base_dir: Path) -> Gmail | None:
+    """Parse the OPTIONAL ``[gmail]`` section; ``None`` when it is absent.
+
+    A section that is PRESENT is validated like any other: every key is required and a
+    missing one raises :class:`ConfigError` naming it.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError("gmail", "expected a [gmail] table (or omit the section entirely)")
+
+    client_secrets_file = _require_str(raw, "client_secrets_file", "gmail.client_secrets_file")
+    token_file = _require_str(raw, "token_file", "gmail.token_file")
+    inbox_dir = _require_str(raw, "inbox_dir", "gmail.inbox_dir")
+    return Gmail(
+        client_secrets_file=client_secrets_file,
+        token_file=token_file,
+        inbox_dir=inbox_dir,
+        client_secrets_path=_resolve_path(client_secrets_file, base_dir),
+        token_path=_resolve_path(token_file, base_dir),
+        inbox_path=_resolve_path(inbox_dir, base_dir),
     )

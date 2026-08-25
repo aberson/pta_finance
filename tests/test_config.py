@@ -107,3 +107,68 @@ def test_absolute_sa_path_preserved(tmp_path: Path) -> None:
     )
     cfg = load_config(_write(tmp_path, text))
     assert cfg.google.service_account_path == abs_path
+
+
+# --------------------------------------------------------------------------------------
+# The OPTIONAL [gmail] section (feature-plan Design Decision 5). Every test above loads a
+# config with NO [gmail] block, which is itself the regression guard: making the section
+# required would break all of them, plus conftest.py and test_reports.py.
+# --------------------------------------------------------------------------------------
+
+_GMAIL_SECTION = """
+[gmail]
+client_secrets_file = "secrets/gmail-client-secret.json"
+token_file = "secrets/gmail-token.json"
+inbox_dir = "mail_samples"
+"""
+
+
+def test_missing_gmail_section_yields_none(tmp_path: Path) -> None:
+    # Absent [gmail] must NOT raise (unlike every required section) and must leave
+    # Config.gmail as None, so an org that never wires up Gmail is unaffected.
+    cfg = load_config(_write(tmp_path, _FULL_CONFIG))
+    assert cfg.gmail is None
+
+
+def test_gmail_section_parsed_with_resolved_paths(tmp_path: Path) -> None:
+    cfg = load_config(_write(tmp_path, _FULL_CONFIG + _GMAIL_SECTION))
+
+    assert cfg.gmail is not None
+    assert cfg.gmail.client_secrets_file == "secrets/gmail-client-secret.json"
+    assert cfg.gmail.token_file == "secrets/gmail-token.json"
+    assert cfg.gmail.inbox_dir == "mail_samples"
+    # Paths resolve against the config file's directory, exactly like the SA key path;
+    # contents are never read here.
+    assert (
+        cfg.gmail.client_secrets_path
+        == (tmp_path / "secrets" / "gmail-client-secret.json").resolve()
+    )
+    assert cfg.gmail.token_path == (tmp_path / "secrets" / "gmail-token.json").resolve()
+    assert cfg.gmail.inbox_path == (tmp_path / "mail_samples").resolve()
+
+
+def test_absolute_gmail_paths_preserved(tmp_path: Path) -> None:
+    abs_token = (tmp_path / "elsewhere" / "gmail-token.json").resolve()
+    text = (_FULL_CONFIG + _GMAIL_SECTION).replace(
+        'token_file = "secrets/gmail-token.json"',
+        f'token_file = "{abs_token.as_posix()}"',
+    )
+    cfg = load_config(_write(tmp_path, text))
+    assert cfg.gmail is not None
+    assert cfg.gmail.token_path == abs_token
+
+
+def test_present_gmail_section_still_requires_every_key(tmp_path: Path) -> None:
+    # Optional section, but not optional keys: a half-filled block fails fast by name.
+    text = (_FULL_CONFIG + _GMAIL_SECTION).replace('token_file = "secrets/gmail-token.json"\n', "")
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(_write(tmp_path, text))
+    assert exc_info.value.field == "gmail.token_file"
+
+
+def test_gmail_section_that_is_not_a_table_raises(tmp_path: Path) -> None:
+    # Root-level key (must precede the first section header, or TOML nests it).
+    text = 'gmail = "secrets/gmail-token.json"\n' + _FULL_CONFIG
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(_write(tmp_path, text))
+    assert exc_info.value.field == "gmail"
