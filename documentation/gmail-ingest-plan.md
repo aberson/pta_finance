@@ -103,12 +103,32 @@ optional keeps every existing construction and fixture valid.
   **Filename rule (this is the on-disk idempotency key — pin it once, never vary it):**
   strip a surrounding `<`/`>` from the Message-ID; replace every character outside
   `[A-Za-z0-9._-]` with `_`; truncate to 80 characters; then append `-` plus the first 8 lowercase
-  hex characters of `sha256(<original Message-ID>)`, and the `.eml` suffix. The hash suffix is what
-  makes the rule collision-safe after sanitisation and truncation, and on case-insensitive
-  filesystems where two Message-IDs differing only in case would otherwise collide. A message with
-  **no** Message-ID header uses `nomsgid-` plus the first 16 hex characters of `sha256(<raw bytes>)`.
-  Changing this rule later re-downloads every message under new names and breaks
-  skip-if-identical — treat it as a shared key shape, not an implementation detail.
+  hex characters of **`sha256(<the full raw RFC-822 message bytes>)`**, and the `.eml` suffix.
+  The Message-ID supplies the human-readable **stem only**; it is never the hash input. A message
+  with **no** Message-ID header uses `nomsgid-` plus the first 16 hex characters of the same
+  `sha256(<raw bytes>)`. Changing this rule later re-downloads every message under new names and
+  breaks skip-if-identical — treat it as a shared key shape, not an implementation detail.
+
+  > **Amended 2026-08-25 (Step 10, issue #16), replacing `sha256(<original Message-ID>)`.**
+  > The hash suffix exists to make the rule collision-safe. Hashing the Message-ID could not
+  > deliver that, because the hash input then depends on *extracting* the Message-ID from the
+  > raw bytes, and every bounded extraction has a truncation vector — a structured parse truncates
+  > at a legal RFC-5322 fold; an unfold-and-normalise pass collapses distinct whitespace runs and
+  > distinct 8-bit bytes; a raw-wire-byte slice still needs a header-block scan and a field-name
+  > heuristic, both of which can cut *inside* the value. Five such vectors were found across three
+  > consecutive review rounds; four were reproduced against the final implementation, each one
+  > giving two byte-distinct messages a single filename so `write_eml` silently overwrote one and
+  > reported an ordinary "rewritten". Hashing the full raw bytes removes the extraction entirely,
+  > so the whole vector class disappears at once — verified 0 collisions across all nine known
+  > vectors, still idempotent (Gmail's `format="raw"` output is byte-stable per message id, the
+  > property the rule already depended on).
+  >
+  > The failure direction also inverts, which is the stronger argument: if Gmail ever returned
+  > byte-different raw for one message, this rule writes a harmless **duplicate** — absorbed by
+  > `receipt_map`'s Message-ID + content-hash dedup — where the old rule silently **destroyed** a
+  > message. Re-pinning cost nothing here because it was decided before the first fetch: no `.eml`
+  > file, no OAuth token, and no `[gmail]` config section existed yet, so there was nothing on disk
+  > to re-download. That is why it was settled now rather than deferred.
 - **`Gmail` config dataclass** (in `config.py`) — `client_secrets_file`, `token_file`,
   `inbox_dir`, plus resolved `Path` properties, mirroring how `Google` exposes
   `service_account_path`. The `config.example.toml` block it parses (fake placeholders only,
@@ -245,6 +265,7 @@ explicitly so reviewers can confirm the classification rather than infer it.)*
 - **Produces:** extended `gmail_source.py`, `fetch-mail` in `cli.py`, extended `tests/test_gmail_source.py`
 - **Done when:** tests using a **faked** Gmail service (no network, no credentials) prove: pagination walks multiple `nextPageToken` pages; `build_query` renders `after:`/`before:` correctly from dates; running the same window twice leaves byte-identical files and reports zero new; `--dry-run` writes nothing; a missing `[gmail]` section produces `GmailAuthError`, not a traceback. Full suite green, `mypy --strict`, `ruff` clean.
 - **Depends on:** 9
+- **Status:** DONE (2026-08-25)
 
 <!-- autofix-applied: 2026-08-25 -->
 ### Step M4: Google Cloud OAuth client + one-time consent (operator)
@@ -301,7 +322,7 @@ explicitly so reviewers can confirm the classification rather than infer it.)*
 | `gmail.readonly` grants whole-mailbox read | The token can read everything, not just reimbursements | Read-only is the narrowest scope Gmail offers for this job — there is no per-label OAuth scope. Scope pinned by exact-equality test; the grant is revocable at any time from Google Account settings |
 | New transitive dependency surface | `google-api-python-client` pulls a sizable tree into a `mypy --strict` project | Existing `[[tool.mypy.overrides]]` already covers `google.*`; Step 9 confirms `mypy --strict` stays clean before anything else is built |
 | Fetch could stall on a very large first window | A multi-year `--since` pulls a lot of mail | `--limit` and `--dry-run` let the operator size a window before committing; the historical `.mbox` remains the backfill path and is not being retired |
-| Message-ID as filename | Exotic Message-IDs may contain path-hostile characters | `write_eml` sanitises and length-caps; a test covers a hostile Message-ID |
+| Message-ID as filename | Exotic Message-IDs may contain path-hostile characters; and a Message-ID-derived hash cannot be collision-safe, because extracting the Message-ID from raw bytes is itself lossy (5 truncation vectors found across 3 review rounds) | `write_eml` sanitises and length-caps the **stem**; a test covers a hostile Message-ID. The **hash** is taken over the full raw message bytes (amended 2026-08-25 — see §5), so no extraction can cut it short. Guarded by a property test asserting pairwise-distinct filenames across an adversarial corpus, a single-source-of-truth assertion on the hash-deriving function, and an end-to-end guard that N byte-distinct messages yield N files and N `new` statuses |
 | **Handoff-window completeness** | The outgoing treasurer (now CFO) accepted submissions until 2026-06-30. A June request sent only to that role's mailbox is **not** in the mailbox being fetched, and no amount of re-fetching will surface it | Step 12 explicitly checks June for submissions present in only one source, and treats a thin June as the trigger for a second mailbox export. This is a **known gap, not a solved problem** — flagged rather than assumed away |
 | Cross-source double-count | Mapping the `.eml` inbox and the `.mbox` archives in two separate runs would double every message in the ~11 overlapping weeks, and each run would look clean in isolation | Design Decision 10: fetch into `mail_samples/` so one `--source mail_samples` run covers both; Step 10 adds a regression test; Step 13 documents the single-run rule |
 | Content-hash false positive | Two genuinely distinct submissions sharing requestor + stated total + first line-item date collapse into one | Pre-existing behaviour (`receipt_map.py` L146-151), not introduced here. Step 12 requires the operator to review the duplicate-drop count rather than trust it blindly |

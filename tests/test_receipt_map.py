@@ -6,9 +6,11 @@ per the repo identity rule — no real data.
 
 from __future__ import annotations
 
+import mailbox
+from email.message import EmailMessage
 from pathlib import Path
 
-from pta_finance import receipt_map
+from pta_finance import receipt_ingest, receipt_map
 from pta_finance.receipt_ingest import LineItem, Submission
 
 _MAP = {"garden club": "Garden Club Expenses"}
@@ -188,3 +190,111 @@ def test_load_category_map_skips_blank_sentinel_and_form_default(tmp_path: Path)
     assert receipt_map.load_form_defaults(path) == {
         "Teacher Reimbursement Form": "Classroom Enhancements TK to 5th - Teacher Budget"
     }
+
+
+# --- Cross-source dedup (the guard for the fetch connector's Design Decision 10) --------
+
+# A minimal Wix-style form body, same STRUCTURE as the real notification email (label element,
+# then a bold value element) with obviously-fake identity only. Deliberately built here rather
+# than imported from tests/test_receipt_ingest.py: this test is about the mapper's dedup, and it
+# must keep working if that module's fixture changes shape.
+_FORM_HTML = """\
+<html><body>
+<h1>Main Reimbursement Form got a new submission</h1>
+<p>Requestor First and Last Name:</p><p><strong>Jane Doe</strong></p>
+<p>Email:</p><p><strong>jane.doe@example.org</strong></p>
+<p>1. Date:</p><p><strong>2026-06-25</strong></p>
+<p>1. Event or Budget Category:</p><p><strong>Garden Club</strong></p>
+<p>1. Description:</p><p><strong>Boxes for the shed</strong></p>
+<p>1.Amount:</p><p><strong>718.60</strong></p>
+<p>Total Amount $:</p><p><strong>718.60</strong></p>
+<p>Choose Payment Type:</p><p><strong>Zelle</strong></p>
+</body></html>
+"""
+
+
+def _form_email_bytes() -> bytes:
+    """The raw RFC-822 bytes of one reimbursement-form submission (fake identity)."""
+    msg = EmailMessage()
+    msg["Subject"] = "Main Reimbursement Form got a new submission"
+    msg["From"] = "forms@example.com"
+    msg["To"] = "treasurer@example.org"
+    msg["Date"] = "Sun, 28 Jun 2026 09:09:00 -0700"
+    msg["Message-ID"] = "<cross-source-1@example.org>"
+    msg.set_content(_FORM_HTML, subtype="html")
+    return bytes(msg)
+
+
+def _parsed_from(source: Path) -> list[Submission]:
+    """Every recognized submission under ``source`` — the exact loop ``map-receipts`` runs."""
+    return [
+        sub
+        for _label, msg in receipt_ingest.iter_source(source)
+        if (sub := receipt_ingest.parse_submission(msg)) is not None
+    ]
+
+
+def test_same_message_in_eml_and_mbox_maps_to_one_row(tmp_path: Path) -> None:
+    """One message present as BOTH a fetched ``.eml`` and an archived ``.mbox`` member.
+
+    This is the regression guard for the Gmail connector's Design Decision 10. ``fetch-mail``
+    writes its ``.eml`` files directly into the directory that already holds the ``.mbox``
+    archives — never a subdirectory — precisely so that ONE ``map-receipts --source <dir>`` run
+    covers both. The eleven-week overlap between the archive and the fetch window means the same
+    submission genuinely appears in both sources, and only a single ``map_submissions`` call can
+    collapse it: the dedup sets live inside that call.
+    """
+    raw = _form_email_bytes()
+    (tmp_path / "fetched.eml").write_bytes(raw)
+    box = mailbox.mbox(str(tmp_path / "archive.mbox"))
+    box.add(raw)
+    box.flush()
+    box.close()
+
+    subs = _parsed_from(tmp_path)
+    # The message really is read twice — otherwise the assertion below would prove nothing.
+    assert len(subs) == 2
+    assert {sub.message_id for sub in subs} == {"<cross-source-1@example.org>"}
+
+    rows = receipt_map.map_submissions(subs, category_map=_MAP, start_month=7)
+    assert len(rows) == 1
+    assert rows[0]["canonical_category"] == "Garden Club Expenses"
+
+
+def test_mapping_the_two_sources_in_separate_runs_double_counts(tmp_path: Path) -> None:
+    """The failure Design Decision 10 exists to prevent — pinned so it cannot be forgotten.
+
+    ``map_submissions`` accumulates ``seen_ids``/``seen_hashes`` WITHIN A SINGLE CALL. Two runs
+    therefore each look internally clean while together counting the shared message twice. If a
+    future change ever made ``iter_source`` recursive (so fetched mail could sit in a
+    subdirectory), this is the silent double-count that would follow.
+    """
+    raw = _form_email_bytes()
+    eml_dir = tmp_path / "inbox"
+    eml_dir.mkdir()
+    (eml_dir / "fetched.eml").write_bytes(raw)
+    box = mailbox.mbox(str(tmp_path / "archive.mbox"))
+    box.add(raw)
+    box.flush()
+    box.close()
+
+    from_eml = receipt_map.map_submissions(_parsed_from(eml_dir), category_map=_MAP, start_month=7)
+    from_mbox = receipt_map.map_submissions(
+        _parsed_from(tmp_path / "archive.mbox"), category_map=_MAP, start_month=7
+    )
+    assert len(from_eml) == 1
+    assert len(from_mbox) == 1
+    # Each run is clean on its own; the duplicate only exists across them.
+    assert len(from_eml + from_mbox) == 2
+
+
+def test_iter_source_does_not_see_a_subdirectory(tmp_path: Path) -> None:
+    """The mechanical fact Design Decision 10 rests on: the glob is NON-recursive.
+
+    If this ever starts failing, ``iter_source`` became recursive and every existing caller's
+    behaviour changed silently — including the two-run double-count above.
+    """
+    nested = tmp_path / "inbox"
+    nested.mkdir()
+    (nested / "fetched.eml").write_bytes(_form_email_bytes())
+    assert _parsed_from(tmp_path) == []

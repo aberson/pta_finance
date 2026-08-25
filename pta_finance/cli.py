@@ -10,6 +10,8 @@ Wired subcommands:
     report     Step 6 — generate fiscal-year report(s); write HTML to reports/output/, log a run
     sync-budget    reconcile the editable "FY<fy> Budget" tab back into the Budget Timeseries DB
     import-budget  (legacy) load a messy "budget" worksheet into the canonical budget tab
+    fetch-mail     Phase 4 - fetch a date window of Gmail into .eml files (counts only)
+    ingest-receipts / map-receipts  Phase 4 - parse those .eml/.mbox files into ledger rows
 
 The LIVE data flow sources ``report`` / ``analyze`` from the operator-maintained "Budget
 Timeseries" tab and writes only ``report_log``; ``check`` / ``init-sheet`` / ``snapshot``
@@ -26,6 +28,7 @@ import csv
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Any
 
 from pta_finance import (
     analytics,
@@ -33,6 +36,7 @@ from pta_finance import (
     budget_import,
     budget_sync,
     etl,
+    gmail_source,
     ids,
     models,
     receipt_ingest,
@@ -786,6 +790,101 @@ def _cmd_map_receipts(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_fetch_mail(args: argparse.Namespace, *, service: Any = None) -> int:
+    """(Phase-4) Fetch a DATE WINDOW of mail from Gmail into ``.eml`` files. Counts only.
+
+    The read-only half of the receipt pipeline's front door: it authenticates as the user
+    with a pinned ``gmail.readonly`` grant (:mod:`pta_finance.gmail_source`), walks
+    ``users.messages.list`` through every page of ``--since``/``--until``, and writes each
+    message's raw RFC-822 bytes to one ``.eml`` file. It does not parse, classify, or touch
+    the Google Sheet — ``ingest-receipts`` and ``map-receipts`` do that, from the files.
+
+    **Nothing about the mail is printed.** No subject, no sender, no recipient, no body, not
+    even a Gmail message id: stdout carries counts, the search query the operator themself
+    supplied, and the destination directory. That is a privacy requirement of the whole
+    connector (the window is date-scoped, so unrelated personal mail is fetched too), not a
+    display preference.
+
+    **``--out`` defaults to the configured ``[gmail] inbox_dir`` itself, never a
+    subdirectory of it.** ``receipt_ingest.iter_source`` globs a directory NON-recursively,
+    so fetched mail must land BESIDE the ``.mbox`` archives for one
+    ``map-receipts --source <dir>`` run to cover both. Two separate runs would each look
+    internally clean while together double-counting every message the sources share, because
+    ``receipt_map.map_submissions`` accumulates its dedup sets within a single call.
+
+    Re-running an overlapping window is free: :func:`pta_finance.gmail_source.write_eml`
+    names each file deterministically from its ``Message-ID`` and skips a byte-identical
+    file, so the summary reports it as ``unchanged``. Overlap windows; never tile them.
+
+    **What ``--dry-run`` guarantees, precisely.** It writes no ``.eml`` files into the
+    destination — it lists and counts and stops. It MAY still mint or refresh the OAuth
+    token file, and that is deliberate, not an oversight: plan Step M4 instructs the
+    operator to run this exact command (``fetch-mail --since <date> --dry-run``) to trigger
+    the one-time browser consent, and ``gmail_source._CONSENT_CMD`` names it in every
+    remediation sentence. A ``--dry-run`` that refused to authenticate would make the
+    connector's documented first-run procedure impossible.
+
+    ``--limit`` caps how many messages are fetched (and stops paginating). ``service`` is a
+    test seam: production passes nothing and the Gmail client is built from the stored
+    credentials, minting them via that one-time browser consent on the very first run.
+    """
+    try:
+        since = models.parse_date(args.since)
+        until = models.parse_date(args.until) if args.until else None
+    except ValueError as exc:
+        print(f"fetch-mail: could not read that date ({exc}) — dates are ISO YYYY-MM-DD")
+        return 1
+    if until is not None and until <= since:
+        print(
+            f"fetch-mail: --until {until.isoformat()} is not after --since {since.isoformat()}, "
+            "so the window is empty. Gmail's before: is EXCLUSIVE — --until names the first "
+            "day that is NOT fetched."
+        )
+        return 1
+
+    config = _load(args)
+    matched = 0
+    counts = {"new": 0, "unchanged": 0, "rewritten": 0}
+    try:
+        out_dir = Path(args.out) if args.out else gmail_source.inbox_dir(config)
+        if service is None:
+            if gmail_source.needs_consent(config):
+                print(
+                    "fetch-mail: no Gmail token on this machine yet — opening a browser for "
+                    "the one-time, READ-ONLY consent. Approve it and this run continues."
+                )
+            service = gmail_source.build_service(gmail_source.load_or_mint_credentials(config))
+
+        query = gmail_source.build_query(since, until, extra=args.query)
+        print(f"fetch-mail: query {query!r}")
+        print(f"  destination : {out_dir}")
+
+        for message_id in gmail_source.list_message_ids(service, query, limit=args.limit):
+            matched += 1
+            if args.dry_run:
+                continue
+            raw = gmail_source.fetch_raw(service, message_id)
+            counts[gmail_source.write_eml(raw, out_dir).status] += 1
+    except gmail_source.GmailError as exc:
+        print(f"fetch-mail: {exc}")
+        return 1
+
+    if args.dry_run:
+        print(f"fetch-mail: {matched} message(s) match — --dry-run, no .eml files written")
+        return 0
+
+    print(
+        f"fetch-mail: {matched} message(s) matched -> "
+        f"{counts['new']} new, {counts['unchanged']} unchanged, {counts['rewritten']} rewritten"
+    )
+    print(
+        "  next: map the .eml files AND the .mbox archives in ONE run — "
+        f"`pta-finance map-receipts --source {out_dir}` (two separate runs would "
+        "double-count every message the two sources share)"
+    )
+    return 0
+
+
 def _cmd_sync_budget(args: argparse.Namespace) -> int:
     """Reconcile the editable "FY<fy> Budget" tab back into the "Budget Timeseries" DB.
 
@@ -1143,6 +1242,49 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_config_arg(p_map)
     p_map.set_defaults(func=_cmd_map_receipts)
+
+    p_fetch = sub.add_parser(
+        "fetch-mail",
+        help="fetch a date window of Gmail into .eml files (read-only; prints counts only)",
+    )
+    p_fetch.add_argument(
+        "--since",
+        required=True,
+        metavar="YYYY-MM-DD",
+        help="first day to fetch (INCLUSIVE); overlap the previous window, never tile it",
+    )
+    p_fetch.add_argument(
+        "--until",
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="first day NOT fetched (Gmail's before: is EXCLUSIVE); omit for an open-ended window",
+    )
+    p_fetch.add_argument(
+        "--query",
+        default=None,
+        help="extra raw Gmail search terms appended to the date window, e.g. 'has:attachment'",
+    )
+    p_fetch.add_argument(
+        "--out",
+        default=None,
+        metavar="DIR",
+        help="where the .eml files land (default: [gmail] inbox_dir, the SAME directory as "
+        "the .mbox archives, so one map-receipts run covers both; never a subdirectory)",
+    )
+    p_fetch.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="stop after this many messages (a cheap first look at a big window)",
+    )
+    p_fetch.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="count the matching messages and write no .eml files (it MAY still mint or "
+        "refresh the OAuth token: plan Step M4 uses this exact command for first consent)",
+    )
+    _add_config_arg(p_fetch)
+    p_fetch.set_defaults(func=_cmd_fetch_mail)
 
     return parser
 
