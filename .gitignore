@@ -30,5 +30,7 @@ __pycache__/
 # --- Local tooling ---
 .claude/settings.local.json
 .plan-expedite-state
+.plan-expedite-state.stale-*
+.plan-expedite-state.malformed-*
 # local session/handoff state — may contain private financials; never publish
 .claude/task-state/
