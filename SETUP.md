@@ -319,10 +319,9 @@ is at the top of the guide:
 - **Map in ONE run.** Point `map-receipts --source` at the whole `mail_samples/` *directory* once,
   so fetched `.eml` files and any `.mbox` archives dedup against each other. Two separate runs each
   look clean while together double-counting every message the sources share.
-- **`--start-month` is not optional.** Pass your fiscal year's start month on every
-  `ingest-receipts` / `map-receipts` run — `--start-month 7` for a July-start year; use your own if
-  it differs. The CLI default is `1` (calendar year), so a forgotten flag silently files a year of
-  receipts under the wrong FY. Making the default safe is tracked as issue #23.
+- **Use the configured fiscal year.** Standard `ingest-receipts` / `map-receipts` commands read
+  `[fiscal_year] start_month` from `config.toml`. Use `--start-month N` only as an intentional
+  one-run override; an explicit value wins over config.
 
 *Historical:* before `fetch-mail`, loads were done with a manual Gmail label → **Google Takeout**
 `.mbox` export. Existing Takeout archives remain valid input for backfill — keep them in

@@ -46,8 +46,8 @@ uv run pta-finance analyze                                # reads Budget Timeser
 uv run pta-finance snapshot                               # CSV backups under snapshots/<utc>/
 uv run pta-finance sync-budget --fy 2027                  # dry run: prints the diff, no writes
 uv run pta-finance fetch-mail --since <date> --dry-run    # counts; MAY mint secrets/gmail-token.json
-uv run pta-finance ingest-receipts --source mail_samples --profile --originals-only --start-month 7  # no writes
-uv run pta-finance map-receipts --source mail_samples --start-month 7                                # no writes
+uv run pta-finance ingest-receipts --source mail_samples --profile --originals-only  # no writes
+uv run pta-finance map-receipts --source mail_samples                                # no writes
 ```
 
 These write. Each comment names exactly what:
@@ -58,13 +58,14 @@ uv run pta-finance normalize                              # LEGACY: writes the l
 uv run pta-finance report --fy YYYY --variant both        # HTML + 1 report_log row per variant
 uv run pta-finance sync-budget --fy 2027 --apply          # writes amount/notes to Budget Timeseries
 uv run pta-finance fetch-mail --since <date>              # .eml into [gmail] inbox_dir; no Sheet
-uv run pta-finance map-receipts --source mail_samples --start-month 7 --write-tab Reimbursements  # replaces it
+uv run pta-finance map-receipts --source mail_samples --write-tab Reimbursements  # replaces it
 ```
 
 Every writing verb above snapshots first, except `check` (it deletes its own probe row) and
-`fetch-mail` (it writes no Sheet). Both receipt-pipeline rules are load-bearing and fail
-silently: `--start-month` defaults to `1`, and `map-receipts` must cover `mail_samples/` in ONE
-run. Both are stated in full — and owned — by [docs/loading-receipts.md](docs/loading-receipts.md).
+`fetch-mail` (it writes no Sheet). Receipt commands use `[fiscal_year] start_month` from config;
+`--start-month` is an intentional override. `map-receipts` must cover `mail_samples/` in ONE run
+so all sources deduplicate together. Both rules are stated in full — and owned — by
+[docs/loading-receipts.md](docs/loading-receipts.md).
 
 ## 4. Directory layout
 

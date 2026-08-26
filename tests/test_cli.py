@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from pta_finance import cli, schema
+from pta_finance import cli, receipt_ingest, schema
 from pta_finance.config import Config
 
 _CONFIG_TEXT = """\
@@ -715,3 +715,83 @@ def test_fiscal_year_end_date_guard_holds_for_each_start_month(
         )
         derived = _one_summary_txn_date(client)
         assert cli.ids.fiscal_year_label(cli.date.fromisoformat(derived), start_month) == 2026
+
+
+@pytest.mark.parametrize(
+    ("command", "start_month_args", "expected_fiscal_year"),
+    [
+        ("ingest-receipts", [], "FY2027"),
+        ("ingest-receipts", ["--start-month", "8"], "FY2026"),
+        ("map-receipts", [], "FY2027"),
+        ("map-receipts", ["--start-month", "8"], "FY2026"),
+    ],
+)
+def test_receipt_commands_use_config_start_month_unless_overridden(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+    start_month_args: list[str],
+    expected_fiscal_year: str,
+) -> None:
+    """Both receipt entry points use config month 7 unless explicit month 8 wins."""
+    config_path = _write_config(tmp_path, _config_with_start_month(7))
+    source_path = tmp_path / "fake-submission.eml"
+    source_path.touch()
+    category_map_path = tmp_path / "category_map.csv"
+    category_map_path.write_text(
+        "raw_category,canonical_category\nSupplies,Program Supplies\n",
+        encoding="utf-8",
+    )
+    csv_path = tmp_path / f"{command}.csv"
+    submission = receipt_ingest.Submission(
+        message_id="fake-message@example.invalid",
+        subject="Reimbursement Request",
+        received="Thu, 16 Jul 2026 12:00:00 +0000",
+        requestor_name="Example Requestor",
+        requestor_email="requestor@example.invalid",
+        phone="",
+        company="Example Vendor",
+        line_items=(
+            receipt_ingest.LineItem(
+                index=1,
+                date="2026-07-16",
+                category="Supplies",
+                description="Example supplies",
+                amount="10.00",
+            ),
+        ),
+        total="10.00",
+        payment_type="Check",
+        receipt_urls=(),
+        attachments=(),
+        notes="",
+    )
+
+    monkeypatch.setattr(
+        receipt_ingest,
+        "iter_source",
+        lambda _source: iter([("fake-submission.eml", object())]),
+    )
+    monkeypatch.setattr(
+        receipt_ingest,
+        "parse_submission",
+        lambda _message, *, subject_filter=None: submission,
+    )
+
+    args = [
+        command,
+        "--source",
+        str(source_path),
+        "--csv",
+        str(csv_path),
+        "--config",
+        str(config_path),
+        *start_month_args,
+    ]
+    if command == "map-receipts":
+        args.extend(["--category-map", str(category_map_path)])
+
+    assert cli.main(args) == 0
+    with csv_path.open(encoding="utf-8", newline="") as handle:
+        (row,) = csv.DictReader(handle)
+    assert row["fiscal_year"] == expected_fiscal_year

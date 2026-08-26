@@ -54,6 +54,13 @@ def _load(args: argparse.Namespace) -> Config:
     return load_config(Path(args.config))
 
 
+def _receipt_start_month(args: argparse.Namespace) -> int:
+    """Resolve receipt FY month: an explicit CLI override wins over private config."""
+    if args.start_month is not None:
+        return int(args.start_month)
+    return _load(args).fiscal_year.start_month
+
+
 def _cmd_check(args: argparse.Namespace) -> int:
     """Validate the live-required schema + the Budget Timeseries source, then round-trip a row.
 
@@ -555,8 +562,8 @@ def _cmd_ingest_receipts(args: argparse.Namespace) -> int:
       true distribution. In this mode ``--csv`` writes the category-distribution seed instead.
 
     Nothing is written to the Google Sheet. Emails that are not reimbursement forms are counted as
-    skipped; ``--subject-filter`` narrows recognition; ``--start-month`` (default 1) drives the
-    fiscal-year derivation without needing a config/credentials.
+    skipped; ``--subject-filter`` narrows recognition. Fiscal-year derivation uses the configured
+    ``fiscal_year.start_month`` unless ``--start-month`` intentionally overrides it.
     """
     source = Path(args.source)
     if not source.exists():
@@ -564,7 +571,7 @@ def _cmd_ingest_receipts(args: argparse.Namespace) -> int:
         print("  (download a few reimbursement emails as .eml into that folder — see SETUP.md)")
         return 1
 
-    start_month = args.start_month
+    start_month = _receipt_start_month(args)
     subject_filter = args.subject_filter or None
 
     # One read pass: parse every message, keep the recognized submissions (with a display label).
@@ -719,7 +726,7 @@ def _cmd_map_receipts(args: argparse.Namespace) -> int:
 
     category_map = receipt_map.load_category_map(map_path)
     form_defaults = receipt_map.load_form_defaults(map_path)
-    start_month = args.start_month
+    start_month = _receipt_start_month(args)
     subject_filter = args.subject_filter or None
 
     subs: list[receipt_ingest.Submission] = []
@@ -1180,14 +1187,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument(
         "--start-month",
         type=int,
-        default=1,
-        help="fiscal-year start month for FY derivation (default: 1 = calendar year)",
+        help="override the configured fiscal-year start month for FY derivation",
     )
     p_ingest.add_argument(
         "--csv",
         default=None,
         help="also write a flat one-row-per-line-item CSV to this (gitignored) path",
     )
+    _add_config_arg(p_ingest)
     p_ingest.set_defaults(func=_cmd_ingest_receipts)
 
     p_map = sub.add_parser(
@@ -1209,8 +1216,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_map.add_argument(
         "--start-month",
         type=int,
-        default=1,
-        help="fiscal-year start month for FY derivation (July-start org: 7; default: 1)",
+        help="override the configured fiscal-year start month for FY derivation",
     )
     p_map.add_argument(
         "--subject-filter",

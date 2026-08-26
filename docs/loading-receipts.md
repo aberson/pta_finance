@@ -31,24 +31,23 @@ it with a bare `Copy-Item`.
 > double-counting every message the two sources share**. There is no error message for this; the
 > ledger is just silently wrong.
 >
-> **2. `--start-month` is not optional.** Pass your fiscal year's start month on **every**
-> `ingest-receipts` / `map-receipts` run — `--start-month 7` for a July-start year; use your own
-> if it differs. The CLI's default is `1` (calendar year). Forget the flag and every receipt is
-> filed under the wrong fiscal year, with **no error and no warning** — the numbers simply land in
-> the wrong FY, and because `--write-tab` *replaces* the tab, the wrong-FY ledger becomes the live
-> one. Every example below carries it. Making the default safe is tracked as **issue #23**.
+> **2. Keep `[fiscal_year] start_month` correct in `config.toml`.** Standard
+> `ingest-receipts` / `map-receipts` runs read that configured month, so the commands below do not
+> repeat it. Use `--start-month N` only as an intentional override for one run; an explicit value
+> wins over config. With neither a usable config nor an explicit override, the command fails rather
+> than silently assuming a calendar year.
 >
-> **Do not rely on the CLI to remind you of either rule.** `fetch-mail` prints a one-run reminder,
+> **Do not rely on the CLI to remind you of rule 1.** `fetch-mail` prints a one-run reminder,
 > but only after a **real** fetch — a `--dry-run` (the first command this guide gives you) prints
-> no reminder at all. And the `map-receipts` command that reminder prints is missing
-> `--start-month`, so pasting it as-is walks straight into rule 2. Add the flag yourself.
+> no reminder at all.
 
 ---
 
 ## Prerequisites
 
-- Toolkit installed and `config.toml` set up (see [SETUP.md](../SETUP.md) §0–2) — needed for the
-  `fetch-mail` and `--write-tab` steps.
+- Toolkit installed and `config.toml` set up (see [SETUP.md](../SETUP.md) §0–2) — standard receipt
+  commands read its fiscal-year setting, while `fetch-mail` and `--write-tab` use the other private
+  settings.
 - A Gmail OAuth client + a `[gmail]` config section, set up once — see [SETUP.md](../SETUP.md)
   **§6 "Gmail access"**. The first `fetch-mail` run opens a browser for a one-time read-only
   consent, and Testing-mode consent expires after 7 days, so expect an occasional re-approval.
@@ -120,7 +119,7 @@ command per line — `&&` is a parser error in PowerShell 5.1.
 **Preview + data-spread profile.** Writes the seed CSV named below; makes no Sheet write:
 
 ```powershell
-$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance ingest-receipts --source "mail_samples" --profile --originals-only --start-month 7 --csv reports\output\category_seed.csv
+$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance ingest-receipts --source "mail_samples" --profile --originals-only --csv reports\output\category_seed.csv
 ```
 
 Read the output: form types, the full category list, reconcile pass/fail, and — key for
@@ -180,7 +179,7 @@ else — it carries `requestor_name`, `requestor_email` and `receipt_url` for ev
 ignored, and one `git add -A` would put those names in the public history:
 
 ```powershell
-$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance map-receipts --source "mail_samples" --category-map reports\output\category_map.csv --start-month 7 --csv reports\output\ledger.csv
+$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance map-receipts --source "mail_samples" --category-map reports\output\category_map.csv --csv reports\output\ledger.csv
 ```
 
 **Check the summary's `category map : N mapping(s), M form default(s)` line before you trust the
@@ -191,7 +190,7 @@ run.** `0 mapping(s)` means the header rename did not take, and every row will b
 already exists):
 
 ```powershell
-$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance map-receipts --source "mail_samples" --category-map reports\output\category_map.csv --start-month 7 --write-tab "Reimbursements"
+$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance map-receipts --source "mail_samples" --category-map reports\output\category_map.csv --write-tab "Reimbursements"
 ```
 
 Note that `--source` is the **directory**, not a single file. That is what makes this one run
