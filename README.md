@@ -42,6 +42,7 @@ sheet you already edited — is in **[docs/using-the-spreadsheet.md](docs/using-
 | Language / runtime | Python `>=3.12` | `tomllib` in stdlib (no TOML dependency) |
 | Dependency / build | `uv` + `hatchling` | Reproducible, fast |
 | Sheets / Drive access | `gspread` + `google-auth` (service account) | Clean API, atomic batch writes |
+| Gmail access (optional) | `google-api-python-client` + `google-auth-oauthlib` | User OAuth pinned to `gmail.readonly` |
 | Analytics | `pandas` | By-category / grade / month aggregation, trends |
 | Charts | `matplotlib` (Agg backend) | Deterministic, headless, zero-browser in CI |
 | Templating | `Jinja2` (+ optional `WeasyPrint` for PDF) | Two report variants; HTML output, PDF optional |
@@ -55,6 +56,8 @@ sheet you already edited — is in **[docs/using-the-spreadsheet.md](docs/using-
 - A Google account with a Cloud project (Sheets API + Drive API enabled) and a **service account**
   whose JSON key you can download.
 - The target spreadsheet and a Drive folder shared with the service-account email (Editor role).
+- *(Optional, only for `fetch-mail`)* an OAuth **Desktop app** client for the mailbox you want to
+  read — a separate credential from the service account; see SETUP.md §6.
 
 ## Setup
 
@@ -102,7 +105,7 @@ the service-account JSON) and `PTA_CONFIG_B64` (base64 of `config.toml`) — and
 
 ```
 pta_finance/        package: config, ids, schema, models, sheets, backup, etl, cli,
-                    budget_sync, report_source, receipt_ingest, receipt_map,
+                    gmail_source, budget_sync, report_source, receipt_ingest, receipt_map,
                     analytics/, reports/(templates/)
 tests/              fake-org fixtures + mocked gspread; an end-to-end wiring smoke gate
 .github/workflows/  ci.yml (PR gate) + monthly-report.yml (cron)
@@ -118,8 +121,8 @@ See [plan.md](plan.md) for the full design, data model, and build steps, and
 schema, a service-account Sheets client (atomic row-targeted writes + 429 backoff), idempotent
 legacy-ledger ETL (ID assignment, dedup, malformed-row resilience), an exact-cents analytics engine,
 internal/external HTML reports with a runtime PII guard, an end-to-end smoke gate, and a monthly
-GitHub Actions report workflow. 113 tests passing (+1 skipped), 0 type errors (`mypy --strict`),
-0 lint violations. First-run setup needs the Google service account (see Setup) — then
+GitHub Actions report workflow. 113 tests passing at that point (+1 skipped), 0 type errors
+(`mypy --strict`), 0 lint violations. First-run setup needs the Google service account (see Setup) — then
 `uv run pta-finance check`.
 
 **Receipt ingestion (Phase 4)** — a credential-free `.eml`/`.mbox` parser (`receipt_ingest.py`) with

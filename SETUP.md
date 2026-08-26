@@ -5,7 +5,8 @@ Google Sheet. It is **generic** — it never names a specific organization. All 
 identity (org name, emails, spreadsheet IDs) lives only in `config.toml`, which is
 gitignored. This repo is **public**; your data stays **private**.
 
-The whole path is five stages, plus one optional sixth (§6, Gmail access):
+The whole path is §0–§4 below (§5 is the analyze/report loop you run every month), plus the
+optional §6, Gmail access:
 
 ```
 0. Install            1. Google Cloud (M1)      2. config.toml (M2)
@@ -256,9 +257,10 @@ labels, archives, or deletes. You can revoke the grant at any time from your Goo
 5. **First run — mint the token.** Run this once; it opens a browser:
 
    ```bash
-   uv run pta-finance fetch-mail --since 2026-06-01 --dry-run
+   uv run pta-finance fetch-mail --since <date> --dry-run
    ```
 
+   - Any recent date works — this run is only here to trigger consent.
    - Sign in with the account whose mailbox you want to read (the test user from step 2).
    - You will see an **"unverified app"** warning. That is expected here: `gmail.readonly` is a
      *restricted* scope and this app is deliberately unverified. Click through via the **Advanced**

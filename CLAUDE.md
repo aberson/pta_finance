@@ -21,6 +21,7 @@ analytics engine (spend by category/grade, budget-vs-actual, multi-year trends),
 | Language | Python `>=3.12` |
 | Build / deps | `uv` + `hatchling` |
 | Sheets/Drive | `gspread` 6.x + `google-auth` (service account) |
+| Gmail (optional) | `google-api-python-client` + `google-auth-oauthlib` (user OAuth, `gmail.readonly`) |
 | Analytics | `pandas` |
 | Charts | `matplotlib` (Agg backend) |
 | Templating | `Jinja2`; optional `[pdf]` → `WeasyPrint` |
@@ -172,7 +173,8 @@ setup + M2 real-sheet smoke are DONE). **Next = operator-gated observation:** M3
   they did not initiate. Console labels drift: prefer the deep links
   (`console.cloud.google.com/auth/overview`, `/auth/clients`, `/auth/scopes`, `/auth/audience`), and
   do not upload a logo (it triggers app verification).
-- **Never print, `cat`, or `Get-Content` `secrets/gmail-token.json` or `secrets/gmail-client-secret.json`.**
+- **Never print, `cat`, or `Get-Content`** `secrets/gmail-token.json` or
+  `secrets/gmail-client-secret.json`.
   Metadata checks (`Test-Path`, size) and effect-based verification (run `fetch-mail --dry-run`,
   check the exit code) only — the token file holds a live refresh token.
 - **Gmail consent stays in Testing mode with a test user, by decision.** Production would require a

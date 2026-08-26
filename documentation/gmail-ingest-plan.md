@@ -278,7 +278,7 @@ explicitly so reviewers can confirm the classification rather than infer it.)*
 
 <!-- autofix-applied: 2026-08-25 -->
 ### Step M5: Refresh-token longevity check (wait)
-- **Problem:** Observe what the OAuth refresh token actually does once the Testing-mode 7-day window has passed. *(Amended 2026-08-26: this step was written to prove a Production setting had taken. Production is unreachable for this project, so the consent screen stays in *Testing* and the expiry is now an accepted, documented cost rather than a defect to detect.)* A same-day check cannot see any of this, because the token is valid for its first 7 days either way.
+- **Problem:** Observe what the OAuth refresh token actually does once the Testing-mode 7-day window has passed. *(Amended 2026-08-26: this step was written to prove a Production setting had taken. Production is unreachable for this project, so the consent screen stays in **Testing** and the expiry is now an accepted, documented cost rather than a defect to detect.)* A same-day check cannot see any of this, because the token is valid for its first 7 days either way.
 - **Type:** wait
 - **Issue:** #18
 - **Produces:** nothing — an observation only
@@ -303,7 +303,7 @@ explicitly so reviewers can confirm the classification rather than infer it.)*
 - **Depends on:** 11
 
 ### Step 13: Docs + plan reconciliation
-- **Problem:** Replace the Takeout procedure in `SETUP.md` and `docs/loading-receipts.md` with the `fetch-mail` procedure, including the Production-consent step, the overlap-don't-gap operating rule, and the
+- **Problem:** Replace the Takeout procedure in `SETUP.md` and `docs/loading-receipts.md` with the `fetch-mail` procedure, including the consent-and-token step (Testing mode with a test user — see the Step M4 amendment of 2026-08-26; Production is unreachable for this project), the overlap-don't-gap operating rule, and the
   **single-run** requirement from Design Decision 10 (splitting sources across two `map-receipts`
   runs silently double-counts). Update `CLAUDE.md` §3 (commands), §4 (layout), §7 (environment requirements) and §6 (current state). Tick the "Monthly automation" bullet in `plan.md` §"Phase 4 → Not yet built", noting that the *cron* half remains deliberately out of scope.
 - **Type:** code

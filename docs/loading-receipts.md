@@ -14,9 +14,11 @@ Gmail  ->  fetch-mail (.eml into mail_samples/)  ->  map-receipts --write-tab  -
 
 `fetch-mail` is the only step that touches Gmail, and its grant is **read-only** — the toolkit
 never sends, replies, labels, archives, or deletes mail. Parsing is **credential-free**; the only
-step that touches the Sheet is `--write-tab`. Re-running is safe — an overlapping fetch rewrites
-nothing, and `--write-tab` **replaces** the tab, with `Message-ID` + content-hash dedup preventing
-double-counting.
+step that touches the Sheet is `--write-tab`. Re-fetching and re-loading are both idempotent: an
+overlapping fetch rewrites nothing, and `--write-tab` **replaces** the tab, with `Message-ID` +
+content-hash dedup preventing double-counting. The one thing a re-run can destroy is your
+hand-filled `category_map.csv` — Step 2's copy command is guarded against that, so do not replace
+it with a bare `Copy-Item`.
 
 ---
 
@@ -115,37 +117,75 @@ and verified.
 PowerShell on Windows (the `PYTHONUTF8` vars prevent a cp1252 crash on non-ASCII names). One
 command per line — `&&` is a parser error in PowerShell 5.1.
 
-**Preview + data-spread profile** (no Sheet writes):
+**Preview + data-spread profile.** Writes the seed CSV named below; makes no Sheet write:
 
 ```powershell
 $env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance ingest-receipts --source "mail_samples" --profile --originals-only --start-month 7 --csv reports\output\category_seed.csv
 ```
 
 Read the output: form types, the full category list, reconcile pass/fail, and — key for
-completeness — the **`email date span`** line (see Step 3).
+completeness — the `email date span` line (see Step 3). **Keep this output on screen**: the
+`form types:` list is what you copy form names from, two steps below.
 
 **First time only — turn the seed into the category map.** The command above wrote
-`reports\output\category_seed.csv`: one row per raw form category, with an empty column for you to
-fill in. Copy it to the name the loader expects:
+`reports/output/category_seed.csv`: one row per raw form category, with an empty column for you to
+fill in. Copy it to the name the loader expects. This command is written so it will **not**
+clobber a map you have already filled in:
 
 ```powershell
-Copy-Item reports\output\category_seed.csv reports\output\category_map.csv
+if (Test-Path reports\output\category_map.csv) { "category_map.csv exists - keeping your filled-in copy" } else { Copy-Item reports\output\category_seed.csv reports\output\category_map.csv }
 ```
 
-Then open `category_map.csv` in the Sheet or a spreadsheet editor and do two things:
+Now open `reports/output/category_map.csv` **in a plain UTF-8 text editor** (VS Code, Notepad) or a
+spreadsheet editor that can save UTF-8 CSV. Two cautions, both of which fail *silently*:
 
-1. **Rename the third column header to exactly `canonical_category`.** The seed ships it as
-   `canonical_category (fill in)`, and the loader looks for the bare name — leave the "(fill in)"
-   on and every mapping is silently ignored, flagging the whole ledger `needs_review`.
-2. **Fill in that column** with the Budget Timeseries line each raw category maps to. Leave a row
-   blank to have it flagged `needs_review` instead.
+- **Not in Google Sheets.** `--category-map` reads a local file path only — it never reads a Sheet
+  tab. Editing an imported copy in Drive leaves the file on disk untouched, and the load then maps
+  nothing.
+- **Not in Excel's default CSV save.** The file is UTF-8 without a BOM; Excel opens it as ANSI and
+  saves it back as cp1252, which makes the load die on any non-ASCII category name. If you use
+  Excel, save as **CSV UTF-8**.
 
-Optionally add a per-form default: a row whose `raw_category` is `FORM_DEFAULT: <form name>` sets
-the category used for that form's blank-category lines (this is how a form that collects no
-category at all gets its budget line).
+The file has **three** columns, in this order:
+
+```
+raw_category,line_item_count,canonical_category (fill in)
+```
+
+Do two things to it:
+
+1. **Rename the third column header to exactly `canonical_category`.** The loader looks for that
+   bare name — leave the "(fill in)" on and every mapping is ignored, flagging the whole ledger
+   `needs_review`.
+2. **Fill in that third column** with the Budget Timeseries line each raw category maps to. Leave a
+   row's canonical blank to have those line items flagged `needs_review` instead.
+
+Two details about that file that are easy to get wrong:
+
+- **The `(blank)` row does nothing.** The seed lists `(blank)` for line items that carried no
+  category at all. The loader skips that row by name, so filling it in has no effect — use a
+  `FORM_DEFAULT:` row instead (next bullet). This is usually the largest count in the seed, so it
+  is the row you are most likely to reach for first.
+- **Per-form default.** To give a form that collects no category its own budget line, add a row
+  whose `raw_category` is `FORM_DEFAULT: <form name>` and whose `canonical_category` is the budget
+  line. `<form name>` must match **exactly** — copy it from the `form types:` list in the profile
+  output above; an approximate name is a silent no-op.
 
 Keep the finished `category_map.csv` — later loads reuse it, and you only add rows when a new
 category appears.
+
+**Preview the ledger first** (no Sheet write). Write the CSV under `reports\output\` and nowhere
+else — it carries `requestor_name`, `requestor_email` and `receipt_url` for every line item, and
+`reports/output/` is the gitignored directory. A CSV dropped anywhere else in the repo is **not**
+ignored, and one `git add -A` would put those names in the public history:
+
+```powershell
+$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance map-receipts --source "mail_samples" --category-map reports\output\category_map.csv --start-month 7 --csv reports\output\ledger.csv
+```
+
+**Check the summary's `category map : N mapping(s), M form default(s)` line before you trust the
+run.** `0 mapping(s)` means the header rename did not take, and every row will be flagged
+`unmapped-category`.
 
 **Load into the Sheet** (creates/replaces the `Reimbursements` tab; snapshots it first if it
 already exists):
@@ -159,17 +199,15 @@ cover the fetched `.eml` files *and* any `.mbox` archives sitting beside them �
 map-in-ONE-run rule at the top. The Receipts Explorer tab reads this ledger live, so it updates
 automatically.
 
-To see the ledger without touching the Sheet, drop `--write-tab` and add `--csv <path>` (or
-`--limit N` to print the first N rows).
-
 ---
 
 ## Step 3 — Verify completeness (do not skip)
 
 Two independent checks that you actually got **everything**:
 
-1. **Email date span.** The `--profile` output prints
-   `email date span: <oldest> -> <newest>` — the dates the forms were **submitted**. Compare
+1. **Email date span.** The `--profile` output prints a line reading
+   `email date span     : <oldest> -> <newest>  (when forms were SUBMITTED — check for gaps)`.
+   Those are the dates the forms were **submitted**. Compare
    `<oldest>` to the `--since` date you fetched from. If the span **starts later** than your real
    history — e.g. emails only from the spring even though the form was used all year — fetch from
    an earlier `--since`. **Watch the line-item `month` vs the email date:** a form submitted in
@@ -181,7 +219,9 @@ Two independent checks that you actually got **everything**:
    mail in the window, form or not.
 
 **If either check shows a gap:** re-run `fetch-mail` with an earlier `--since` (Step 1), then
-re-run Step 2. Re-running replaces the tab cleanly — no double-counting.
+re-run Step 2's **preview** and **load** commands. The copy command in between is guarded, so it
+will keep your filled-in `category_map.csv`. Re-running the load replaces the tab cleanly — no
+double-counting.
 
 ### Known coverage gap: a handover period with two intake mailboxes
 
@@ -227,8 +267,9 @@ either.
 - **`needs_review`** collects `unmapped-category` / `bad-amount` / `total-mismatch`. Sort the tab
   by that column and spot-check.
 - **New category?** If a form category isn't in `category_map.csv`, its row shows a blank
-  `canonical_category` + `needs_review`. Add a line to the CSV (`raw_category,canonical_category,…`)
-  mapping it to a Budget Timeseries line, then re-run Step 2.
+  `canonical_category` + `needs_review`. Add a row using the file's real three-column order —
+  `raw_category,line_item_count,canonical_category`, leaving `line_item_count` empty — then re-run
+  Step 2's load command. A two-field line puts the budget line in the wrong column and is ignored.
 
 ---
 

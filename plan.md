@@ -630,7 +630,7 @@ worktrees); pushed `cbeeecc..193bed2`.**
 
 ---
 
-## Phase 4 — Receipt ingestion (shipped: profiler + mapping engine + Reimbursements ledger + Receipts Explorer)
+## Phase 4 — Receipt ingestion (shipped: profiler + mapping engine + Reimbursements ledger + Receipts Explorer + the `fetch-mail` Gmail connector)
 
 **Shipped end-to-end against a real, gitignored Takeout mailbox and live Sheet with all categories
 mapped. 219 tests passing (+1 skipped, pyyaml-gated). Zero type errors (`mypy --strict`). Zero lint
@@ -668,9 +668,9 @@ Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready),
 ### Not yet built (remaining Phase-4 work)
 - **Budget Timeseries roll-up** — aggregate the ledger's per-category actuals into Budget Timeseries
   so reimbursement spend appears in the monthly/FY reports (which read Budget Timeseries, not this tab).
-- **Monthly automation — cron half only.** The *fetch* half shipped 2026-08-26 as `fetch-mail` (see
-  "What was built" above), so no manual Takeout export is needed. The **cron half stays deliberately
-  out of scope**: `documentation/gmail-ingest-plan.md` § Design Decision 7 keeps the OAuth token out
+- **Monthly automation (cron half)** — the *fetch* half shipped 2026-08-26 as `fetch-mail` (see
+  "What was built" above), so no manual Takeout export is needed; the cron half stays deliberately
+  out of scope: `documentation/gmail-ingest-plan.md` § Design Decision 7 keeps the OAuth token out
   of CI (a personal-mailbox refresh token in a public repo's Actions secrets would expose the whole
   inbox), so ingestion is local-only and operator-run and the monthly workflow still does reports
   only. Revisit only as a separate, deliberate decision.
