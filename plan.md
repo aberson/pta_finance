@@ -364,7 +364,7 @@ uv run pta-finance report --fy 2026 --variant both
 |---|---|---|
 | **2 — Apps Script cloud layer** | Nag emails + calendar reminders (time-driven triggers), Chrome-editable config (Sheet tab / Script Properties), Google Sign-In allowlist plumbing; flexible/config-driven charts (Vega-Lite) | All recurring compute stays in a cloud (Google) — the handoff-safety layer |
 | **3 — Admin web UI** | React (or Apps Script HtmlService) admin surface; Google Sign-In gated to the config allowlist | Front-end deferred so the schema settles first |
-| **4 — Power features** | One-year-ahead forecasting; Gmail-OAuth receipt automation + linked-file fetch; bank-CSV / QuickBooks import; LLM report narrative + people-friendly wiki rendering; board-ramp wiki (LLM-friendly + people-friendly) | Credential-free receipt parsing/mapping is shipped; automation and Drive fetch remain |
+| **4 — Power features** | One-year-ahead forecasting; Gmail-OAuth receipt automation + linked-file fetch; bank-CSV / QuickBooks import; LLM report narrative + people-friendly wiki rendering; board-ramp wiki (LLM-friendly + people-friendly) | Credential-free receipt parsing/mapping and Gmail **fetching** (`fetch-mail`) are shipped; unattended/cron ingestion and Drive fetch remain |
 
 ## 11. Development Process
 
@@ -655,6 +655,11 @@ reconciliation on 2026-08-20. Private mailbox counts and financial totals remain
 - **Receipts Explorer** (Sheet-side, not repo code) — a dropdown-driven QUERY+pie dashboard over the
   Reimbursements tab: Panel A breaks down by dimension, Panel B drills into one category. Operator
   load procedure: [docs/loading-receipts.md](docs/loading-receipts.md).
+- **`gmail_source.py` + the `fetch-mail` CLI** (shipped 2026-08-26; `documentation/gmail-ingest-plan.md`,
+  issues #15–#22) — the Gmail read-only ingest connector that retires the manual Takeout export: user
+  OAuth pinned to `gmail.readonly`, a date-scoped fetch, and an idempotent `.eml` writer landing files
+  in `mail_samples/` beside the archives so ONE `map-receipts` run dedups both. Fetching only — the
+  unattended cron half is deliberately not built (see "Not yet built" below).
 
 ### Deliberate design choice
 Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready), NOT the canonical
@@ -663,7 +668,12 @@ Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready),
 ### Not yet built (remaining Phase-4 work)
 - **Budget Timeseries roll-up** — aggregate the ledger's per-category actuals into Budget Timeseries
   so reimbursement spend appears in the monthly/FY reports (which read Budget Timeseries, not this tab).
-- **Monthly automation** — Gmail OAuth so the cron ingests new reimbursements without a manual Takeout.
+- **Monthly automation — cron half only.** The *fetch* half shipped 2026-08-26 as `fetch-mail` (see
+  "What was built" above), so no manual Takeout export is needed. The **cron half stays deliberately
+  out of scope**: `documentation/gmail-ingest-plan.md` § Design Decision 7 keeps the OAuth token out
+  of CI (a personal-mailbox refresh token in a public repo's Actions secrets would expose the whole
+  inbox), so ingestion is local-only and operator-run and the monthly workflow still does reports
+  only. Revisit only as a separate, deliberate decision.
 - **Live Drive fetch** of the linked receipt PDFs.
 
 ### Files changed
@@ -675,12 +685,12 @@ Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready),
 | `pta_finance/sheets.py` | New `replace_tab_grid` — schema-independent create/replace of a machine-owned tab (RAW grid + USER_ENTERED numeric column) |
 | `pta_finance/cli.py` | `ingest-receipts` (+ `--profile` / `--originals-only`) + new `map-receipts` (+ `--write-tab`) |
 | `tests/test_receipt_ingest.py`, `test_receipt_map.py`, `test_sheets.py` | Parser / profiler / mapper / writer coverage over synthetic fixtures |
-| `docs/loading-receipts.md`, `SETUP.md` | Operator load how-to (Gmail → Takeout → `map-receipts`) + completeness check |
+| `docs/loading-receipts.md`, `SETUP.md` | Operator load how-to + completeness check; acquisition half since replaced by `fetch-mail` (Gmail → `fetch-mail` → `map-receipts`), and SETUP.md §6 adds the OAuth stage |
 
 ### Fresh-context notes
 
 | Issue | Detail |
 |---|---|
-| Operational scope | Parsing, mapping, and `--write-tab` are shipped. Gmail OAuth automation and linked Drive-file retrieval remain deferred. |
+| Operational scope | Parsing, mapping, and `--write-tab` are shipped; Gmail OAuth **fetching** shipped later as `fetch-mail` (see the Monthly-automation bullet above). Unattended/cron ingestion and linked Drive-file retrieval remain deferred. |
 | Identity rule | Recognition is structural; no org/person/email in code or tests. Real `.eml` samples stay gitignored (default source `./mail_samples`). |
 | Sheet-side work | Related dashboard work (chart recolor, FY2025/27 `raw_category` canonicalization, the Group Explorer tab) lives in the Google Sheet, not this repo. |

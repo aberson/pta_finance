@@ -128,9 +128,12 @@ category vocabulary, blank-field rates, reconciliation, and the **email-date spa
 gappy export), and `map-receipts` projects the parsed submissions onto a flat **Reimbursements**
 ledger (carry-forward blank categories, per-form defaults, `Message-ID` + content-hash dedup,
 `needs_review` flags) and writes it to the Sheet with `--write-tab`. A dropdown-driven **Receipts
-Explorer** dashboard reads that ledger. See [docs/loading-receipts.md](docs/loading-receipts.md) for
-the end-to-end load (Gmail label → Google Takeout → `map-receipts`) with a completeness check.
-219 tests passing (+1 skipped), 0 type errors, 0 lint violations.
+Explorer** dashboard reads that ledger. Mail now arrives through `fetch-mail` — a read-only Gmail
+connector (`gmail_source.py`, OAuth pinned to `gmail.readonly`) that fetches a date window straight
+into the gitignored inbox directory, retiring the manual Takeout export. See
+[docs/loading-receipts.md](docs/loading-receipts.md) for the end-to-end load (`fetch-mail` →
+`map-receipts`) with a completeness check.
+332 tests passing (+1 skipped), 0 type errors, 0 lint violations.
 
 The live `map-receipts --write-tab` path was revalidated on 2026-08-20 with a pre-write snapshot
 and a semantic read-back reconciliation. Private mailbox counts, financial totals, and generated

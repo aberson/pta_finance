@@ -5,7 +5,7 @@ Google Sheet. It is **generic** — it never names a specific organization. All 
 identity (org name, emails, spreadsheet IDs) lives only in `config.toml`, which is
 gitignored. This repo is **public**; your data stays **private**.
 
-The whole path is five stages:
+The whole path is five stages, plus one optional sixth (§6, Gmail access):
 
 ```
 0. Install            1. Google Cloud (M1)      2. config.toml (M2)
@@ -14,6 +14,9 @@ The whole path is five stages:
                                           3. init-sheet            4. check + run
                                              create report_log        verify + report
 ```
+
+§6 (**Gmail access**) is a separate, **optional** setup — do it only when you want to pull
+reimbursement-form emails with `fetch-mail`. Everything above works without it.
 
 The live toolkit needs only the `report_log` tab plus a user-maintained **Budget Timeseries**
 tab (the tidy long dataset `analyze` / `report` read). The older canonical tabs
@@ -102,6 +105,10 @@ between `/d/` and `/edit` is the `spreadsheet_id`.
 Every field must be non-empty or `pta-finance` will fail fast naming the missing field. The
 two Drive folder IDs are not used in v1 (live Drive upload is Phase 2) — a placeholder string
 satisfies validation.
+
+`config.example.toml` also carries a commented-out **`[gmail]`** block. It is genuinely optional —
+leave it commented out unless you are setting up mail fetching, which is **§6 "Gmail access"**
+below. An org that never wires up Gmail is unaffected.
 
 ---
 
@@ -198,12 +205,126 @@ appends one row per variant to `report_log`. Reports are written to `reports/out
 
 ---
 
+## 6. Gmail access (optional — only for `fetch-mail`)
+
+Skip this stage entirely unless you want the toolkit to pull reimbursement-form emails out of a
+mailbox for you. Everything above works without it.
+
+**Why this needs its own credential.** The service account from M1 cannot read a personal Gmail
+mailbox — impersonating a mailbox requires Google Workspace domain-wide delegation. So mail access
+authenticates **as the human account** through OAuth. The grant is pinned to `gmail.readonly` in
+code and guarded by a test: the toolkit can read mail and nothing else — it never sends, replies,
+labels, archives, or deletes. You can revoke the grant at any time from your Google Account's
+*Third-party apps & services* page.
+
+> **Console labels drift.** Google renames and reshuffles this area of the Cloud Console often, and
+> it is currently mid-rename (the OAuth/consent area is now presented as the "Google Auth
+> Platform"). Treat every button name below as a description, not gospel — look for the equivalent
+> control. The deep links are more stable than the menu paths, so prefer them.
+
+1. **Enable the Gmail API.** In the **same** Cloud project you used for M1: APIs & Services →
+   *Library* → search "Gmail API" → *Enable*.
+2. **Configure the consent screen — do this first.** The clients page will just bounce you into
+   this wizard otherwise. Go to `console.cloud.google.com/auth/overview` and work through it:
+   - **App name:** anything generic — it is only shown to you on the consent screen. Do not put
+     your organization's name here if you would rather it stayed out of a Google-side record.
+   - **Do NOT upload a logo.** A logo triggers Google's app-verification requirement, which is a
+     review process you do not need for a single-user tool.
+   - **Audience:** *External* (the audience page is `console.cloud.google.com/auth/audience`).
+   - **Leave the publishing status at *Testing*, and add your own Google account as a test user.**
+     See "Testing mode" below for what that costs you — it is the right trade for this project.
+   - **Scopes** (`console.cloud.google.com/auth/scopes`): nothing to pre-add. The toolkit requests
+     exactly one scope at consent time, `.../auth/gmail.readonly`.
+3. **Create the OAuth client.** Go to `console.cloud.google.com/auth/clients` → create a client.
+   **Application type must be `Desktop app`** — the consent flow runs a loopback listener on your
+   own machine, so a "Web application" client fails with a redirect-URI mismatch. Download the
+   client-secrets JSON when it offers it (you can re-download it later from the same page).
+4. **Save the client secret and fill in `[gmail]`.** Save the downloaded JSON to
+   `secrets/gmail-client-secret.json` — that exact filename is what `config.example.toml`
+   documents, and `secrets/` is gitignored so it never gets committed. Then uncomment and fill in
+   the `[gmail]` block in your `config.toml`:
+
+   ```toml
+   [gmail]
+   client_secrets_file = "secrets/gmail-client-secret.json"   # the JSON you just downloaded
+   token_file          = "secrets/gmail-token.json"           # written for you at first consent
+   inbox_dir           = "mail_samples"                       # fetched .eml files land here
+   ```
+
+   Leave `inbox_dir` pointing at the **same** directory as any `.mbox` archives you already have —
+   that is load-bearing, and `docs/loading-receipts.md` explains why.
+5. **First run — mint the token.** Run this once; it opens a browser:
+
+   ```bash
+   uv run pta-finance fetch-mail --since 2026-06-01 --dry-run
+   ```
+
+   - Sign in with the account whose mailbox you want to read (the test user from step 2).
+   - You will see an **"unverified app"** warning. That is expected here: `gmail.readonly` is a
+     *restricted* scope and this app is deliberately unverified. Click through via the **Advanced**
+     link, then the "go to `<your app name>` (unsafe)" link beneath it. **This click-through is
+     safe only because it is the Desktop-app client you created yourself, minutes ago, in your own
+     Cloud project** — check that the app name on screen is the one you typed in step 2. Never
+     click past this warning on a consent screen you did not personally initiate: that is exactly
+     what an OAuth phishing page looks like. It is not general advice.
+   - Approve the **read-only** request.
+
+**`--dry-run` still mints the token.** It writes no `.eml` files — it counts the matching messages
+and stops — but the consent flow is *how the token file gets created*, so this is a stated contract,
+not a bug. The later "run it for real" step depends on the token already existing.
+
+The token lands at your configured `token_file`. **Never print it.** Check it with metadata only —
+`Test-Path secrets\gmail-token.json` (PowerShell) or `ls -l secrets/gmail-token.json` (macOS/Linux)
+— never `type` / `cat` / `Get-Content`.
+
+### Testing mode: expect to re-approve about weekly
+
+While the consent screen is in **Testing**, Google expires the refresh token **7 days** after
+consent. A `fetch-mail` run after that opens the browser again for a fresh approval. **This is
+expected behaviour, not a broken install** — the error message tells you to re-run the consent
+command, and re-approving takes a few seconds.
+
+Publishing to *Production* would remove the 7-day expiry, but Google requires a public homepage URL
+and a hosted privacy-policy URL to do it — pages this project has no reason to host. Testing mode
+is therefore the deliberate choice, and it costs little because mail fetching is **local-only by
+design**: no OAuth token is ever placed in CI, and the runs are hands-on anyway. (Issue #18 tracks
+the longevity check; the setup decision is recorded in the closed issue #17.)
+
+**§6 done-checks:**
+
+| Check | Expected |
+|---|---|
+| Gmail API | shows *Enabled* in the console for that project |
+| OAuth client | exists, application type **Desktop app** |
+| `secrets/gmail-client-secret.json` | the file exists; `git status` does **not** list it |
+| `[gmail]` block | present in `config.toml` (not in `config.example.toml`) |
+| First run | `fetch-mail --since <date> --dry-run` exits 0 and prints a message count |
+| Token | the token file exists (metadata check above) — never print its contents |
+
+---
+
 ## Loading reimbursement receipts
 
-To turn the reimbursement-form emails in the treasurer inbox into a **Reimbursements** ledger tab
+To turn the reimbursement-form emails in a treasurer mailbox into a **Reimbursements** ledger tab
 (and the interactive **Receipts Explorer** dashboard), follow
-**[docs/loading-receipts.md](docs/loading-receipts.md)** — Gmail label → Google Takeout →
-`map-receipts --write-tab`, with a built-in **completeness check** so you don't miss any submissions.
+**[docs/loading-receipts.md](docs/loading-receipts.md)** — `fetch-mail` → `map-receipts --write-tab`,
+with a built-in **completeness check** so you don't miss any submissions.
+
+That guide owns the load procedure and its two rules; both are repeated here only because getting
+either wrong corrupts the ledger with **no error message at all**, and the full statement of each
+is at the top of the guide:
+
+- **Map in ONE run.** Point `map-receipts --source` at the whole `mail_samples/` *directory* once,
+  so fetched `.eml` files and any `.mbox` archives dedup against each other. Two separate runs each
+  look clean while together double-counting every message the sources share.
+- **`--start-month` is not optional.** Pass your fiscal year's start month on every
+  `ingest-receipts` / `map-receipts` run — `--start-month 7` for a July-start year; use your own if
+  it differs. The CLI default is `1` (calendar year), so a forgotten flag silently files a year of
+  receipts under the wrong FY. Making the default safe is tracked as issue #23.
+
+*Historical:* before `fetch-mail`, loads were done with a manual Gmail label → **Google Takeout**
+`.mbox` export. Existing Takeout archives remain valid input for backfill — keep them in
+`mail_samples/` — but they are no longer the procedure for a new load.
 
 ---
 
@@ -217,5 +338,10 @@ To turn the reimbursement-form emails in the treasurer inbox into a **Reimbursem
 | `SpreadsheetNotFound` | wrong `spreadsheet_id`, or the sheet isn't shared with the service account |
 | `SchemaError: schema mismatch on tab 'X'` | that tab's header row doesn't match the canonical columns — fix the header, or (for an empty/new tab) run `init-sheet` |
 | HTTP 429 during a big import | normal under load — the client retries with backoff automatically |
+| `fetch-mail: config.toml has no [gmail] section` | §6 step 4 — uncomment and fill in the `[gmail]` block |
+| `fetch-mail: no Gmail OAuth client-secrets file at …` | §6 step 4 — the downloaded client JSON isn't where `client_secrets_file` points |
+| `fetch-mail` opens the browser again a week later | expected in Testing mode (7-day refresh-token expiry) — just re-approve |
+| Consent shows "Google hasn't verified this app" | expected **for the client you created yourself in §6** — read §6 step 5 before clicking through |
+| Consent fails with a redirect-URI mismatch | the OAuth client isn't type **Desktop app** (§6 step 3) — create a Desktop-app client |
 
 For the full architecture and command reference, see `README.md` and `plan.md`.

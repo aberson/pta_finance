@@ -36,33 +36,56 @@ uv run pytest -q                    # test
 uv run ruff check .                 # lint
 uv run ruff format --check .        # format check
 uv run mypy --strict pta_finance    # typecheck
-
-uv run pta-finance check                                  # validate config + sheet round-trip
-uv run pta-finance normalize                              # legacy → canonical schema
-uv run pta-finance analyze                                # run analytics (Budget Timeseries)
-uv run pta-finance report --fy YYYY --variant both        # fiscal-year reports (default: current FY)
-uv run pta-finance sync-budget --fy 2027                  # preview edits to the "FY2027 Budget" tab
-uv run pta-finance sync-budget --fy 2027 --apply          # write those edits back to Budget Timeseries
-uv run pta-finance snapshot                               # CSV backups of the live tab set
-uv run pta-finance ingest-receipts --source <path> --profile     # scan .eml/.mbox, PII-free batch profile
-uv run pta-finance map-receipts --source <path> --write-tab Reimbursements   # write the flat ledger tab
 ```
+
+No live-Sheet write. Each comment names any local file the command touches:
+
+```bash
+uv run pta-finance analyze                                # reads Budget Timeseries; no writes
+uv run pta-finance snapshot                               # CSV backups under snapshots/<utc>/
+uv run pta-finance sync-budget --fy 2027                  # dry run: prints the diff, no writes
+uv run pta-finance fetch-mail --since <date> --dry-run    # counts; MAY mint secrets/gmail-token.json
+uv run pta-finance ingest-receipts --source mail_samples --profile --originals-only --start-month 7  # no writes
+uv run pta-finance map-receipts --source mail_samples --start-month 7                                # no writes
+```
+
+These write. Each comment names exactly what:
+
+```bash
+uv run pta-finance check                                  # writes+deletes a probe row (test sheet)
+uv run pta-finance normalize                              # LEGACY: writes the live transactions tab
+uv run pta-finance report --fy YYYY --variant both        # HTML + 1 report_log row per variant
+uv run pta-finance sync-budget --fy 2027 --apply          # writes amount/notes to Budget Timeseries
+uv run pta-finance fetch-mail --since <date>              # .eml into [gmail] inbox_dir; no Sheet
+uv run pta-finance map-receipts --source mail_samples --start-month 7 --write-tab Reimbursements  # replaces it
+```
+
+Every writing verb above snapshots first, except `check` (it deletes its own probe row) and
+`fetch-mail` (it writes no Sheet). Both receipt-pipeline rules are load-bearing and fail
+silently: `--start-month` defaults to `1`, and `map-receipts` must cover `mail_samples/` in ONE
+run. Both are stated in full — and owned — by [docs/loading-receipts.md](docs/loading-receipts.md).
 
 ## 4. Directory layout
 
 ```
 pta_finance/        package (flat layout): config, ids, schema, models, sheets,
-                    backup, etl, cli, receipt_ingest (.eml/.mbox parser + profiler),
+                    backup, etl, cli, gmail_source (the ONLY Gmail surface: pinned
+                    read-only OAuth + query/list/fetch + deterministic .eml writer),
+                    receipt_ingest (.eml/.mbox parser + profiler),
                     receipt_map (Submission → flat "Reimbursements" ledger rows),
                     budget_sync (editable-budget-tab → Budget Timeseries reconcile),
                     report_source (Budget Timeseries → report/analyze inputs),
                     analytics/, reports/(templates/)
 tests/              fake-org fixtures + mocked gspread; test_smoke_pipeline.py is the wiring gate
 .github/            last-run.txt (scheduler keepalive) + workflows/ci.yml (PR gate)
-                    + workflows/monthly-report.yml (cron)
-secrets/            gitignored — service-account.json
+                    + workflows/monthly-report.yml (cron — reports only, no mail)
+secrets/            gitignored — service-account.json, gmail-client-secret.json,
+                    gmail-token.json (minted at first consent; never printed)
+mail_samples/       gitignored — fetched .eml + legacy Takeout .mbox, side by side (flat)
 snapshots/          gitignored — CSV backups
 config.toml         gitignored private config; config.example.toml ships fake values
+                    (incl. the commented-out, optional [gmail] block)
+documentation/      committed feature plans (e.g. gmail-ingest-plan.md)
 ```
 
 ## 5. Architecture
@@ -98,14 +121,33 @@ config.toml         gitignored private config; config.example.toml ships fake va
 
 **v1 automated build COMPLETE (Steps 1–8, issues #1–#8 closed).** The full pipeline works end-to-end
 under test: Sheets client, ETL/normalize, analytics, internal/external reports (runtime PII guard),
-smoke gate, and the monthly GitHub Actions workflow. 219 tests + 1 skipped; `mypy --strict` + ruff
+smoke gate, and the monthly GitHub Actions workflow. 332 tests + 1 skipped; `mypy --strict` + ruff
 clean. **Phase-4 receipt ingestion has shipped end-to-end:** `receipt_ingest.py` (`.eml`/`.mbox`
 parser + PII-free batch `Profile` + `Re:`/`Fwd:` dedup) + `receipt_map.py` (`Submission` → flat ledger
 rows) drive the `ingest-receipts` (preview / `--profile`) and `map-receipts` (`--write-tab`) CLIs,
 which land receipts in a flat **Reimbursements** Sheet tab (via `SheetsClient.replace_tab_grid`) that a
 dropdown-driven **Receipts Explorer** dashboard reads; operator load guide in `docs/loading-receipts.md`.
-Remaining: Budget Timeseries roll-up + Gmail-OAuth monthly cron. A
-**`sync-budget` command** (`budget_sync.py`) also landed: it reconciles an editable, operator-
+**The Gmail read-only ingest connector has also shipped** (`documentation/gmail-ingest-plan.md`,
+issues #15–#22): `gmail_source.py` + the `fetch-mail` CLI replace the manual Google Takeout export —
+user OAuth pinned to `gmail.readonly` (exact-equality-tested, re-checked at runtime), a date-scoped
+`after:`/`before:` query (no sender/subject filter, by design), and an idempotent `.eml` writer whose
+filename is `<sanitised Message-ID stem>-<8 hex of sha256(full raw message bytes)>.eml` — the hash is
+over the **whole message**, never over the Message-ID (amended 2026-08-25 after five extraction/
+truncation collision vectors; the Message-ID supplies the readable stem only). Files land **beside**
+the `.mbox` archives in `mail_samples/` so ONE `map-receipts` run dedups both
+(`documentation/gmail-ingest-plan.md` § Design Decision 10). `fetch-mail` prints counts only — never
+a subject, sender, or message id. **The cron half is deliberately NOT built:** no OAuth token goes
+into CI (a personal-mailbox refresh token in a public repo's Actions secrets would expose the whole
+inbox), so fetching is local-only and hands-on and the monthly workflow still does reports only
+(§ Design Decision 7). OAuth consent stays in **Testing** mode with a test user — publishing to
+Production would need a homepage + privacy-policy URL this project has no reason to host — so the
+refresh token expires ~7 days after consent and a browser re-approval is **expected behaviour**, not
+a bug (issue #18 tracks the longevity check). Known gap, still open with no tracker of its own:
+submissions sent only to a *second* mailbox during a role handover are not in the fetched mail and
+cannot be recovered by re-fetching — a thin month is the signal that a second, label-scoped export
+is needed (found during the backfill, closed issue #20; `docs/loading-receipts.md` carries the
+operator handling). Remaining: Budget Timeseries roll-up; live Drive fetch of linked receipt PDFs.
+A **`sync-budget` command** (`budget_sync.py`) also landed: it reconciles an editable, operator-
 maintained **"FY&lt;fy&gt; Budget"** Sheet tab back into the Budget Timeseries (dry-run diff by default;
 `--apply` snapshots first, then writes only changed amount/notes cells + appends new lines; never
 touches actuals/other-years/enrichment; removed lines flagged not deleted). **Google credentials are configured + working** — `secrets/service-account.json` (gitignored) +
@@ -119,6 +161,25 @@ setup + M2 real-sheet smoke are DONE). **Next = operator-gated observation:** M3
 - A Google account with a Cloud project (Sheets API + Drive API enabled) and a service account
   whose JSON key sits at `secrets/service-account.json`.
 - The target spreadsheet + Drive folders shared with the service-account email (Editor).
+- **For `fetch-mail` only (optional):** the Gmail API enabled in that same Cloud project, plus an
+  OAuth **Desktop app** client whose JSON sits at `secrets/gmail-client-secret.json`, and a
+  `[gmail]` block in `config.toml`. The service account is unusable here — reading a personal
+  mailbox needs user OAuth (Workspace domain-wide delegation is the only alternative). First run
+  opens a browser for a one-time read-only consent; `--dry-run` still mints the token, by contract.
+  Consent shows an "unverified app" warning (`gmail.readonly` is a restricted scope) — clear it via
+  Advanced → "go to … (unsafe)", but ONLY for the Desktop-app client the operator created themselves
+  in their own Cloud project (SETUP.md §6 step 5); this is never general advice for a consent screen
+  they did not initiate. Console labels drift: prefer the deep links
+  (`console.cloud.google.com/auth/overview`, `/auth/clients`, `/auth/scopes`, `/auth/audience`), and
+  do not upload a logo (it triggers app verification).
+- **Never print, `cat`, or `Get-Content` `secrets/gmail-token.json` or `secrets/gmail-client-secret.json`.**
+  Metadata checks (`Test-Path`, size) and effect-based verification (run `fetch-mail --dry-run`,
+  check the exit code) only — the token file holds a live refresh token.
+- **Gmail consent stays in Testing mode with a test user, by decision.** Production would require a
+  homepage + privacy-policy URL this project has no reason to host, so the refresh token expires
+  ~7 days after consent and hands-on runs need a browser re-approval roughly weekly — expected, not
+  a fault. Mail fetching is **local-only by design**: there is **no Gmail credential in CI** and the
+  monthly workflow does reports only.
 - Optional `[pdf]` extra needs WeasyPrint's Pango/Cairo native libs (heavy on Windows — PDF is
   optional; Markdown + HTML are the primary outputs).
 - GitHub repo secrets for CI: `GOOGLE_SA_KEY_B64`, `PTA_CONFIG_B64`.

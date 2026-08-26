@@ -269,20 +269,20 @@ explicitly so reviewers can confirm the classification rather than infer it.)*
 
 <!-- autofix-applied: 2026-08-25 -->
 ### Step M4: Google Cloud OAuth client + one-time consent (operator)
-- **Problem:** In the existing Cloud project, enable the Gmail API and create an OAuth **Desktop app** client. Download the client-secrets JSON to the gitignored `secrets/` directory and add the `[gmail]` block to the private `config.toml`. Run `pta-finance fetch-mail --since <recent-date> --dry-run` once to trigger the browser consent flow and mint the token. **Then set the OAuth consent screen to Production (or add the account as a test user):** while it is in *Testing*, refresh tokens silently expire after 7 days and every run will demand re-authorisation.
+- **Problem:** In the existing Cloud project, enable the Gmail API and create an OAuth **Desktop app** client. Download the client-secrets JSON to the gitignored `secrets/` directory and add the `[gmail]` block to the private `config.toml`. Run `pta-finance fetch-mail --since <recent-date> --dry-run` once to trigger the browser consent flow and mint the token. **Then add the consenting account as a test user and leave the publishing status at *Testing*.** *(Amended 2026-08-26, replacing "set the OAuth consent screen to Production": Production is unreachable for this project — Google requires a public homepage URL and a hosted privacy-policy URL, pages this project has no reason to host.)* The consequence is accepted rather than avoided: in *Testing*, refresh tokens expire 7 days after consent, so a hands-on run will re-open the browser for approval roughly weekly. That is expected behaviour, not a fault, and it is tolerable precisely because this phase is local-only by design (Design Decision 7 keeps the token out of CI).
 - **Type:** operator
 - **Issue:** #17
 - **Produces:** nothing in the repo — a gitignored client-secrets file, a gitignored token file, and a `config.toml` edit
-- **Done when:** `pta-finance fetch-mail --since <recent-date> --dry-run` exits 0 and reports a message count. Verified by exit code and count only — no token or secret file contents are ever printed (per the workspace `security.md` rule, "Never dump secret file contents" -- metadata and exit codes only, never file contents). The consent screen shows **Production** (or the account is listed as a test user).
+- **Done when:** `pta-finance fetch-mail --since <recent-date> --dry-run` exits 0 and reports a message count. Verified by exit code and count only — no token or secret file contents are ever printed (per the workspace `security.md` rule, "Never dump secret file contents" -- metadata and exit codes only, never file contents). The consenting account is listed as a **test user** and the publishing status is *Testing* (amended 2026-08-26 — Production is not reachable here; see Problem).
 - **Depends on:** 10 — the `Done when:` invokes `fetch-mail`, which Step 10 creates; depending on Step 9 alone would dispatch this step before the command exists.
 
 <!-- autofix-applied: 2026-08-25 -->
 ### Step M5: Refresh-token longevity check (wait)
-- **Problem:** Confirm the OAuth refresh token still works once the Testing-mode 7-day expiry window has passed. This is the only way to prove Step M4's Production setting actually took — a same-day check cannot detect the failure, because the token is valid for its first 7 days either way.
+- **Problem:** Observe what the OAuth refresh token actually does once the Testing-mode 7-day window has passed. *(Amended 2026-08-26: this step was written to prove a Production setting had taken. Production is unreachable for this project, so the consent screen stays in *Testing* and the expiry is now an accepted, documented cost rather than a defect to detect.)* A same-day check cannot see any of this, because the token is valid for its first 7 days either way.
 - **Type:** wait
 - **Issue:** #18
 - **Produces:** nothing — an observation only
-- **Done when:** `pta-finance fetch-mail --since <recent-date> --dry-run` exits 0 in a **fresh shell ≥8 days after consent**, without opening a browser or prompting for re-authorisation. If it demands re-consent, the consent screen is still in Testing — fix it and restart the 8-day clock.
+- **Done when:** `pta-finance fetch-mail --since <recent-date> --dry-run` is run in a **fresh shell ≥8 days after consent** and the outcome is recorded. In *Testing* mode a re-consent prompt at that point is the **expected** result (amended 2026-08-26), and re-approving then exiting 0 satisfies this step — it confirms the ~weekly cadence the operator should plan around. A run that exits 0 with no prompt is also fine; neither outcome is a failure.
 - **Depends on:** M4
 - **Blocks:** nothing — this is a background confirmation, deliberately OFF the critical path so the backfill is not stalled for over a week.
 
@@ -312,12 +312,13 @@ explicitly so reviewers can confirm the classification rather than infer it.)*
 - **Produces:** updated `SETUP.md`, `docs/loading-receipts.md`, `CLAUDE.md`, `plan.md`
 - **Done when:** `grep -i takeout SETUP.md docs/loading-receipts.md` returns only historical/backfill references, never the primary procedure; the docs contain no organization, school, person, or email address; `uv run pytest -q` still green.
 - **Depends on:** 12
+- **Status:** DONE (2026-08-26)
 
 ## 8. Risks and Open Questions
 
 | Item | Risk | Mitigation |
 |---|---|---|
-| OAuth consent in *Testing* mode | Refresh tokens expire after 7 days; every run demands re-auth and the connector looks broken | Step M4 makes publishing to Production an explicit operator action, and its `Done when:` requires proving the token survives **≥8 days** — a same-day check cannot detect this |
+| OAuth consent in *Testing* mode | Refresh tokens expire after 7 days; every run demands re-auth and the connector looks broken | Accepted deliberately (amended 2026-08-26): Production is unreachable without a homepage + privacy-policy URL, so the screen stays in *Testing* with the account as a test user, and the ~weekly re-approval is documented as expected behaviour in `SETUP.md` §6. Step M5 observes the real cadence — a same-day check cannot |
 | Broad date fetch downloads unrelated personal mail | Mail unrelated to the organization sits on local disk in the inbox directory | Accepted deliberately (Design Decision 8) — a filter would have missed 6 of 13 cases last round. Two independent gitignore rules cover the directory; the parser ignores non-form mail structurally; the directory can be cleared after each round |
 | `gmail.readonly` grants whole-mailbox read | The token can read everything, not just reimbursements | Read-only is the narrowest scope Gmail offers for this job — there is no per-label OAuth scope. Scope pinned by exact-equality test; the grant is revocable at any time from Google Account settings |
 | New transitive dependency surface | `google-api-python-client` pulls a sizable tree into a `mypy --strict` project | Existing `[[tool.mypy.overrides]]` already covers `google.*`; Step 9 confirms `mypy --strict` stays clean before anything else is built |
