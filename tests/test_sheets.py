@@ -215,6 +215,48 @@ def test_read_values_returns_raw_grid_coerced_to_str(fake_config: Config) -> Non
     ]
 
 
+def test_snapshot_values_read_tagged_user_entered_values_for_only_requested_tab(
+    fake_config: Config,
+) -> None:
+    formatted_grid = [
+        ["formula", "literal", "number", "boolean", "date", "empty"],
+        ["3", "=1+2", "$12.50", "TRUE", "1/2/2030", ""],
+    ]
+    tagged_grid = [
+        [{"userEnteredValue": {"stringValue": value}} for value in formatted_grid[0]],
+        [
+            {"userEnteredValue": {"formulaValue": "=1+2"}},
+            {"userEnteredValue": {"stringValue": "=1+2"}},
+            {"userEnteredValue": {"numberValue": 12.5}},
+            {"userEnteredValue": {"boolValue": True}},
+            {"userEnteredValue": {"numberValue": 47485}},
+            {"userEnteredValue": None},
+        ],
+    ]
+
+    class MetadataSpreadsheet(FakeSpreadsheet):
+        def __init__(self) -> None:
+            super().__init__({_TXN: FakeWorksheet(formatted_grid)})
+            self.metadata_params: list[dict[str, object]] = []
+
+        def fetch_sheet_metadata(self, params: dict[str, object]) -> dict[str, object]:
+            self.metadata_params.append(dict(params))
+            return {"sheets": [{"data": [{"rowData": [{"values": row} for row in tagged_grid]}]}]}
+
+    spreadsheet = MetadataSpreadsheet()
+    client = SheetsClient(fake_config, gspread_client=FakeClient(spreadsheet))  # type: ignore[arg-type]
+
+    assert client.read_values(_TXN) == formatted_grid
+    assert client.read_snapshot_values(_TXN) == tagged_grid
+    assert spreadsheet.metadata_params == [
+        {
+            "includeGridData": True,
+            "ranges": "'transactions'",
+            "fields": "sheets.data.rowData.values.userEnteredValue",
+        }
+    ]
+
+
 def test_append_rows_writes_in_schema_order(fake_config: Config) -> None:
     ws = FakeWorksheet([_header_row()])
     client = _client(fake_config, ws)

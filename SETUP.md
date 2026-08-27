@@ -97,19 +97,21 @@ between `/d/` and `/edit` is the `spreadsheet_id`.
 | `[contacts] president` / `treasurer` / `cfo` | the role emails (president & account_holders are lists) |
 | `[contacts] account_holders` | everyone who should later be allowed in (Phase-3 allowlist) |
 | `[fiscal_year] start_month` | `1` for a calendar-year fiscal period (Jan–Dec) |
+| `[receipt_mapping] received_since` | optional inclusive `YYYY-MM-DD` outer email-date cutoff for ledger membership; omit only for all-history mapping |
 | `[grades] labels` | your grade range, e.g. `["K","1","2","3","4","5"]` |
 | `[sheets] spreadsheet_id` | the production Sheet's ID (from its URL) |
 | `[sheets] test_spreadsheet_id` | the throwaway test sheet's ID (or reuse `spreadsheet_id` to skip making one) |
 | `[sheets] drive_receipts_folder_id` / `drive_reports_folder_id` | **Phase 2** — any non-empty placeholder is fine for v1 (unused) |
 | `[google] service_account_file` | leave as `secrets/service-account.json` |
 
-Every field must be non-empty or `pta-finance` will fail fast naming the missing field. The
-two Drive folder IDs are not used in v1 (live Drive upload is Phase 2) — a placeholder string
-satisfies validation.
+Every required field — and every field in an optional section you enable — must be valid and
+non-empty or `pta-finance` will fail fast naming it. The two Drive folder IDs are not used in v1
+(live Drive upload is Phase 2) — a placeholder string satisfies validation.
 
-`config.example.toml` also carries a commented-out **`[gmail]`** block. It is genuinely optional —
-leave it commented out unless you are setting up mail fetching, which is **§6 "Gmail access"**
-below. An org that never wires up Gmail is unaffected.
+`config.example.toml` also carries commented-out **`[receipt_mapping]`** and **`[gmail]`** blocks.
+Both are optional. Set `receipt_mapping.received_since` when `map-receipts` should exclude archive
+submissions received before a bounded term; omit it for intentional all-history mapping. Leave
+`[gmail]` commented unless you are setting up mail fetching, which is **§6 "Gmail access"** below.
 
 ---
 
@@ -312,16 +314,20 @@ To turn the reimbursement-form emails in a treasurer mailbox into a **Reimbursem
 **[docs/loading-receipts.md](docs/loading-receipts.md)** — `fetch-mail` → `map-receipts --write-tab`,
 with a built-in **completeness check** so you don't miss any submissions.
 
-That guide owns the load procedure and its two rules; both are repeated here only because getting
-either wrong corrupts the ledger with **no error message at all**, and the full statement of each
-is at the top of the guide:
+That guide owns the load procedure and its three rules; they are repeated here only because each
+controls a different part of ledger correctness, and the full statement is at the top of the
+guide:
 
 - **Map in ONE run.** Point `map-receipts --source` at the whole `mail_samples/` *directory* once,
   so fetched `.eml` files and any `.mbox` archives dedup against each other. Two separate runs each
   look clean while together double-counting every message the sources share.
+- **Set the ledger cutoff.** `fetch-mail --since` limits acquisition only; it does not exclude
+  older submissions already present in legacy archives. Use the optional private
+  `[receipt_mapping] received_since = "YYYY-MM-DD"` as the inclusive ledger cutoff.
 - **Use the configured fiscal year.** Standard `ingest-receipts` / `map-receipts` commands read
   `[fiscal_year] start_month` from `config.toml`. Use `--start-month N` only as an intentional
-  one-run override; an explicit value wins over config.
+  one-run override; an explicit value wins over config. Without that override, mapping loads one
+  initial config snapshot and reuses it for fiscal-year and receipt-cutoff policy.
 
 *Historical:* before `fetch-mail`, loads were done with a manual Gmail label → **Google Takeout**
 `.mbox` export. Existing Takeout archives remain valid input for backfill — keep them in

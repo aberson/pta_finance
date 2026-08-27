@@ -16,6 +16,7 @@ import pytest
 
 from pta_finance import budget_sync, cli, ids, report_source
 from pta_finance.config import Config
+from tests.conftest import tagged_user_entered_grid
 
 # --- a 14-column live "Budget Timeseries" grid (the real shape: 9 required + 5 enrichment) ---
 _TS_HEADER = [
@@ -451,6 +452,12 @@ class FakeSyncClient:
             return [list(r) for r in _BUDGET_TAB_GRID]
         if tab == report_source.BUDGET_TIMESERIES_TAB:
             return [list(r) for r in _TS_GRID]
+        return []
+
+    def read_snapshot_values(self, tab: str) -> list[list[dict[str, object]]]:
+        self.read_values_calls.append(tab)
+        if tab == report_source.BUDGET_TIMESERIES_TAB:
+            return tagged_user_entered_grid(_TS_GRID)
         return []
 
     def update_cells(self, tab: str, cell_values: Mapping[str, str]) -> None:

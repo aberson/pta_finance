@@ -10,6 +10,8 @@ import mailbox
 from email.message import EmailMessage
 from pathlib import Path
 
+import pytest
+
 from pta_finance import receipt_ingest, receipt_map
 from pta_finance.receipt_ingest import LineItem, Submission
 
@@ -92,6 +94,67 @@ def test_map_total_mismatch_flags_needs_review() -> None:
     assert "total-mismatch" in rows[0]["needs_review"]
 
 
+def test_map_nonfinite_amounts_stay_text_and_are_flagged() -> None:
+    spellings = (
+        "NaN",
+        "+NaN",
+        "-NaN",
+        "sNaN",
+        "+sNaN",
+        "-sNaN",
+        "Infinity",
+        "+Infinity",
+        "-Infinity",
+        "Inf",
+        "+Inf",
+        "-Inf",
+    )
+    for index, amount in enumerate(spellings, start=1):
+        sub = _sub(
+            message_id=f"<nonfinite-{index}@example.org>",
+            requestor_email=f"nonfinite-{index}@example.org",
+            line_items=(LineItem(1, "2026-05-01", "Garden Club", "x", amount),),
+            total=amount,
+        )
+
+        (row,) = receipt_map.map_submissions([sub], category_map=_MAP, start_month=7)
+
+        assert row["amount"] == amount
+        assert "bad-amount" in row["needs_review"]
+        assert row["reconciles"] == "n/a"
+
+
+def test_map_opposite_infinities_returns_reviewable_rows_instead_of_raising() -> None:
+    sub = _sub(
+        line_items=(
+            LineItem(1, "2030-09-01", "Garden Club", "first", "Infinity"),
+            LineItem(2, "2030-09-01", "Garden Club", "second", "-Infinity"),
+        ),
+        total="0.00",
+    )
+
+    rows = receipt_map.map_submissions([sub], category_map=_MAP, start_month=7)
+
+    assert [row["amount"] for row in rows] == ["Infinity", "-Infinity"]
+    assert all(row["reconciles"] == "n/a" for row in rows)
+    assert all("bad-amount" in row["needs_review"] for row in rows)
+
+
+@pytest.mark.parametrize("amount", ["1e100000", "1e-100000", "-1e100000", "-1e-100000"])
+def test_map_extreme_exponents_stay_compact_and_reviewable(amount: str) -> None:
+    sub = _sub(
+        line_items=(LineItem(1, "2030-09-01", "Garden Club", "Example item", amount),),
+        total=amount,
+    )
+
+    rows = receipt_map.map_submissions([sub], category_map=_MAP, start_month=7)
+
+    assert len(rows) == 1
+    assert rows[0]["amount"] == amount
+    assert "bad-amount" in rows[0]["needs_review"]
+    assert rows[0]["reconciles"] == "n/a"
+
+
 def test_map_dedup_by_message_id() -> None:
     s1 = _sub(
         message_id="<dup@x>",
@@ -136,6 +199,19 @@ def test_map_fiscal_year_falls_back_to_received_date() -> None:
     # no line date -> submission FY from the received header (Apr 2026 -> FY2026 under July start)
     assert rows[0]["fiscal_year"] == "FY2026"
     assert rows[0]["date"] == ""
+
+
+def test_map_received_fallback_preserves_header_local_calendar_date() -> None:
+    sub = _sub(
+        received="Mon, 01 Jul 2030 00:30:00 +1400",
+        line_items=(LineItem(1, "", "Garden Club", "x", "10.00"),),
+        total="10.00",
+    )
+
+    rows = receipt_map.map_submissions([sub], category_map=_MAP, start_month=7)
+
+    # UTC conversion would move this to June 30 / FY2030. The header-local July 1 date is FY2031.
+    assert rows[0]["fiscal_year"] == "FY2031"
 
 
 def test_map_form_default_fills_blank_category() -> None:

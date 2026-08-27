@@ -29,6 +29,9 @@ drive_reports_folder_id  = "<private-drive-folder-id>"     # report outputs (nev
 [google]
 service_account_file = "secrets/service-account.json"
 
+# [receipt_mapping]                           # optional - omit for all-history mapping
+# received_since = "YYYY-MM-DD"               # inclusive outer email Date-header cutoff
+
 # [gmail]                                    # optional - omit entirely if unused
 # client_secrets_file = "secrets/gmail-client-secret.json"   # OAuth Desktop-app client
 # token_file          = "secrets/gmail-token.json"           # written at first consent

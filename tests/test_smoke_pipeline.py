@@ -220,7 +220,10 @@ def test_full_pipeline_wires_end_to_end(fake_config: Config, tmp_path: Path) -> 
     snap_dirs = list(snap_root.iterdir())
     assert snap_dirs, "normalize must snapshot before writing"
     snapshot_files = {p.name for p in snap_dirs[0].iterdir()}
-    assert snapshot_files == {f"{tab}.csv" for tab in schema.TABS}
+    expected_snapshot_files = {
+        filename for tab in schema.TABS for filename in (f"{tab}.csv", f"{tab}.raw.json")
+    }
+    assert snapshot_files == expected_snapshot_files
     # ETL touched the fixture as expected (wiring sanity, not business logic): the id-less valid
     # row got an id, its duplicate + the malformed row were flagged.
     assert result.ids_assigned >= 1

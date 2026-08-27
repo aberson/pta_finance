@@ -4,7 +4,7 @@ Wired subcommands:
 
     check      Step 3 — validate report_log schema + Budget Timeseries source; round-trip a row
     init-sheet bootstrap the spreadsheet with the live-required tab(s) + their schema headers
-    snapshot   Step 3 — export CSV backups of the live tab set under ``snapshots/<utc>/``
+    snapshot   Step 3 — export safe CSV + exact tagged entered-value JSON under ``snapshots/<utc>/``
     normalize  Step 4 — (legacy) normalize legacy ledger -> canonical schema (snapshot first)
     analyze    Step 5 — run analytics over the "Budget Timeseries" tab; print a summary
     report     Step 6 — generate fiscal-year report(s); write HTML to reports/output/, log a run
@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import calendar
-import csv
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -54,11 +53,84 @@ def _load(args: argparse.Namespace) -> Config:
     return load_config(Path(args.config))
 
 
-def _receipt_start_month(args: argparse.Namespace) -> int:
-    """Resolve receipt FY month: an explicit CLI override wins over private config."""
+def _receipt_start_month(args: argparse.Namespace, *, config: Config | None) -> int:
+    """Resolve receipt FY month from an explicit override or the caller's config snapshot."""
     if args.start_month is not None:
         return int(args.start_month)
-    return _load(args).fiscal_year.start_month
+    if config is None:
+        raise RuntimeError("receipt fiscal year requires an initial config snapshot")
+    return config.fiscal_year.start_month
+
+
+def _received_since_arg(raw: str) -> date:
+    """Argparse converter for a strict ISO ``YYYY-MM-DD`` calendar date."""
+    try:
+        parsed = date.fromisoformat(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an ISO date (YYYY-MM-DD)") from exc
+    if parsed.isoformat() != raw:
+        raise argparse.ArgumentTypeError("must be an ISO date (YYYY-MM-DD)")
+    return parsed
+
+
+def _nonempty_tab_name_arg(raw: str) -> str:
+    """Argparse converter that rejects an explicitly empty Sheet tab name."""
+    tab_name = raw.strip()
+    if not tab_name:
+        raise argparse.ArgumentTypeError("must contain at least one non-whitespace character")
+    return tab_name
+
+
+def _receipt_received_cutoff(
+    args: argparse.Namespace, *, config: Config | None
+) -> tuple[date | None, str]:
+    """Resolve map-receipts' inclusive cutoff and its operator-visible source."""
+    received_since = args.received_since
+    if received_since is not None:
+        if not isinstance(received_since, date):
+            raise TypeError("map-receipts received_since must be a date")
+        return received_since, "--received-since"
+    if bool(args.all_received):
+        return None, "--all-received"
+    if config is not None and config.receipt_mapping is not None:
+        return config.receipt_mapping.received_since, "config: receipt_mapping.received_since"
+    return None, "not configured"
+
+
+def _normalized_finite_amount(raw: str) -> str | None:
+    """Return normalized finite money, or ``None`` for a rejected amount cell."""
+    try:
+        return f"{receipt_map.parse_finite_amount(raw):.2f}"
+    except ValueError:
+        return None
+
+
+def _sheet_amount_cell(raw: str) -> str:
+    """Keep valid money numeric; force rejected USER_ENTERED values to durable safe text."""
+    normalized = _normalized_finite_amount(raw)
+    if normalized is not None:
+        return normalized
+    neutralized = backup.encode_formula_safe_text(raw)
+    # USER_ENTERED consumes this transport apostrophe. Any safety apostrophe added above—or any
+    # literal apostrophes already present in the rejected source text—then remains in the cell.
+    return f"'{neutralized}"
+
+
+def _csv_receipt_row(row: dict[str, str]) -> list[object]:
+    """Order one review-CSV row and normalize its finite monetary cell."""
+    ordered: list[object] = []
+    for field in receipt_map.FIELDNAMES:
+        raw = row[field]
+        if field == "amount":
+            normalized = _normalized_finite_amount(raw)
+            ordered.append(
+                backup.validated_csv_number(normalized)
+                if normalized is not None
+                else backup.force_csv_text(raw)
+            )
+        else:
+            ordered.append(raw)
+    return ordered
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
@@ -187,7 +259,7 @@ def _cmd_init_sheet(args: argparse.Namespace) -> int:
 
 
 def _cmd_snapshot(args: argparse.Namespace) -> int:
-    """Export a CSV snapshot of the live tab set under ``snapshots/<utc>/``.
+    """Export safe CSV + exact tagged entered-value JSON under ``snapshots/<utc>/``.
 
     Backs up :data:`backup.LIVE_SNAPSHOT_TABS` — the live-required tab(s) plus the operator-
     maintained "Budget Timeseries" source — and skips any of those tabs the spreadsheet does
@@ -468,7 +540,7 @@ def _money(raw: str) -> str:
     if raw.strip() == "":
         return "(blank)"
     try:
-        value = models.parse_amount(raw)
+        value = receipt_ingest.parse_finite_amount(raw)
     except ValueError:
         return f"{raw}?"
     return f"${value:,.2f}"
@@ -537,11 +609,9 @@ def _write_category_csv(prof: receipt_ingest.Profile, path: Path) -> None:
     ``canonical_category`` column for the operator to fill in when building the mapping.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["raw_category", "line_item_count", "canonical_category (fill in)"])
-        for name, count in prof.categories:
-            writer.writerow([name, count, ""])
+    header = ["raw_category", "line_item_count", "canonical_category (fill in)"]
+    rows = [[name, count, ""] for name, count in prof.categories]
+    backup.write_formula_safe_csv(path, [header, *rows])
     print(f"ingest-receipts: wrote {len(prof.categories)} category row(s) to {path}")
 
 
@@ -571,7 +641,8 @@ def _cmd_ingest_receipts(args: argparse.Namespace) -> int:
         print("  (download a few reimbursement emails as .eml into that folder — see SETUP.md)")
         return 1
 
-    start_month = _receipt_start_month(args)
+    config = _load(args) if args.start_month is None else None
+    start_month = _receipt_start_month(args, config=config)
     subject_filter = args.subject_filter or None
 
     # One read pass: parse every message, keep the recognized submissions (with a display label).
@@ -693,10 +764,28 @@ def _cmd_ingest_receipts(args: argparse.Namespace) -> int:
             "receipt_urls",
             "attachments",
         ]
-        with csv_path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(csv_rows)
+        money_fields = frozenset({"amount", "total_stated"})
+        ordered_rows: list[list[object]] = []
+        for row in csv_rows:
+            ordered_row: list[object] = []
+            for field in fieldnames:
+                raw = row[field]
+                if field in money_fields:
+                    normalized = _normalized_finite_amount(raw)
+                    ordered_row.append(
+                        backup.validated_csv_number(normalized)
+                        if normalized is not None
+                        else backup.force_csv_text(raw)
+                    )
+                elif field == "item_index":
+                    ordered_row.append(backup.validated_csv_number(raw))
+                else:
+                    ordered_row.append(raw)
+            ordered_rows.append(ordered_row)
+        backup.write_formula_safe_csv(
+            csv_path,
+            [fieldnames, *ordered_rows],
+        )
         print(f"ingest-receipts: wrote {len(csv_rows)} line-item row(s) to {csv_path}")
 
     return 0
@@ -710,8 +799,10 @@ def _cmd_map_receipts(args: argparse.Namespace) -> int:
     :func:`pta_finance.receipt_map.map_submissions` (carry-forward blank category/date, skip
     blank-amount lines, canonical-category lookup, dedup, ``needs_review``), and prints a summary.
     ``--csv`` writes the full flat ledger to a gitignored path for review; ``--limit`` previews the
-    first N rows. ``--write-tab NAME`` additionally creates/replaces a **machine-owned** Sheet tab
-    with the ledger (this is the only mode that needs credentials + touches the Sheet).
+    first N rows. An inclusive received-date cutoff is resolved from explicit CLI overrides, then
+    optional private config, and applied before mapper deduplication. ``--write-tab NAME``
+    additionally creates/replaces a **machine-owned** Sheet tab with the ledger (this is the only
+    mode that needs credentials + touches the Sheet).
     """
     source = Path(args.source)
     if not source.exists():
@@ -724,9 +815,13 @@ def _cmd_map_receipts(args: argparse.Namespace) -> int:
         print("   the canonical_category column)")
         return 1
 
+    config_path = Path(args.config)
+    needs_config = args.start_month is None or args.write_tab is not None or config_path.exists()
+    config = _load(args) if needs_config else None
     category_map = receipt_map.load_category_map(map_path)
     form_defaults = receipt_map.load_form_defaults(map_path)
-    start_month = _receipt_start_month(args)
+    start_month = _receipt_start_month(args, config=config)
+    received_cutoff, cutoff_source = _receipt_received_cutoff(args, config=config)
     subject_filter = args.subject_filter or None
 
     subs: list[receipt_ingest.Submission] = []
@@ -742,20 +837,51 @@ def _cmd_map_receipts(args: argparse.Namespace) -> int:
             continue
         subs.append(sub)
 
+    excluded = 0
+    invalid_received = 0
+    if received_cutoff is not None:
+        in_scope: list[receipt_ingest.Submission] = []
+        for sub in subs:
+            received_date = receipt_ingest.parse_received_date(sub.received)
+            if received_date is None:
+                invalid_received += 1
+            elif received_date < received_cutoff:
+                excluded += 1
+            else:
+                in_scope.append(sub)
+    else:
+        in_scope = subs
+
+    cutoff_text = f"{received_cutoff.isoformat()} inclusive" if received_cutoff else "none"
+    print(f"  received cutoff : {cutoff_text} ({cutoff_source}); excluded {excluded} submission(s)")
+    if invalid_received:
+        print(
+            "map-receipts: cannot apply received cutoff: "
+            f"{invalid_received} recognized original submission(s) have a missing or malformed "
+            "Date header"
+        )
+        return 1
     rows = receipt_map.map_submissions(
-        subs, category_map=category_map, form_defaults=form_defaults, start_month=start_month
+        in_scope, category_map=category_map, form_defaults=form_defaults, start_month=start_month
     )
+    if args.write_tab is not None and not rows:
+        print(
+            "map-receipts: refusing --write-tab: mapping produced zero ledger rows from "
+            f"{len(in_scope)} in-scope submission(s) "
+            f"({len(subs)} recognized original submission(s)); existing tab was not changed"
+        )
+        return 1
 
     flagged = sum(1 for row in rows if row["needs_review"])
     unmapped = sum(1 for row in rows if "unmapped-category" in row["needs_review"])
     total = 0.0
     for row in rows:
         try:
-            total += float(row["amount"])
+            total += float(receipt_map.parse_finite_amount(row["amount"]))
         except ValueError:
             pass
     print(
-        f"map-receipts: {len(subs)} submission(s) (originals; {replies} Re:/Fwd: skipped) "
+        f"map-receipts: {len(in_scope)} submission(s) (originals; {replies} Re:/Fwd: skipped) "
         f"-> {len(rows)} ledger row(s)"
     )
     print(f"  category map : {len(category_map)} mapping(s), {len(form_defaults)} form default(s)")
@@ -772,12 +898,27 @@ def _cmd_map_receipts(args: argparse.Namespace) -> int:
                 f"${row['amount']:>10}  {row['needs_review']}"
             )
 
-    if args.write_tab:
-        config = _load(args)
+    if args.write_tab is not None:
+        if config is None:
+            raise RuntimeError("map-receipts write is missing its initial config snapshot")
         client = SheetsClient(config)
         if args.write_tab in client.list_worksheet_titles():
-            backup.snapshot_raw_tab(client, args.write_tab, Path(args.dest))
-        ordered = [[row[col] for col in receipt_map.FIELDNAMES] for row in rows]
+            backup.snapshot_raw_tab(
+                client,
+                args.write_tab,
+                Path(args.dest),
+            )
+        ordered = [
+            [
+                (
+                    _sheet_amount_cell(row[col])
+                    if col == "amount"
+                    else backup.encode_formula_safe_text(row[col])
+                )
+                for col in receipt_map.FIELDNAMES
+            ]
+            for row in rows
+        ]
         status = client.replace_tab_grid(
             args.write_tab,
             list(receipt_map.FIELDNAMES),
@@ -789,10 +930,12 @@ def _cmd_map_receipts(args: argparse.Namespace) -> int:
     if args.csv:
         csv_path = Path(args.csv)
         csv_path.parent.mkdir(parents=True, exist_ok=True)
-        with csv_path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(receipt_map.FIELDNAMES))
-            writer.writeheader()
-            writer.writerows(rows)
+        header = list(receipt_map.FIELDNAMES)
+        ordered_rows = [_csv_receipt_row(row) for row in rows]
+        backup.write_formula_safe_csv(
+            csv_path,
+            [header, *ordered_rows],
+        )
         print(f"map-receipts: wrote {len(rows)} row(s) to {csv_path}")
     return 0
 
@@ -900,9 +1043,10 @@ def _cmd_sync_budget(args: argparse.Namespace) -> int:
     :func:`pta_finance.budget_sync.plan_budget_sync`, and PRINTS it (amount changes / note
     changes / new lines / flagged-removed / unchanged). The default is a DRY RUN — no writes.
 
-    With ``--apply`` it snapshots the "Budget Timeseries" tab FIRST (a faithful full-grid
-    :func:`pta_finance.backup.snapshot_raw_tab` backup — every column, so nothing is lost),
-    then writes ONLY the changed ``amount`` / ``notes`` cells and appends new lines. Only
+    With ``--apply`` it snapshots the "Budget Timeseries" tab FIRST (a full entered-value
+    :func:`pta_finance.backup.snapshot_raw_tab` backup of every column; formatting/comments are
+    outside the artifact), then writes ONLY changed ``amount`` / ``notes`` cells and appends new
+    lines. Only
     ``measure == "proposed"`` rows of ``--fy`` are touched; all enrichment columns are
     preserved, and a line present in the DB but absent from the tab is FLAGGED, never deleted.
 
@@ -985,7 +1129,11 @@ def _cmd_sync_budget(args: argparse.Namespace) -> int:
 
     # Snapshot the FULL "Budget Timeseries" grid BEFORE any mutation (corruption protection;
     # faithful — keeps every enrichment column, unlike snapshot_all_tabs).
-    backup.snapshot_raw_tab(client, report_source.BUDGET_TIMESERIES_TAB, Path(args.dest))
+    backup.snapshot_raw_tab(
+        client,
+        report_source.BUDGET_TIMESERIES_TAB,
+        Path(args.dest),
+    )
     client.update_cells(report_source.BUDGET_TIMESERIES_TAB, plan.cell_updates)
     client.append_raw_rows(report_source.BUDGET_TIMESERIES_TAB, plan.append_rows)
     print(
@@ -1047,7 +1195,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_init_sheet.set_defaults(func=_cmd_init_sheet)
 
-    p_snapshot = sub.add_parser("snapshot", help="export CSV backups of the live tab set")
+    p_snapshot = sub.add_parser(
+        "snapshot",
+        help="export safe CSV + exact tagged entered-value JSON backups of the live tab set",
+    )
     _add_config_arg(p_snapshot)
     p_snapshot.add_argument(
         "--dest",
@@ -1223,6 +1374,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="only treat emails whose subject contains this substring as reimbursement forms",
     )
+    received_group = p_map.add_mutually_exclusive_group()
+    received_group.add_argument(
+        "--received-since",
+        type=_received_since_arg,
+        metavar="YYYY-MM-DD",
+        help="inclusive RFC-822 Date-header cutoff; overrides [receipt_mapping] received_since",
+    )
+    received_group.add_argument(
+        "--all-received",
+        action="store_true",
+        help="disable the configured received-date cutoff for this run",
+    )
     p_map.add_argument(
         "--limit",
         type=int,
@@ -1236,6 +1399,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_map.add_argument(
         "--write-tab",
+        type=_nonempty_tab_name_arg,
         default=None,
         metavar="NAME",
         help="also create/replace a machine-owned Sheet tab NAME with the ledger "

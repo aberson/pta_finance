@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -172,3 +173,37 @@ def test_gmail_section_that_is_not_a_table_raises(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as exc_info:
         load_config(_write(tmp_path, text))
     assert exc_info.value.field == "gmail"
+
+
+# --------------------------------------------------------------------------------------
+# The OPTIONAL [receipt_mapping] section. Its received_since value is the authoritative,
+# inclusive ledger-membership cutoff; older configs without the section remain all-history.
+# --------------------------------------------------------------------------------------
+
+_RECEIPT_MAPPING_SECTION = """
+[receipt_mapping]
+received_since = "2030-09-01"
+"""
+
+
+def test_missing_receipt_mapping_section_yields_none(tmp_path: Path) -> None:
+    cfg = load_config(_write(tmp_path, _FULL_CONFIG))
+    assert cfg.receipt_mapping is None
+
+
+def test_receipt_mapping_received_since_parses_iso_date(tmp_path: Path) -> None:
+    cfg = load_config(_write(tmp_path, _FULL_CONFIG + _RECEIPT_MAPPING_SECTION))
+
+    assert cfg.receipt_mapping is not None
+    assert cfg.receipt_mapping.received_since == date(2030, 9, 1)
+
+
+@pytest.mark.parametrize("value", ['"not-a-date"', '""', "123"])
+def test_malformed_receipt_mapping_cutoff_names_field(tmp_path: Path, value: str) -> None:
+    text = _FULL_CONFIG + f"\n[receipt_mapping]\nreceived_since = {value}\n"
+
+    with pytest.raises(ConfigError) as exc_info:
+        load_config(_write(tmp_path, text))
+
+    assert exc_info.value.field == "receipt_mapping.received_since"
+    assert "receipt_mapping.received_since" in str(exc_info.value)

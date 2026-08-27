@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 import gspread
 from gspread.exceptions import APIError
-from gspread.utils import ValueInputOption, rowcol_to_a1
+from gspread.utils import ValueInputOption, absolute_range_name, rowcol_to_a1
 
 from pta_finance import schema
 
@@ -51,6 +51,79 @@ _RETRYABLE_STATUSES = frozenset({429, 500, 503})
 # Column index (1-based) of the ``id`` key column. Every tab whose rows carry an
 # ``id`` lists it first (see schema.py), so this is constant across upsert targets.
 _ID_COLUMN_INDEX = 1
+
+_USER_ENTERED_VALUE_KEYS = frozenset({"formulaValue", "stringValue", "numberValue", "boolValue"})
+
+
+def _empty_snapshot_cell() -> dict[str, Any]:
+    return {"userEnteredValue": None}
+
+
+def _normalize_snapshot_cell(raw: object) -> dict[str, Any]:
+    """Normalize one Sheets API cell to the versioned snapshot cell vocabulary."""
+    if not isinstance(raw, Mapping):
+        return _empty_snapshot_cell()
+    entered = raw.get("userEnteredValue")
+    if entered is None:
+        return _empty_snapshot_cell()
+    if not isinstance(entered, Mapping):
+        raise ValueError("snapshot userEnteredValue must be an object or null")
+    present = [key for key in _USER_ENTERED_VALUE_KEYS if key in entered]
+    if len(present) != 1:
+        raise ValueError("snapshot userEnteredValue must contain exactly one supported value")
+    key = present[0]
+    value = entered[key]
+    if key in {"formulaValue", "stringValue"} and not isinstance(value, str):
+        raise ValueError(f"snapshot {key} must be text")
+    if key == "numberValue" and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+        raise ValueError("snapshot numberValue must be numeric")
+    if key == "boolValue" and not isinstance(value, bool):
+        raise ValueError("snapshot boolValue must be boolean")
+    return {"userEnteredValue": {key: value}}
+
+
+def _snapshot_grid_from_metadata(metadata: Mapping[str, Any]) -> list[list[dict[str, Any]]]:
+    """Rebuild the requested worksheet's sparse rowData as a tagged rectangular-ish grid."""
+    grid: list[list[dict[str, Any]]] = []
+    raw_sheets = metadata.get("sheets", [])
+    if not isinstance(raw_sheets, list):
+        raise ValueError("snapshot metadata sheets must be a list")
+    if len(raw_sheets) > 1:
+        raise ValueError("snapshot metadata unexpectedly returned multiple worksheets")
+    for raw_sheet in raw_sheets:
+        if not isinstance(raw_sheet, Mapping):
+            continue
+        raw_data = raw_sheet.get("data", [])
+        if not isinstance(raw_data, list):
+            raise ValueError("snapshot metadata data must be a list")
+        for block in raw_data:
+            if not isinstance(block, Mapping):
+                continue
+            start_row = block.get("startRow", 0)
+            start_column = block.get("startColumn", 0)
+            if not isinstance(start_row, int) or not isinstance(start_column, int):
+                raise ValueError("snapshot grid offsets must be integers")
+            row_data = block.get("rowData", [])
+            if not isinstance(row_data, list):
+                raise ValueError("snapshot rowData must be a list")
+            for row_offset, raw_row in enumerate(row_data):
+                target_row = start_row + row_offset
+                while len(grid) <= target_row:
+                    grid.append([])
+                if not isinstance(raw_row, Mapping):
+                    continue
+                raw_values = raw_row.get("values", [])
+                if not isinstance(raw_values, list):
+                    raise ValueError("snapshot row values must be a list")
+                row = grid[target_row]
+                while len(row) < start_column:
+                    row.append(_empty_snapshot_cell())
+                for column_offset, raw_cell in enumerate(raw_values):
+                    target_column = start_column + column_offset
+                    while len(row) <= target_column:
+                        row.append(_empty_snapshot_cell())
+                    row[target_column] = _normalize_snapshot_cell(raw_cell)
+    return grid
 
 
 class SchemaError(Exception):
@@ -204,7 +277,7 @@ class SheetsClient:
         return [{str(k): _as_str(v) for k, v in record.items()} for record in records]
 
     def read_values(self, tab: str) -> list[list[str]]:
-        """Read a worksheet's RAW grid (every cell coerced to ``str``).
+        """Read a worksheet's formatted whole grid (every cell coerced to ``str``).
 
         Unlike :meth:`read_tab` this does NOT key by a header row — it returns the cells
         exactly as laid out, header row included. Used by ``import-budget`` to scan a messy
@@ -214,6 +287,25 @@ class SheetsClient:
         ws = self.worksheet(tab)
         rows: list[list[Any]] = self._with_retry(lambda: ws.get_all_values())
         return [[_as_str(cell) for cell in row] for row in rows]
+
+    def read_snapshot_values(self, tab: str) -> list[list[dict[str, Any]]]:
+        """Read a tagged ``userEnteredValue`` grid for exact snapshot recovery.
+
+        The Sheets grid-data API distinguishes a formula from an identical literal string and
+        distinguishes ``stringValue``, ``numberValue``, ``boolValue``, and an empty cell. Only the
+        requested worksheet range and this one field are fetched. Unlike :meth:`read_values`, this
+        method performs no formatting or string coercion and is reserved for backup artifacts.
+        """
+        ws = self.worksheet(tab)
+        params: dict[str, str | int | bool | float | list[str] | None] = {
+            "includeGridData": True,
+            "ranges": absolute_range_name(ws.title),
+            "fields": "sheets.data.rowData.values.userEnteredValue",
+        }
+        metadata: Mapping[str, Any] = self._with_retry(
+            lambda: self.connect().fetch_sheet_metadata(params=params)
+        )
+        return _snapshot_grid_from_metadata(metadata)
 
     def validate_schema(self, tab: str) -> None:
         """Assert the worksheet's header row equals ``schema.TABS[tab]``.

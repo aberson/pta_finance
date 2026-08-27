@@ -25,10 +25,10 @@ from __future__ import annotations
 
 import csv
 from collections.abc import Iterable, Mapping
-from email.utils import parsedate_to_datetime
+from decimal import Decimal
 from pathlib import Path
 
-from pta_finance import ids, models, receipt_ingest
+from pta_finance import backup, ids, models, receipt_ingest
 from pta_finance.receipt_ingest import Submission
 
 __all__ = [
@@ -36,6 +36,7 @@ __all__ = [
     "load_category_map",
     "load_form_defaults",
     "map_submissions",
+    "parse_finite_amount",
 ]
 
 # Rows in the category-map CSV whose raw_category starts with this marker declare a per-form
@@ -73,7 +74,7 @@ def load_category_map(path: Path) -> dict[str, str]:
     with path.open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
-            raw = (row.get("raw_category") or "").strip()
+            raw = backup.decode_formula_safe_text(row.get("raw_category") or "").strip()
             canonical = (row.get("canonical_category") or "").strip()
             if raw.startswith(_FORM_DEFAULT_PREFIX):
                 continue  # a per-form default, not a category mapping (see load_form_defaults)
@@ -120,10 +121,15 @@ def _month_of(date_str: str) -> str:
     return f"{parsed.year:04d}-{parsed.month:02d}"
 
 
+def parse_finite_amount(raw: str) -> Decimal:
+    """Delegate to the receipt pipeline's shared finite-money validator."""
+    return receipt_ingest.parse_finite_amount(raw)
+
+
 def _norm_amount(raw: str) -> str:
     """Amount normalized to two decimals, or the raw text kept verbatim if unparseable."""
     try:
-        return f"{models.parse_amount(raw):.2f}"
+        return f"{parse_finite_amount(raw):.2f}"
     except ValueError:
         return raw
 
@@ -134,13 +140,10 @@ def _submission_fy(sub: Submission, start_month: int) -> str:
         fy = _fy_of(item.date, start_month)
         if fy:
             return fy
-    try:
-        received = parsedate_to_datetime(sub.received)
-    except (TypeError, ValueError):
-        return ""
+    received = receipt_ingest.parse_received_date(sub.received)
     if received is None:
         return ""
-    return f"FY{ids.fiscal_year_label(received.date(), start_month)}"
+    return f"FY{ids.fiscal_year_label(received, start_month)}"
 
 
 def _content_hash(sub: Submission) -> str:
@@ -157,7 +160,7 @@ def _needs_review(amount: str, canonical: str, reconciles: bool | None) -> str:
     if canonical == "":
         reasons.append("unmapped-category")
     try:
-        models.parse_amount(amount)
+        parse_finite_amount(amount)
     except ValueError:
         reasons.append("bad-amount")
     if reconciles is False:

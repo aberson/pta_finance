@@ -15,8 +15,11 @@ from __future__ import annotations
 
 import mailbox
 from dataclasses import fields
+from datetime import date
 from email.message import EmailMessage
 from pathlib import Path
+
+import pytest
 
 from pta_finance import receipt_ingest
 
@@ -126,6 +129,17 @@ def test_subject_filter_narrows_recognition() -> None:
     assert receipt_ingest.parse_submission(email_msg, subject_filter="Field Trip") is None
 
 
+def test_parse_received_date_preserves_header_local_calendar_date() -> None:
+    # In UTC this instant is still the prior day. Ledger membership follows the RFC-822
+    # header's own calendar date, so no timezone conversion is allowed here.
+    assert receipt_ingest.parse_received_date("Wed, 01 Jul 2030 00:30:00 +1400") == date(2030, 7, 1)
+
+
+@pytest.mark.parametrize("raw", ["", "not a date"])
+def test_parse_received_date_returns_none_for_missing_or_malformed(raw: str) -> None:
+    assert receipt_ingest.parse_received_date(raw) is None
+
+
 # --- line items ------------------------------------------------------------
 
 
@@ -185,6 +199,56 @@ def test_reconcile_none_when_an_amount_is_unparseable() -> None:
         **{**sub.__dict__, "line_items": (*sub.line_items, bad_item)}
     )
     assert receipt_ingest.total_reconciles(tampered) is None
+
+
+@pytest.mark.parametrize(
+    "amount",
+    [
+        "NaN",
+        "+NaN",
+        "-NaN",
+        "sNaN",
+        "+sNaN",
+        "-sNaN",
+        "Infinity",
+        "+Infinity",
+        "-Infinity",
+        "Inf",
+        "+Inf",
+        "-Inf",
+    ],
+)
+def test_reconciliation_treats_every_nonfinite_spelling_as_unavailable(amount: str) -> None:
+    sub = receipt_ingest.parse_submission(_reimbursement_email())
+    assert sub is not None
+    item = receipt_ingest.LineItem(1, "2030-09-01", "Supplies", "Example item", amount)
+    tampered = receipt_ingest.Submission(**{**sub.__dict__, "line_items": (item,), "total": amount})
+
+    assert receipt_ingest.line_item_total(tampered) is None
+    assert receipt_ingest.stated_total(tampered) is None
+    assert receipt_ingest.total_reconciles(tampered) is None
+
+
+def test_reconciliation_treats_opposite_infinities_as_unavailable() -> None:
+    sub = receipt_ingest.parse_submission(_reimbursement_email())
+    assert sub is not None
+    items = (
+        receipt_ingest.LineItem(1, "2030-09-01", "Supplies", "First item", "Infinity"),
+        receipt_ingest.LineItem(2, "2030-09-01", "Supplies", "Second item", "-Infinity"),
+    )
+    tampered = receipt_ingest.Submission(**{**sub.__dict__, "line_items": items, "total": "0.00"})
+
+    assert receipt_ingest.line_item_total(tampered) is None
+    assert receipt_ingest.total_reconciles(tampered) is None
+
+
+@pytest.mark.parametrize(
+    "amount",
+    ["1e100000", "1e-100000", "-1e100000", "-1e-100000", "9" * 129],
+)
+def test_receipt_amount_bounds_reject_compact_exponents_and_oversized_text(amount: str) -> None:
+    with pytest.raises(ValueError, match="receipt monetary amount"):
+        receipt_ingest.parse_finite_amount(amount)
 
 
 # --- iter_eml (disk round-trip) --------------------------------------------

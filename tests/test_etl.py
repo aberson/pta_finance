@@ -18,6 +18,7 @@ from pathlib import Path
 
 from pta_finance import etl, ids, schema
 from pta_finance.config import Config
+from tests.conftest import tagged_user_entered_grid
 
 _COLS = schema.TRANSACTIONS_COLUMNS
 _START_MONTH = 1  # calendar-year fiscal year => FY label == date.year
@@ -148,8 +149,9 @@ def test_normalize_rows_is_idempotent() -> None:
 class RecordingNormalizeClient:
     """A fake SheetsClient that records the order of read/snapshot/write calls.
 
-    ``read_tab`` returns the seeded legacy grid as record dicts; ``upsert_rows`` records the
-    payload; a shared ``events`` log proves the snapshot read happened BEFORE the write.
+    ``read_tab`` returns the seeded legacy records, ``read_snapshot_values`` returns their exact
+    grid, and ``upsert_rows`` records the payload. A shared ``events`` log proves the snapshot
+    read happened BEFORE the write.
     """
 
     def __init__(self, transactions: list[dict[str, str]]) -> None:
@@ -162,6 +164,12 @@ class RecordingNormalizeClient:
     def read_tab(self, tab: str) -> list[dict[str, str]]:
         self.events.append(f"read:{tab}")
         return [dict(r) for r in self._tabs.get(tab, [])]
+
+    def read_snapshot_values(self, tab: str) -> list[list[dict[str, object]]]:
+        self.events.append(f"read:{tab}")
+        columns = list(schema.TABS[tab])
+        rows = [[record.get(column, "") for column in columns] for record in self._tabs[tab]]
+        return tagged_user_entered_grid([columns, *rows])
 
     def upsert_rows(self, tab: str, rows_by_id: dict[str, dict[str, str]]) -> None:
         self.events.append(f"upsert:{tab}")

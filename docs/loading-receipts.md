@@ -20,9 +20,14 @@ content-hash dedup preventing double-counting. The one thing a re-run can destro
 hand-filled `category_map.csv` — Step 2's copy command is guarded against that, so do not replace
 it with a bare `Copy-Item`.
 
+The fetch window and ledger window are separate controls. `fetch-mail --since` limits which Gmail
+messages are acquired; it does **not** make older `.eml` or `.mbox` files in `mail_samples/`
+ineligible for the ledger. The optional private `[receipt_mapping] received_since` setting is the
+authoritative inclusive ledger cutoff.
+
 ---
 
-> ### ⚠️ Read these two rules before you run anything
+> ### ⚠️ Read these three rules before you run anything
 >
 > **1. Map in ONE run.** Run `map-receipts` **once**, pointed at the whole `mail_samples/`
 > directory, so the fetched `.eml` files and any `.mbox` archives are deduped **against each
@@ -31,7 +36,13 @@ it with a bare `Copy-Item`.
 > double-counting every message the two sources share**. There is no error message for this; the
 > ledger is just silently wrong.
 >
-> **2. Keep `[fiscal_year] start_month` correct in `config.toml`.** Standard
+> **2. Set the ledger cutoff in private config.** If this load represents a bounded term, set
+> `[receipt_mapping] received_since = "YYYY-MM-DD"` before mapping. It uses the outer RFC-822
+> `Date` header's local calendar date and is inclusive. Do not assume `fetch-mail --since` provides
+> this protection: legacy archives in the source directory are still read in full. Omit the
+> section only when an all-history ledger is intentional.
+>
+> **3. Keep `[fiscal_year] start_month` correct in `config.toml`.** Standard
 > `ingest-receipts` / `map-receipts` runs read that configured month, so the commands below do not
 > repeat it. Use `--start-month N` only as an intentional override for one run; an explicit value
 > wins over config. With neither a usable config nor an explicit override, the command fails rather
@@ -46,8 +57,8 @@ it with a bare `Copy-Item`.
 ## Prerequisites
 
 - Toolkit installed and `config.toml` set up (see [SETUP.md](../SETUP.md) §0–2) — standard receipt
-  commands read its fiscal-year setting, while `fetch-mail` and `--write-tab` use the other private
-  settings.
+  commands read its fiscal-year setting and optional ledger cutoff, while `fetch-mail` and
+  `--write-tab` use the other private settings.
 - A Gmail OAuth client + a `[gmail]` config section, set up once — see [SETUP.md](../SETUP.md)
   **§6 "Gmail access"**. The first `fetch-mail` run opens a browser for a one-time read-only
   consent, and Testing-mode consent expires after 7 days, so expect an occasional re-approval.
@@ -67,13 +78,14 @@ label, and no export to wait for.
 **Size the window first** (`--dry-run` counts the matches and writes no `.eml` files):
 
 ```powershell
-$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance fetch-mail --since 2026-06-01 --dry-run
+$receivedSince = "YYYY-MM-DD" # replace with the private acquisition-window start
+$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance fetch-mail --since $receivedSince --dry-run
 ```
 
 Then fetch for real:
 
 ```powershell
-$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance fetch-mail --since 2026-06-01
+$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance fetch-mail --since $receivedSince
 ```
 
 You get the search query, the destination directory, and a count summary — `N message(s) matched
@@ -89,6 +101,8 @@ these files by hand.** (The exact rule is in `CLAUDE.md` §6 if you need it.)
 
 - `--since` is **inclusive**; `--until` is **exclusive** (it names the first day that is *not*
   fetched). Omit `--until` for an open-ended window up to now.
+- These flags control Gmail acquisition only. They never filter existing files during
+  `map-receipts`; `[receipt_mapping] received_since` owns ledger membership.
 - **Overlap successive windows; never tile them.** An overlap is free — a re-fetch rewrites
   nothing. A gap is silent and permanent.
 - The fetch is **date-scoped only**: no sender or subject filter, so unrelated mail in the window
@@ -125,6 +139,9 @@ $env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance ingest-rece
 Read the output: form types, the full category list, reconcile pass/fail, and — key for
 completeness — the `email date span` line (see Step 3). **Keep this output on screen**: the
 `form types:` list is what you copy form names from, two steps below.
+
+`ingest-receipts --profile` deliberately remains a **full-source completeness view**. It does not
+apply `[receipt_mapping] received_since`; seeing older archive mail in its date span is expected.
 
 **First time only — turn the seed into the category map.** The command above wrote
 `reports/output/category_seed.csv`: one row per raw form category, with an empty column for you to
@@ -173,6 +190,24 @@ Two details about that file that are easy to get wrong:
 Keep the finished `category_map.csv` — later loads reuse it, and you only add rows when a new
 category appears.
 
+**Set the authoritative ledger cutoff in your private `config.toml`** when the ledger should cover
+only a bounded term:
+
+```toml
+[receipt_mapping]
+received_since = "YYYY-MM-DD" # replace privately; inclusive
+```
+
+With no section, mapping keeps all recognized original submissions for backward compatibility.
+For a one-run override, `--received-since YYYY-MM-DD` wins over config; `--all-received` disables
+the configured cutoff. Those two flags are mutually exclusive. Filtering happens **before**
+Message-ID/content dedup, so an older archived twin cannot suppress an in-scope fetched message.
+Mapping makes one config decision before it loads the category map or parses any source message.
+When `--start-month` is omitted, the config is required immediately and that exact snapshot supplies
+both fiscal-year and cutoff policy. A config file that is absent then cannot appear later and affect
+only one of them. A credential-free preview still works with an explicit `--start-month` when the
+config path is absent; a config present at that initial decision is loaded and validated once.
+
 **Preview the ledger first** (no Sheet write). Write the CSV under `reports\output\` and nowhere
 else — it carries `requestor_name`, `requestor_email` and `receipt_url` for every line item, and
 `reports/output/` is the gitignored directory. A CSV dropped anywhere else in the repo is **not**
@@ -185,6 +220,32 @@ $env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance map-receipt
 **Check the summary's `category map : N mapping(s), M form default(s)` line before you trust the
 run.** `0 mapping(s)` means the header rename did not take, and every row will be flagged
 `unmapped-category`.
+
+Also check `received cutoff : ...; excluded N submission(s)` on every run. The line states both
+the effective cutoff and whether it came from config or a CLI override. With an active cutoff,
+any recognized original missing a valid outer `Date` header aborts before CSV or Sheet output;
+the error reports aggregate counts only. Any `--write-tab` mapping that produces zero ledger rows
+also refuses before constructing the Sheet client—whether the source is empty/unrecognized, the
+cutoff excludes everything, or in-scope submissions have no mappable amount rows.
+
+Only amounts that parse as finite money are sent through the Sheet's numeric write behavior;
+rejected amount text is forced to remain inert for review. Every receipt CSV (the category seed,
+ordinary ingest export, and mapped-ledger review) uses one serialization boundary that prefixes
+formula-like text after leading whitespace (`=`, `+`, `-`, or `@`) while leaving validated counts
+and positive/negative money numeric. In the category seed, the prefix is a reversible writer layer:
+the category-map loader removes exactly that one layer, so raw categories with any existing leading
+apostrophes remain distinct and still map correctly.
+
+Formula-like text is also neutralized before the RAW Sheet grid write. Before replacing an existing
+tab, the mandatory backup now writes two adjacent private artifacts: `<tab>.csv` is safe to open in
+spreadsheet software even when the old/external grid predates this protection, while
+`<tab>.raw.json` is a versioned, tagged `userEnteredValue` grid. It distinguishes a formula from
+the same literal text and preserves string, native number, boolean, and empty cell types. Neither
+artifact captures formatting or comments. Use the CSV for inspection/import convenience; use
+Sheets version history first for recovery, with the JSON grid as the exact manual entered-value
+recovery source. There is no automated JSON restore command. Both artifacts finish before
+replacement, and a timestamp collision claims a suffixed directory instead of overwriting an
+earlier backup.
 
 **Load into the Sheet** (creates/replaces the `Reimbursements` tab; snapshots it first if it
 already exists):
@@ -204,7 +265,7 @@ automatically.
 
 Two independent checks that you actually got **everything**:
 
-1. **Email date span.** The `--profile` output prints a line reading
+1. **Email date span.** The full-source `--profile` output prints a line reading
    `email date span     : <oldest> -> <newest>  (when forms were SUBMITTED — check for gaps)`.
    Those are the dates the forms were **submitted**. Compare
    `<oldest>` to the `--since` date you fetched from. If the span **starts later** than your real
@@ -212,10 +273,12 @@ Two independent checks that you actually got **everything**:
    an earlier `--since`. **Watch the line-item `month` vs the email date:** a form submitted in
    April can reimburse a July expense, so old *line-item* dates do **not** prove you captured the
    old *emails*. The **email date span** is the honest signal.
-2. **Count match.** The `map-receipts` summary prints `N submission(s) (originals; M Re:/Fwd:
-   skipped) -> R ledger row(s)`. Compare `N` to the number of submissions you expect for the
-   window. `fetch-mail`'s own `N message(s) matched` line is the upper bound — it counts *all*
-   mail in the window, form or not.
+2. **Cutoff + count match.** The `map-receipts` output first states the effective inclusive cutoff
+   and how many recognized originals it excluded, then prints `N submission(s) (originals; M
+   Re:/Fwd: skipped) -> R ledger row(s)`. Compare `N` to the submissions expected **on or after the
+   ledger cutoff**. `fetch-mail`'s own `N message(s) matched` line is only an acquisition upper
+   bound — it counts all mail in that fetch window, form or not, and says nothing about older
+   archive membership.
 
 **If either check shows a gap:** re-run `fetch-mail` with an earlier `--since` (Step 1), then
 re-run Step 2's **preview** and **load** commands. The copy command in between is guarded, so it

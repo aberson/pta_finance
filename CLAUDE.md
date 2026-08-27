@@ -43,7 +43,7 @@ No live-Sheet write. Each comment names any local file the command touches:
 
 ```bash
 uv run pta-finance analyze                                # reads Budget Timeseries; no writes
-uv run pta-finance snapshot                               # CSV backups under snapshots/<utc>/
+uv run pta-finance snapshot                               # safe CSV + exact tagged entered-value JSON under snapshots/<utc>/
 uv run pta-finance sync-budget --fy 2027                  # dry run: prints the diff, no writes
 uv run pta-finance fetch-mail --since <date> --dry-run    # counts; MAY mint secrets/gmail-token.json
 uv run pta-finance ingest-receipts --source mail_samples --profile --originals-only  # no writes
@@ -63,8 +63,12 @@ uv run pta-finance map-receipts --source mail_samples --write-tab Reimbursements
 
 Every writing verb above snapshots first, except `check` (it deletes its own probe row) and
 `fetch-mail` (it writes no Sheet). Receipt commands use `[fiscal_year] start_month` from config;
-`--start-month` is an intentional override. `map-receipts` must cover `mail_samples/` in ONE run
-so all sources deduplicate together. Both rules are stated in full — and owned — by
+`--start-month` is an intentional override. `map-receipts` uses optional private
+`[receipt_mapping] received_since` as its inclusive ledger cutoff; `fetch-mail --since` controls
+acquisition only. `--received-since` overrides the configured cutoff and `--all-received` disables
+it for one run. Filtering occurs before dedup. `ingest-receipts --profile` remains a full-source
+view. `map-receipts` must cover `mail_samples/` in ONE run so all sources deduplicate together.
+These rules are stated in full — and owned — by
 [docs/loading-receipts.md](docs/loading-receipts.md).
 
 ## 4. Directory layout
@@ -84,9 +88,9 @@ tests/              fake-org fixtures + mocked gspread; test_smoke_pipeline.py i
 secrets/            gitignored — service-account.json, gmail-client-secret.json,
                     gmail-token.json (minted at first consent; never printed)
 mail_samples/       gitignored — fetched .eml + legacy Takeout .mbox, side by side (flat)
-snapshots/          gitignored — CSV backups
+snapshots/          gitignored — safe CSV + exact tagged userEnteredValue .raw.json backups
 config.toml         gitignored private config; config.example.toml ships fake values
-                    (incl. the commented-out, optional [gmail] block)
+                    (incl. optional [receipt_mapping] and [gmail] blocks)
 documentation/      committed feature plans (e.g. gmail-ingest-plan.md)
 ```
 
@@ -106,7 +110,7 @@ documentation/      committed feature plans (e.g. gmail-ingest-plan.md)
   tab (styled after the hidden "Budget Share" tab); `sync-budget` reconciles those edits back into
   the Budget Timeseries. PURE `parse_budget_tab` + `plan_budget_sync` (matches `(type, raw_category)`
   within `(fy, proposed)`), CLI orchestrates. Default dry-run diff; `--apply` snapshots first
-  (`backup.snapshot_raw_tab`, faithful full grid) then writes ONLY changed amount/notes cells +
+  (`backup.snapshot_raw_tab`, safe CSV + exact tagged entered-value JSON) then writes ONLY changed amount/notes cells +
   appends new lines via schema-independent `SheetsClient.update_cells` / `append_raw_rows`. Never
   touches actuals, other years, or enrichment columns; removed lines are flagged, never deleted.
 - **ETL** (`etl.py`): normalize legacy rows, assign IDs, dedup via `(date|amount|payee)` hash,
@@ -123,12 +127,24 @@ documentation/      committed feature plans (e.g. gmail-ingest-plan.md)
 
 **v1 automated build COMPLETE (Steps 1–8, issues #1–#8 closed).** The full pipeline works end-to-end
 under test: Sheets client, ETL/normalize, analytics, internal/external reports (runtime PII guard),
-smoke gate, and the monthly GitHub Actions workflow. 332 tests + 1 skipped; `mypy --strict` + ruff
-clean. **Phase-4 receipt ingestion has shipped end-to-end:** `receipt_ingest.py` (`.eml`/`.mbox`
+smoke gate, and the monthly GitHub Actions workflow. The full test suite, `mypy --strict`, and Ruff
+gates pass. **Phase-4 receipt ingestion has shipped end-to-end:** `receipt_ingest.py` (`.eml`/`.mbox`
 parser + PII-free batch `Profile` + `Re:`/`Fwd:` dedup) + `receipt_map.py` (`Submission` → flat ledger
 rows) drive the `ingest-receipts` (preview / `--profile`) and `map-receipts` (`--write-tab`) CLIs,
 which land receipts in a flat **Reimbursements** Sheet tab (via `SheetsClient.replace_tab_grid`) that a
 dropdown-driven **Receipts Explorer** dashboard reads; operator load guide in `docs/loading-receipts.md`.
+`map-receipts` now partitions recognized originals by the optional inclusive
+`receipt_mapping.received_since` outer-header date **before** its single mapper/dedup call, reports
+the effective source + exclusion count, rejects missing/malformed headers under an active cutoff,
+and refuses every zero-ledger-row `--write-tab` before constructing the Sheet client. Mapping
+without explicit `--start-month` freezes one required config snapshot before category/source
+parsing and reuses it for fiscal-year and cutoff policy; non-finite amounts remain reviewable.
+Every receipt CSV uses the centralized formula-safe boundary, and full-grid pre-write backups pair
+a safe inspection/import CSV with versioned tagged `userEnteredValue` JSON so even the first
+replacement of an external grid preserves formulas versus identical literal text plus native
+string/number/boolean/empty types. Snapshot directories are claimed atomically and collisions use
+a suffix instead of overwriting an older set. Formatting/comments are not captured; Sheets version
+history remains the primary recovery path, and there is no automated JSON restore command.
 **The Gmail read-only ingest connector has also shipped** (`documentation/gmail-ingest-plan.md`,
 issues #15–#22): `gmail_source.py` + the `fetch-mail` CLI replace the manual Google Takeout export —
 user OAuth pinned to `gmail.readonly` (exact-equality-tested, re-checked at runtime), a date-scoped

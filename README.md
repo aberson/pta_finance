@@ -68,7 +68,8 @@ uv sync --extra dev            # add the [pdf] extra if you want WeasyPrint PDF 
 # 2. Configure (private, gitignored)
 cp config.example.toml config.toml
 #    fill in: org/school name + email, board emails, spreadsheet_id,
-#    drive folder ids, grade labels, fiscal_year.start_month (1 = calendar year)
+#    drive folder ids, grade labels, fiscal_year.start_month (1 = calendar year),
+#    and optional receipt_mapping.received_since (inclusive ledger cutoff)
 
 # 3. Google service account (one-time)
 #    download the service-account JSON to secrets/service-account.json
@@ -121,8 +122,8 @@ See [plan.md](plan.md) for the full design, data model, and build steps, and
 schema, a service-account Sheets client (atomic row-targeted writes + 429 backoff), idempotent
 legacy-ledger ETL (ID assignment, dedup, malformed-row resilience), an exact-cents analytics engine,
 internal/external HTML reports with a runtime PII guard, an end-to-end smoke gate, and a monthly
-GitHub Actions report workflow. 113 tests passing at that point (+1 skipped), 0 type errors
-(`mypy --strict`), 0 lint violations. First-run setup needs the Google service account (see Setup) — then
+GitHub Actions report workflow. The full test suite, `mypy --strict`, and Ruff gates passed at that
+milestone. First-run setup needs the Google service account (see Setup) — then
 `uv run pta-finance check`.
 
 **Receipt ingestion (Phase 4)** — a credential-free `.eml`/`.mbox` parser (`receipt_ingest.py`) with
@@ -130,13 +131,23 @@ two CLIs: `ingest-receipts --profile` scans a whole mailbox and reports the data
 category vocabulary, blank-field rates, reconciliation, and the **email-date span** that catches a
 gappy export), and `map-receipts` projects the parsed submissions onto a flat **Reimbursements**
 ledger (carry-forward blank categories, per-form defaults, `Message-ID` + content-hash dedup,
-`needs_review` flags) and writes it to the Sheet with `--write-tab`. A dropdown-driven **Receipts
-Explorer** dashboard reads that ledger. Mail now arrives through `fetch-mail` — a read-only Gmail
+`needs_review` flags). Its optional private `receipt_mapping.received_since` cutoff is applied to
+the outer email date before dedup; `fetch-mail --since` controls acquisition only. The mapper
+reports its effective cutoff and excluded count, then writes to the Sheet with `--write-tab`. A
+zero-row `--write-tab` is refused before any Sheet client is constructed. A dropdown-driven
+**Receipts Explorer** dashboard reads that ledger. Mail now arrives through
+`fetch-mail` — a read-only Gmail
 connector (`gmail_source.py`, OAuth pinned to `gmail.readonly`) that fetches a date window straight
 into the gitignored inbox directory, retiring the manual Takeout export. See
 [docs/loading-receipts.md](docs/loading-receipts.md) for the end-to-end load (`fetch-mail` →
-`map-receipts`) with a completeness check.
-332 tests passing (+1 skipped), 0 type errors, 0 lint violations.
+`map-receipts`) with a completeness check. Receipt CSV exports neutralize formula-like inbound text
+while retaining validated signed money as numeric cells. A replacement backup keeps a
+spreadsheet-safe CSV beside a versioned, tagged raw JSON `userEnteredValue` grid, so the first
+replacement of a pre-existing tab is safe to inspect and formulas remain distinguishable from
+identical literal text. Native numbers, booleans, strings, and empty cells remain typed in JSON.
+Formatting/comments are outside the artifact; Sheets version history is the primary recovery path,
+and there is no automated JSON restore command. The full test suite, `mypy --strict`, and Ruff gates
+pass.
 
 The live `map-receipts --write-tab` path was revalidated on 2026-08-20 with a pre-write snapshot
 and a semantic read-back reconciliation. Private mailbox counts, financial totals, and generated

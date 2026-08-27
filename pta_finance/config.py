@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import tomllib
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ __all__ = [
     "Sheets",
     "Google",
     "Gmail",
+    "ReceiptMapping",
     "Config",
     "load_config",
 ]
@@ -104,6 +106,13 @@ class Gmail:
 
 
 @dataclass(frozen=True)
+class ReceiptMapping:
+    """Optional policy for which received emails belong in the reimbursement ledger."""
+
+    received_since: date
+
+
+@dataclass(frozen=True)
 class Config:
     organization: Organization
     contacts: Contacts
@@ -113,6 +122,8 @@ class Config:
     google: Google
     # Optional section: ``None`` when ``config.toml`` has no ``[gmail]`` block.
     gmail: Gmail | None = None
+    # Optional section: absent preserves the legacy all-history receipt mapping behavior.
+    receipt_mapping: ReceiptMapping | None = None
 
 
 def _section(data: dict[str, Any], name: str) -> dict[str, Any]:
@@ -226,6 +237,7 @@ def load_config(path: Path) -> Config:
     # [gmail] is OPTIONAL: `data.get` (never `_section`, which raises) so a config
     # without the block loads unchanged and `Config.gmail` is None.
     gmail = _load_gmail(data.get("gmail"), path.parent)
+    receipt_mapping = _load_receipt_mapping(data.get("receipt_mapping"))
 
     return Config(
         organization=organization,
@@ -235,6 +247,7 @@ def load_config(path: Path) -> Config:
         sheets=sheets,
         google=google,
         gmail=gmail,
+        receipt_mapping=receipt_mapping,
     )
 
 
@@ -260,3 +273,29 @@ def _load_gmail(raw: Any, base_dir: Path) -> Gmail | None:
         token_path=_resolve_path(token_file, base_dir),
         inbox_path=_resolve_path(inbox_dir, base_dir),
     )
+
+
+def _load_receipt_mapping(raw: Any) -> ReceiptMapping | None:
+    """Parse the OPTIONAL ``[receipt_mapping]`` section; ``None`` when absent."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ConfigError(
+            "receipt_mapping",
+            "expected a [receipt_mapping] table (or omit the section entirely)",
+        )
+
+    dotted = "receipt_mapping.received_since"
+    value = _require(raw, "received_since", dotted)
+    if isinstance(value, date) and not isinstance(value, datetime):
+        received_since = value
+    elif isinstance(value, str):
+        try:
+            received_since = date.fromisoformat(value)
+        except ValueError as exc:
+            raise ConfigError(dotted, f"{dotted} must be an ISO date (YYYY-MM-DD)") from exc
+        if received_since.isoformat() != value:
+            raise ConfigError(dotted, f"{dotted} must be an ISO date (YYYY-MM-DD)")
+    else:
+        raise ConfigError(dotted, f"{dotted} must be an ISO date (YYYY-MM-DD)")
+    return ReceiptMapping(received_since=received_since)

@@ -35,7 +35,7 @@ from collections import Counter
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, DecimalException
 from email.message import Message
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
@@ -53,10 +53,12 @@ __all__ = [
     "looks_like_reimbursement",
     "is_reply_or_forward",
     "form_type",
+    "parse_received_date",
     "parse_submission",
     "iter_eml",
     "iter_mbox",
     "iter_source",
+    "parse_finite_amount",
     "line_item_total",
     "stated_total",
     "total_reconciles",
@@ -366,6 +368,21 @@ def is_reply_or_forward(subject: str) -> bool:
     return _REPLY_PREFIX.match(subject) is not None
 
 
+def parse_received_date(raw: str) -> date | None:
+    """Parse an RFC-822 ``Date`` header to its header-local calendar date.
+
+    Returns ``None`` for a missing or malformed header. Deliberately does not convert an aware
+    datetime to UTC: receipt-ledger membership follows the calendar date written in the header.
+    """
+    if raw.strip() == "":
+        return None
+    try:
+        parsed = parsedate_to_datetime(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return parsed.date() if parsed is not None else None
+
+
 def parse_submission(msg: Message, *, subject_filter: str | None = None) -> Submission | None:
     """Parse an email into a :class:`Submission`, or ``None`` if it is not a reimbursement form.
 
@@ -458,28 +475,54 @@ def iter_source(source: Path) -> Iterator[tuple[str, Message]]:
 # --- Reconciliation helpers (preview-time sanity, not yet a write gate) -----
 
 
+_RECEIPT_AMOUNT_MAX_TEXT_CHARS = 128
+_RECEIPT_AMOUNT_MAX_DIGITS = 64
+_RECEIPT_AMOUNT_MAX_ADJUSTED_EXPONENT = 18
+
+
+def parse_finite_amount(raw: str) -> Decimal:
+    """Parse one bounded monetary value and reject unsafe/non-finite Decimal spellings."""
+    if len(raw) > _RECEIPT_AMOUNT_MAX_TEXT_CHARS:
+        raise ValueError("receipt monetary amount is too long")
+    try:
+        amount = models.parse_amount(raw)
+        finite = amount.is_finite()
+    except DecimalException as exc:
+        raise ValueError("receipt monetary amount must be finite") from exc
+    if not finite:
+        raise ValueError("receipt monetary amount must be finite")
+    if (
+        len(amount.as_tuple().digits) > _RECEIPT_AMOUNT_MAX_DIGITS
+        or abs(amount.adjusted()) > _RECEIPT_AMOUNT_MAX_ADJUSTED_EXPONENT
+    ):
+        raise ValueError("receipt monetary amount is outside supported bounds")
+    return amount
+
+
 def line_item_total(sub: Submission) -> Decimal | None:
-    """Sum of parseable line-item amounts, or ``None`` if any present amount is unparseable."""
+    """Sum of finite line-item amounts, or ``None`` if any present amount is unavailable."""
     total = Decimal("0")
     saw_any = False
     for item in sub.line_items:
         if item.amount.strip() == "":
             continue
         try:
-            total += models.parse_amount(item.amount)
+            total += parse_finite_amount(item.amount)
             saw_any = True
-        except ValueError:
+        except (ValueError, DecimalException):
+            return None
+        if not total.is_finite():
             return None
     return total if saw_any else None
 
 
 def stated_total(sub: Submission) -> Decimal | None:
-    """The email's stated grand Total as a :class:`~decimal.Decimal`, or ``None`` if absent/bad."""
+    """The email's finite stated grand total, or ``None`` if absent/unavailable."""
     if sub.total.strip() == "":
         return None
     try:
-        return models.parse_amount(sub.total)
-    except ValueError:
+        return parse_finite_amount(sub.total)
+    except (ValueError, DecimalException):
         return None
 
 
@@ -489,7 +532,10 @@ def total_reconciles(sub: Submission) -> bool | None:
     stated = stated_total(sub)
     if items is None or stated is None:
         return None
-    return items == stated
+    try:
+        return items == stated
+    except DecimalException:
+        return None
 
 
 # --- Profiling (the "meta load": aggregate, PII-free) ----------------------
@@ -568,12 +614,9 @@ def profile(subs: Iterable[Submission], *, start_month: int = 1) -> Profile:
     for sub in subs:
         recognized += 1
         form_types[form_type(sub.subject)] += 1
-        try:
-            received_dt = parsedate_to_datetime(sub.received)
-        except (TypeError, ValueError):
-            received_dt = None
-        if received_dt is not None:
-            received_dates.append(received_dt.date())
+        received_date = parse_received_date(sub.received)
+        if received_date is not None:
+            received_dates.append(received_date)
         payment_types[sub.payment_type.strip() or "(blank)"] += 1
         who = sub.requestor_email.strip().casefold() or sub.requestor_name.strip().casefold()
         if who:
@@ -598,7 +641,7 @@ def profile(subs: Iterable[Submission], *, start_month: int = 1) -> Profile:
                 blank_amount += 1
             else:
                 try:
-                    models.parse_amount(item.amount)
+                    parse_finite_amount(item.amount)
                 except ValueError:
                     bad_amounts += 1
             if item.date.strip() == "":

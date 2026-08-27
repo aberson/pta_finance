@@ -7,13 +7,17 @@ runs through the real ``backup.snapshot_all_tabs`` with a fake read client.
 from __future__ import annotations
 
 import csv
-from collections.abc import Mapping
+import json
+from collections.abc import Mapping, Sequence
+from dataclasses import replace
+from email.message import EmailMessage
 from pathlib import Path
 
 import pytest
 
-from pta_finance import cli, receipt_ingest, schema
-from pta_finance.config import Config
+from pta_finance import backup, cli, receipt_ingest, receipt_map, schema
+from pta_finance.config import Config, ConfigError
+from tests.conftest import tagged_user_entered_grid
 
 _CONFIG_TEXT = """\
 [organization]
@@ -354,6 +358,10 @@ class FakeSnapshotClient:
         self.read_tabs.append(tab)
         return []  # both live tabs present (no WorksheetNotFound), simply empty
 
+    def read_snapshot_values(self, tab: str) -> list[list[dict[str, object]]]:
+        self.read_tabs.append(tab)
+        return []  # both live tabs present (no WorksheetNotFound), simply empty
+
 
 def test_snapshot_writes_csvs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
@@ -491,8 +499,9 @@ _BUDGET_GRID = [
 class FakeImportBudgetClient:
     """A fake SheetsClient for import-budget: serves a raw grid + records upserts/snapshots.
 
-    ``read_values`` returns the canned budget grid; ``read_tab`` returns [] for every tab
-    (so the real ``backup.snapshot_all_tabs`` runs and we can detect a snapshot was taken);
+    ``read_values`` returns the canned budget grid; ``read_snapshot_values`` returns a header
+    grid for every tab (so the real ``backup.snapshot_all_tabs`` runs and we can detect a
+    snapshot was taken);
     ``upsert_rows`` records its (tab, rows) so the test asserts which tabs were written.
     """
 
@@ -512,6 +521,10 @@ class FakeImportBudgetClient:
     def read_tab(self, tab: str) -> list[dict[str, str]]:
         self.read_tab_calls.append(tab)
         return []
+
+    def read_snapshot_values(self, tab: str) -> list[list[dict[str, object]]]:
+        self.read_tab_calls.append(tab)
+        return tagged_user_entered_grid([list(schema.TABS[tab])])
 
     def upsert_rows(self, tab: str, rows_by_id: Mapping[str, Mapping[str, str]]) -> None:
         self.upserts.append((tab, rows_by_id))
@@ -544,7 +557,7 @@ def test_import_budget_upserts_budget_and_transactions(
     assert rc == 0
     (client,) = FakeImportBudgetClient.instances
     assert client.read_values_calls == ["Budget Source"]
-    # A snapshot was taken BEFORE writing (read_tab fired for every canonical tab).
+    # A snapshot was taken BEFORE writing (the exact-grid read fired for every canonical tab).
     assert set(client.read_tab_calls) == set(schema.TABS)
     assert (tmp_path / "snapshots").is_dir()
 
@@ -795,3 +808,1346 @@ def test_receipt_commands_use_config_start_month_unless_overridden(
     with csv_path.open(encoding="utf-8", newline="") as handle:
         (row,) = csv.DictReader(handle)
     assert row["fiscal_year"] == expected_fiscal_year
+
+
+# --- map-receipts received-date cutoff (real CLI + .eml wiring) -----------------------
+
+_CUTOFF_FORM_BODY = """\
+Requestor First and Last Name:
+Example Requestor
+Email:
+requestor@example.invalid
+1. Date:
+{item_date}
+1. Event or Budget Category:
+Supplies
+1. Description:
+Example purchase
+1. Amount:
+{amount}
+Total Amount $:
+{amount}
+Choose Payment Type:
+Check
+"""
+
+
+def _write_cutoff_email(
+    path: Path,
+    *,
+    message_id: str,
+    received: str | None,
+    item_date: str,
+    amount: str,
+) -> None:
+    """Write one obviously-fake reimbursement submission as real RFC-822 bytes."""
+    msg = EmailMessage()
+    msg["Subject"] = "Example Reimbursement Form got a new submission"
+    msg["From"] = "forms@example.invalid"
+    msg["To"] = "treasurer@example.invalid"
+    if received is not None:
+        msg["Date"] = received
+    msg["Message-ID"] = message_id
+    msg.set_content(_CUTOFF_FORM_BODY.format(item_date=item_date, amount=amount))
+    path.write_bytes(bytes(msg))
+
+
+def _write_cutoff_category_map(tmp_path: Path) -> Path:
+    path = tmp_path / "category-map.csv"
+    path.write_text(
+        "raw_category,canonical_category\nSupplies,Program Supplies\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def _config_with_received_since(received_since: str) -> str:
+    return _CONFIG_TEXT + "\n[receipt_mapping]\n" + f'received_since = "{received_since}"\n'
+
+
+def _read_csv_rows(path: Path) -> list[dict[str, str]]:
+    with path.open(encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
+def _forbid_sheets_construction(monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    constructed: list[bool] = []
+
+    class _UnexpectedSheetsClient:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            constructed.append(True)
+
+    monkeypatch.setattr(cli, "SheetsClient", _UnexpectedSheetsClient)
+    return constructed
+
+
+def test_map_receipts_uses_config_cutoff_inclusively_through_real_cli(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "a-older.eml",
+        message_id="<older@example.invalid>",
+        received="Sat, 31 Aug 2030 23:45:00 -0700",
+        item_date="2030-08-31",
+        amount="10.00",
+    )
+    _write_cutoff_email(
+        source / "b-boundary.eml",
+        message_id="<boundary@example.invalid>",
+        received="Sun, 01 Sep 2030 00:15:00 -0700",
+        item_date="2030-09-01",
+        amount="20.00",
+    )
+    config_path = _write_config(tmp_path, _config_with_received_since("2030-09-01"))
+    map_path = _write_cutoff_category_map(tmp_path)
+    csv_path = tmp_path / "ledger.csv"
+
+    rc = cli.main(
+        [
+            "map-receipts",
+            "--source",
+            str(source),
+            "--category-map",
+            str(map_path),
+            "--csv",
+            str(csv_path),
+            "--config",
+            str(config_path),
+        ]
+    )
+
+    assert rc == 0
+    assert [row["message_id"] for row in _read_csv_rows(csv_path)] == ["<boundary@example.invalid>"]
+    out = capsys.readouterr().out
+    assert "received cutoff : 2030-09-01 inclusive (config: receipt_mapping.received_since)" in out
+    assert "excluded 1 submission(s)" in out
+
+
+def test_map_receipts_cutoff_overrides_win_and_all_received_disables_config(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "a-first.eml",
+        message_id="<first@example.invalid>",
+        received="Sun, 01 Sep 2030 08:00:00 +0000",
+        item_date="2030-09-01",
+        amount="10.00",
+    )
+    _write_cutoff_email(
+        source / "b-second.eml",
+        message_id="<second@example.invalid>",
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        item_date="2030-09-05",
+        amount="20.00",
+    )
+    config_path = _write_config(tmp_path, _config_with_received_since("2030-09-10"))
+    map_path = _write_cutoff_category_map(tmp_path)
+    override_csv = tmp_path / "override.csv"
+    all_csv = tmp_path / "all.csv"
+
+    assert (
+        cli.main(
+            [
+                "map-receipts",
+                "--source",
+                str(source),
+                "--category-map",
+                str(map_path),
+                "--received-since",
+                "2030-09-05",
+                "--csv",
+                str(override_csv),
+                "--config",
+                str(config_path),
+            ]
+        )
+        == 0
+    )
+    assert [row["message_id"] for row in _read_csv_rows(override_csv)] == [
+        "<second@example.invalid>"
+    ]
+    override_out = capsys.readouterr().out
+    assert "received cutoff : 2030-09-05 inclusive (--received-since)" in override_out
+
+    assert (
+        cli.main(
+            [
+                "map-receipts",
+                "--source",
+                str(source),
+                "--category-map",
+                str(map_path),
+                "--all-received",
+                "--csv",
+                str(all_csv),
+                "--config",
+                str(config_path),
+            ]
+        )
+        == 0
+    )
+    assert {row["message_id"] for row in _read_csv_rows(all_csv)} == {
+        "<first@example.invalid>",
+        "<second@example.invalid>",
+    }
+    all_out = capsys.readouterr().out
+    assert "received cutoff : none (--all-received)" in all_out
+    assert "excluded 0 submission(s)" in all_out
+
+
+def test_map_receipts_filters_cutoff_before_content_dedup(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    # Same requestor + total + first line-item date => the mapper's content-dedup key matches.
+    # The older file sorts first, so filtering after mapping would let it suppress the newer row.
+    for filename, message_id, received in [
+        ("a-older.eml", "<older-twin@example.invalid>", "Sat, 31 Aug 2030 08:00:00 +0000"),
+        ("b-newer.eml", "<newer-twin@example.invalid>", "Sun, 01 Sep 2030 08:00:00 +0000"),
+    ]:
+        _write_cutoff_email(
+            source / filename,
+            message_id=message_id,
+            received=received,
+            item_date="2030-08-20",
+            amount="30.00",
+        )
+    config_path = _write_config(tmp_path, _config_with_received_since("2030-09-01"))
+    map_path = _write_cutoff_category_map(tmp_path)
+    csv_path = tmp_path / "ledger.csv"
+
+    assert (
+        cli.main(
+            [
+                "map-receipts",
+                "--source",
+                str(source),
+                "--category-map",
+                str(map_path),
+                "--csv",
+                str(csv_path),
+                "--config",
+                str(config_path),
+            ]
+        )
+        == 0
+    )
+    assert [row["message_id"] for row in _read_csv_rows(csv_path)] == [
+        "<newer-twin@example.invalid>"
+    ]
+    assert "excluded 1 submission(s)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("received", [None, "not a valid RFC-822 date"])
+def test_map_receipts_active_cutoff_rejects_invalid_received_without_outputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    received: str | None,
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "invalid.eml",
+        message_id="<invalid-date@example.invalid>",
+        received=received,
+        item_date="2030-09-02",
+        amount="10.00",
+    )
+    _write_cutoff_email(
+        source / "valid.eml",
+        message_id="<valid-date@example.invalid>",
+        received="Mon, 02 Sep 2030 08:00:00 +0000",
+        item_date="2030-09-02",
+        amount="20.00",
+    )
+    config_path = _write_config(tmp_path, _config_with_received_since("2030-09-01"))
+    map_path = _write_cutoff_category_map(tmp_path)
+    csv_path = tmp_path / "must-not-exist.csv"
+    constructed = _forbid_sheets_construction(monkeypatch)
+
+    rc = cli.main(
+        [
+            "map-receipts",
+            "--source",
+            str(source),
+            "--category-map",
+            str(map_path),
+            "--write-tab",
+            "Example Reimbursements",
+            "--csv",
+            str(csv_path),
+            "--config",
+            str(config_path),
+        ]
+    )
+
+    assert rc == 1
+    assert not csv_path.exists()
+    assert constructed == []
+    out = capsys.readouterr().out
+    assert "1 recognized original submission(s) have a missing or malformed Date header" in out
+    assert "not a valid RFC-822 date" not in out
+
+
+def test_map_receipts_refuses_empty_cutoff_write_before_constructing_sheets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "older.eml",
+        message_id="<older-only@example.invalid>",
+        received="Sat, 31 Aug 2030 08:00:00 +0000",
+        item_date="2030-08-31",
+        amount="10.00",
+    )
+    config_path = _write_config(tmp_path, _config_with_received_since("2030-09-01"))
+    map_path = _write_cutoff_category_map(tmp_path)
+    constructed = _forbid_sheets_construction(monkeypatch)
+
+    rc = cli.main(
+        [
+            "map-receipts",
+            "--source",
+            str(source),
+            "--category-map",
+            str(map_path),
+            "--write-tab",
+            "Example Reimbursements",
+            "--config",
+            str(config_path),
+        ]
+    )
+
+    assert rc == 1
+    assert constructed == []
+    out = capsys.readouterr().out
+    assert "refusing --write-tab" in out
+    assert "mapping produced zero ledger rows from 0 in-scope submission(s)" in out
+    assert "1 recognized original submission(s)" in out
+
+
+def test_map_receipts_refuses_zero_row_write_for_unrecognized_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    msg = EmailMessage()
+    msg["Subject"] = "Example status update"
+    msg["From"] = "sender@example.invalid"
+    msg["To"] = "recipient@example.invalid"
+    msg["Date"] = "Sun, 01 Sep 2030 08:00:00 +0000"
+    msg["Message-ID"] = "<nonmatching@example.invalid>"
+    msg.set_content("This message has no reimbursement-form structure.")
+    (source / "nonmatching.eml").write_bytes(bytes(msg))
+    config_path = _write_config(tmp_path)
+    map_path = _write_cutoff_category_map(tmp_path)
+    csv_path = tmp_path / "must-not-exist.csv"
+    constructed = _forbid_sheets_construction(monkeypatch)
+
+    rc = cli.main(
+        [
+            "map-receipts",
+            "--source",
+            str(source),
+            "--category-map",
+            str(map_path),
+            "--write-tab",
+            "Example Reimbursements",
+            "--csv",
+            str(csv_path),
+            "--config",
+            str(config_path),
+        ]
+    )
+
+    assert rc == 1
+    assert not csv_path.exists()
+    assert constructed == []
+    out = capsys.readouterr().out
+    assert "mapping produced zero ledger rows from 0 in-scope submission(s)" in out
+    assert "0 recognized original submission(s)" in out
+
+
+def test_map_receipts_refuses_zero_row_write_for_in_scope_blank_amount(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "blank-amount.eml",
+        message_id="<blank-amount@example.invalid>",
+        received="Sun, 01 Sep 2030 08:00:00 +0000",
+        item_date="2030-09-01",
+        amount="",
+    )
+    config_path = _write_config(tmp_path, _config_with_received_since("2030-09-01"))
+    map_path = _write_cutoff_category_map(tmp_path)
+    csv_path = tmp_path / "must-not-exist.csv"
+    constructed = _forbid_sheets_construction(monkeypatch)
+
+    rc = cli.main(
+        [
+            "map-receipts",
+            "--source",
+            str(source),
+            "--category-map",
+            str(map_path),
+            "--write-tab",
+            "Example Reimbursements",
+            "--csv",
+            str(csv_path),
+            "--config",
+            str(config_path),
+        ]
+    )
+
+    assert rc == 1
+    assert not csv_path.exists()
+    assert constructed == []
+    out = capsys.readouterr().out
+    assert "mapping produced zero ledger rows from 1 in-scope submission(s)" in out
+    assert "1 recognized original submission(s)" in out
+
+
+def test_map_receipts_without_config_section_keeps_all_history(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "historical.eml",
+        message_id="<historical@example.invalid>",
+        received="Tue, 01 Jan 2030 08:00:00 +0000",
+        item_date="2030-01-01",
+        amount="10.00",
+    )
+    config_path = _write_config(tmp_path)
+    map_path = _write_cutoff_category_map(tmp_path)
+    csv_path = tmp_path / "ledger.csv"
+
+    assert (
+        cli.main(
+            [
+                "map-receipts",
+                "--source",
+                str(source),
+                "--category-map",
+                str(map_path),
+                "--csv",
+                str(csv_path),
+                "--config",
+                str(config_path),
+            ]
+        )
+        == 0
+    )
+    assert [row["message_id"] for row in _read_csv_rows(csv_path)] == [
+        "<historical@example.invalid>"
+    ]
+    out = capsys.readouterr().out
+    assert "received cutoff : none (not configured)" in out
+    assert "excluded 0 submission(s)" in out
+
+
+def test_map_receipts_explicit_start_month_allows_absent_config_all_history(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "historical.eml",
+        message_id="<config-free-history@example.invalid>",
+        received="Tue, 01 Jan 2030 08:00:00 +0000",
+        item_date="2030-01-01",
+        amount="10.00",
+    )
+    map_path = _write_cutoff_category_map(tmp_path)
+    csv_path = tmp_path / "ledger.csv"
+    absent_config = tmp_path / "absent.toml"
+
+    rc = cli.main(
+        [
+            "map-receipts",
+            "--source",
+            str(source),
+            "--category-map",
+            str(map_path),
+            "--start-month",
+            "1",
+            "--csv",
+            str(csv_path),
+            "--config",
+            str(absent_config),
+        ]
+    )
+
+    assert rc == 0
+    assert [row["message_id"] for row in _read_csv_rows(csv_path)] == [
+        "<config-free-history@example.invalid>"
+    ]
+    assert "received cutoff : none (not configured)" in capsys.readouterr().out
+
+
+def test_map_receipts_explicit_start_month_still_rejects_present_malformed_config(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "submission.eml",
+        message_id="<malformed-config@example.invalid>",
+        received="Sun, 01 Sep 2030 08:00:00 +0000",
+        item_date="2030-09-01",
+        amount="10.00",
+    )
+    map_path = _write_cutoff_category_map(tmp_path)
+    config_path = _write_config(tmp_path, _config_with_received_since("not-an-iso-date"))
+
+    with pytest.raises(ConfigError, match=r"receipt_mapping\.received_since"):
+        cli.main(
+            [
+                "map-receipts",
+                "--source",
+                str(source),
+                "--category-map",
+                str(map_path),
+                "--start-month",
+                "1",
+                "--all-received",
+                "--config",
+                str(config_path),
+            ]
+        )
+
+
+@pytest.mark.parametrize("tab_name", ["", "   "])
+def test_map_receipts_rejects_empty_write_tab_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tab_name: str
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "submission.eml",
+        message_id="<empty-tab-name@example.invalid>",
+        received="Sun, 01 Sep 2030 08:00:00 +0000",
+        item_date="2030-09-01",
+        amount="10.00",
+    )
+    map_path = _write_cutoff_category_map(tmp_path)
+    constructed = _forbid_sheets_construction(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(
+            [
+                "map-receipts",
+                "--source",
+                str(source),
+                "--category-map",
+                str(map_path),
+                "--start-month",
+                "1",
+                "--all-received",
+                "--write-tab",
+                tab_name,
+                "--config",
+                str(tmp_path / "absent.toml"),
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert constructed == []
+
+
+@pytest.mark.parametrize(
+    ("config_text", "cutoff_args"),
+    [
+        (_CONFIG_TEXT, []),
+        (_config_with_received_since("2030-09-01"), ["--all-received"]),
+    ],
+    ids=["no-cutoff", "all-received-override"],
+)
+def test_map_receipts_inactive_cutoff_accepts_missing_and_malformed_dates(
+    tmp_path: Path,
+    config_text: str,
+    cutoff_args: list[str],
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    for filename, message_id, received, item_date, amount in [
+        ("missing.eml", "<missing-date@example.invalid>", None, "2030-09-01", "10.00"),
+        (
+            "malformed.eml",
+            "<malformed-date@example.invalid>",
+            "not a valid RFC-822 date",
+            "2030-09-02",
+            "20.00",
+        ),
+    ]:
+        _write_cutoff_email(
+            source / filename,
+            message_id=message_id,
+            received=received,
+            item_date=item_date,
+            amount=amount,
+        )
+    config_path = _write_config(tmp_path, config_text)
+    map_path = _write_cutoff_category_map(tmp_path)
+    csv_path = tmp_path / "ledger.csv"
+
+    rc = cli.main(
+        [
+            "map-receipts",
+            "--source",
+            str(source),
+            "--category-map",
+            str(map_path),
+            "--csv",
+            str(csv_path),
+            "--config",
+            str(config_path),
+            *cutoff_args,
+        ]
+    )
+
+    assert rc == 0
+    assert {row["message_id"] for row in _read_csv_rows(csv_path)} == {
+        "<missing-date@example.invalid>",
+        "<malformed-date@example.invalid>",
+    }
+
+
+def test_ingest_receipts_profile_ignores_configured_mapping_cutoff(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    for filename, message_id, received, item_date in [
+        (
+            "historical.eml",
+            "<profile-history@example.invalid>",
+            "Tue, 01 Jan 2030 08:00:00 +0000",
+            "2030-01-01",
+        ),
+        (
+            "current.eml",
+            "<profile-current@example.invalid>",
+            "Sun, 01 Sep 2030 08:00:00 +0000",
+            "2030-09-01",
+        ),
+    ]:
+        _write_cutoff_email(
+            source / filename,
+            message_id=message_id,
+            received=received,
+            item_date=item_date,
+            amount="10.00",
+        )
+    config_path = _write_config(tmp_path, _config_with_received_since("2030-09-01"))
+
+    rc = cli.main(
+        [
+            "ingest-receipts",
+            "--source",
+            str(source),
+            "--profile",
+            "--originals-only",
+            "--config",
+            str(config_path),
+        ]
+    )
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "recognized 2 reimbursement form(s)" in out
+    assert "email date span     : 2030-01-01 -> 2030-09-01" in out
+
+
+def test_category_seed_round_trips_formula_categories_without_collisions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    csv_path = tmp_path / "category-seed.csv"
+    dangerous = (
+        "=1+1",
+        "  +1+1",
+        "'=1+1",
+        "''=1+1",
+        "'" * 8 + "=1+1",
+        "'  @SUM(A1:A2)",
+    )
+    prof = replace(
+        receipt_ingest.profile([], start_month=1),
+        categories=tuple((value, index) for index, value in enumerate(dangerous, start=1)),
+    )
+    monkeypatch.setattr(receipt_ingest, "profile", lambda *_args, **_kwargs: prof)
+
+    rc = cli.main(
+        [
+            "ingest-receipts",
+            "--source",
+            str(source),
+            "--profile",
+            "--start-month",
+            "1",
+            "--csv",
+            str(csv_path),
+            "--config",
+            str(tmp_path / "absent.toml"),
+        ]
+    )
+
+    assert rc == 0
+    with csv_path.open(encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["raw_category"] for row in rows] == [f"'{value}" for value in dangerous]
+    assert len({row["raw_category"] for row in rows}) == len(dangerous)
+    assert [row["line_item_count"] for row in rows] == [
+        str(index) for index in range(1, len(dangerous) + 1)
+    ]
+
+    filled_path = tmp_path / "category-map.csv"
+    with filled_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["raw_category", "canonical_category"])
+        writer.writeheader()
+        for index, row in enumerate(rows, start=1):
+            writer.writerow(
+                {
+                    "raw_category": row["raw_category"],
+                    "canonical_category": f"Category {index}",
+                }
+            )
+
+    category_map = receipt_map.load_category_map(filled_path)
+    submission = receipt_ingest.Submission(
+        message_id="category-round-trip@example.invalid",
+        subject="Example Reimbursement Form got a new submission",
+        received="Sun, 01 Sep 2030 08:00:00 +0000",
+        requestor_name="Example Requestor",
+        requestor_email="requestor@example.invalid",
+        phone="",
+        company="Example Vendor",
+        line_items=tuple(
+            receipt_ingest.LineItem(
+                index=index,
+                date="2030-09-01",
+                category=value,
+                description=f"Example item {index}",
+                amount=f"{index}.00",
+            )
+            for index, value in enumerate(dangerous, start=1)
+        ),
+        total=f"{sum(range(1, len(dangerous) + 1))}.00",
+        payment_type="Check",
+        receipt_urls=(),
+        attachments=(),
+        notes="",
+    )
+
+    mapped = receipt_map.map_submissions([submission], category_map=category_map, start_month=1)
+    assert [row["canonical_category"] for row in mapped] == [
+        f"Category {index}" for index in range(1, len(dangerous) + 1)
+    ]
+    assert all("unmapped-category" not in row["needs_review"] for row in mapped)
+
+
+def test_ingest_receipts_csv_neutralizes_text_and_preserves_finite_signed_money(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    csv_path = tmp_path / "ingest.csv"
+    formula_submission = receipt_ingest.Submission(
+        message_id="  +message",
+        subject="Example Reimbursement Form got a new submission",
+        received="\t-received",
+        requestor_name="  @requestor",
+        requestor_email="=mail",
+        phone="",
+        company=" +company",
+        line_items=(
+            receipt_ingest.LineItem(
+                index=1,
+                date="\t-date",
+                category=" @category",
+                description="=description",
+                amount="=2+2",
+            ),
+        ),
+        total="  @SUM(A1:A2)",
+        payment_type="Check",
+        receipt_urls=(" +url",),
+        attachments=("\t-attachment",),
+        notes="",
+    )
+
+    def _money_submission(message_id: str, amount: str) -> receipt_ingest.Submission:
+        return receipt_ingest.Submission(
+            message_id=message_id,
+            subject="Example Reimbursement Form got a new submission",
+            received="Sun, 01 Sep 2030 08:00:00 +0000",
+            requestor_name="Example Requestor",
+            requestor_email="requestor@example.invalid",
+            phone="",
+            company="Example Vendor",
+            line_items=(
+                receipt_ingest.LineItem(
+                    index=1,
+                    date="2030-09-01",
+                    category="Supplies",
+                    description="Example purchase",
+                    amount=amount,
+                ),
+            ),
+            total=amount,
+            payment_type="Check",
+            receipt_urls=(),
+            attachments=(),
+            notes="",
+        )
+
+    submissions = [
+        ("=source", formula_submission),
+        ("negative.eml", _money_submission("negative@example.invalid", "-12.50")),
+        ("positive.eml", _money_submission("positive@example.invalid", "+20.50")),
+        ("bounded.eml", _money_submission("bounded@example.invalid", "1e100000")),
+    ]
+    monkeypatch.setattr(receipt_ingest, "iter_source", lambda _path: iter(submissions))
+    monkeypatch.setattr(
+        receipt_ingest,
+        "parse_submission",
+        lambda message, *, subject_filter=None: message,
+    )
+
+    rc = cli.main(
+        [
+            "ingest-receipts",
+            "--source",
+            str(source),
+            "--start-month",
+            "1",
+            "--limit",
+            "0",
+            "--csv",
+            str(csv_path),
+            "--config",
+            str(tmp_path / "absent.toml"),
+        ]
+    )
+
+    assert rc == 0
+    rows = _read_csv_rows(csv_path)
+    formula_row = rows[0]
+    expected_formula_cells = {
+        "source_file": "=source",
+        "message_id": "  +message",
+        "received": "\t-received",
+        "requestor_name": "  @requestor",
+        "requestor_email": "=mail",
+        "company": " +company",
+        "date": "\t-date",
+        "category": " @category",
+        "description": "=description",
+        "amount": "=2+2",
+        "total_stated": "  @SUM(A1:A2)",
+        "receipt_urls": " +url",
+        "attachments": "\t-attachment",
+    }
+    for field, raw in expected_formula_cells.items():
+        assert formula_row[field] == f"'{raw}"
+    assert [row["amount"] for row in rows[1:]] == ["-12.50", "20.50", "'1e100000"]
+    assert [row["total_stated"] for row in rows[1:]] == [
+        "-12.50",
+        "20.50",
+        "'1e100000",
+    ]
+
+
+def test_map_receipts_csv_neutralizes_formula_like_text_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "submission.eml",
+        message_id="<csv-safety@example.invalid>",
+        received="Sun, 01 Sep 2030 08:00:00 +0000",
+        item_date="2030-09-01",
+        amount="10.00",
+    )
+    map_path = _write_cutoff_category_map(tmp_path)
+    csv_path = tmp_path / "ledger.csv"
+    text_fields = [name for name in receipt_map.FIELDNAMES if name != "amount"]
+    dangerous_values = ["=1+1", "  +1+1", "\t-command", "  @SUM(A1:A2)"]
+    mapped_row = {
+        field: dangerous_values[index % len(dangerous_values)]
+        for index, field in enumerate(text_fields)
+    }
+    mapped_row["amount"] = "-12.50"
+    mapped_rows = []
+    for message_id in ("=message", "'=message", "''=message"):
+        row = dict(mapped_row)
+        row["message_id"] = message_id
+        mapped_rows.append(row)
+    monkeypatch.setattr(receipt_map, "map_submissions", lambda *_args, **_kwargs: mapped_rows)
+
+    rc = cli.main(
+        [
+            "map-receipts",
+            "--source",
+            str(source),
+            "--category-map",
+            str(map_path),
+            "--start-month",
+            "1",
+            "--all-received",
+            "--csv",
+            str(csv_path),
+            "--config",
+            str(tmp_path / "absent.toml"),
+        ]
+    )
+
+    assert rc == 0
+    rows = _read_csv_rows(csv_path)
+    assert [row["message_id"] for row in rows] == ["'=message", "''=message", "'''=message"]
+    assert [row["amount"] for row in rows] == ["-12.50"] * 3
+    for field in text_fields:
+        if field == "message_id":
+            continue
+        assert [row[field] for row in rows] == [
+            backup.encode_formula_safe_text(mapped_row[field])
+        ] * 3
+
+
+class _CapturingReceiptSheetsClient:
+    instances: list[_CapturingReceiptSheetsClient] = []
+
+    def __init__(self, config: Config) -> None:
+        self.config = config
+        self.replacement: tuple[str, list[str], list[list[str]], list[str]] | None = None
+        self.instances.append(self)
+
+    def list_worksheet_titles(self) -> list[str]:
+        return []
+
+    def replace_tab_grid(
+        self,
+        tab: str,
+        header: Sequence[str],
+        rows: Sequence[Sequence[str]],
+        *,
+        numeric_columns: Sequence[str] = (),
+    ) -> str:
+        self.replacement = (
+            tab,
+            list(header),
+            [list(row) for row in rows],
+            list(numeric_columns),
+        )
+        return "created"
+
+
+def test_map_receipts_cutoff_sheet_write_orders_schema_and_safes_amounts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    for filename, message_id, received, item_date, amount in [
+        (
+            "a-excluded.eml",
+            "<sheet-excluded@example.invalid>",
+            "Sat, 31 Aug 2030 08:00:00 +0000",
+            "2030-08-31",
+            "1.00",
+        ),
+        (
+            "b-negative.eml",
+            "<sheet-negative@example.invalid>",
+            "Sun, 01 Sep 2030 08:00:00 +0000",
+            "2030-09-01",
+            "-10.25",
+        ),
+        (
+            "c-positive.eml",
+            "<sheet-positive@example.invalid>",
+            "Mon, 02 Sep 2030 08:00:00 +0000",
+            "2030-09-02",
+            "+20.50",
+        ),
+        (
+            "d-formula.eml",
+            "<sheet-formula@example.invalid>",
+            "Tue, 03 Sep 2030 08:00:00 +0000",
+            "2030-09-03",
+            "=2+2",
+        ),
+        (
+            "e-bounded.eml",
+            "<sheet-bounded@example.invalid>",
+            "Wed, 04 Sep 2030 08:00:00 +0000",
+            "2030-09-04",
+            "1e100000",
+        ),
+    ]:
+        _write_cutoff_email(
+            source / filename,
+            message_id=message_id,
+            received=received,
+            item_date=item_date,
+            amount=amount,
+        )
+    map_path = _write_cutoff_category_map(tmp_path)
+    config_path = _write_config(tmp_path, _config_with_received_since("2030-09-01"))
+    csv_path = tmp_path / "ledger.csv"
+    load_calls: list[Path] = []
+    real_load_config = cli.load_config
+
+    def _counting_load_config(path: Path) -> Config:
+        load_calls.append(path)
+        return real_load_config(path)
+
+    _CapturingReceiptSheetsClient.instances = []
+    monkeypatch.setattr(cli, "load_config", _counting_load_config)
+    monkeypatch.setattr(cli, "SheetsClient", _CapturingReceiptSheetsClient)
+
+    rc = cli.main(
+        [
+            "map-receipts",
+            "--source",
+            str(source),
+            "--category-map",
+            str(map_path),
+            "--write-tab",
+            "Example Reimbursements",
+            "--csv",
+            str(csv_path),
+            "--config",
+            str(config_path),
+        ]
+    )
+
+    assert rc == 0
+    (client,) = _CapturingReceiptSheetsClient.instances
+    assert client.replacement is not None
+    tab, header, sheet_rows, numeric_columns = client.replacement
+    assert tab == "Example Reimbursements"
+    assert header == list(receipt_map.FIELDNAMES)
+    assert numeric_columns == ["amount"]
+    amount_index = header.index("amount")
+    assert [row[amount_index] for row in sheet_rows] == [
+        "-10.25",
+        "20.50",
+        "''=2+2",
+        "'1e100000",
+    ]
+    csv_rows = _read_csv_rows(csv_path)
+    assert [row["message_id"] for row in csv_rows] == [
+        "<sheet-negative@example.invalid>",
+        "<sheet-positive@example.invalid>",
+        "<sheet-formula@example.invalid>",
+        "<sheet-bounded@example.invalid>",
+    ]
+    assert [row["amount"] for row in csv_rows] == [
+        "-10.25",
+        "20.50",
+        "'=2+2",
+        "'1e100000",
+    ]
+    expected_sheet_rows = [[row[name] for name in receipt_map.FIELDNAMES] for row in csv_rows]
+    expected_sheet_rows[-2][amount_index] = "''=2+2"
+    expected_sheet_rows[-1][amount_index] = "'1e100000"
+    assert sheet_rows == expected_sheet_rows
+    assert load_calls == [config_path]
+
+
+def test_map_receipts_write_requires_config_snapshot_before_source_parse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "historical.eml",
+        message_id="<late-config@example.invalid>",
+        received="Sun, 01 Sep 2030 08:00:00 +0000",
+        item_date="2030-09-01",
+        amount="10.00",
+    )
+    map_path = _write_cutoff_category_map(tmp_path)
+    config_path = tmp_path / "initially-absent.toml"
+    source_iteration_started: list[bool] = []
+    real_iter_source = receipt_ingest.iter_source
+
+    def _source_that_creates_config_late(path: Path):  # type: ignore[no-untyped-def]
+        source_iteration_started.append(True)
+        config_path.write_text(_config_with_received_since("2030-10-01"), encoding="utf-8")
+        yield from real_iter_source(path)
+
+    _CapturingReceiptSheetsClient.instances = []
+    monkeypatch.setattr(receipt_ingest, "iter_source", _source_that_creates_config_late)
+    monkeypatch.setattr(cli, "SheetsClient", _CapturingReceiptSheetsClient)
+
+    with pytest.raises(FileNotFoundError):
+        cli.main(
+            [
+                "map-receipts",
+                "--source",
+                str(source),
+                "--category-map",
+                str(map_path),
+                "--start-month",
+                "1",
+                "--write-tab",
+                "Example Reimbursements",
+                "--config",
+                str(config_path),
+            ]
+        )
+
+    assert source_iteration_started == []
+    assert not config_path.exists()
+    assert _CapturingReceiptSheetsClient.instances == []
+
+
+def test_map_receipts_preview_without_start_month_requires_initial_config_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "historical.eml",
+        message_id="<late-preview-config@example.invalid>",
+        received="Sun, 01 Sep 2030 08:00:00 +0000",
+        item_date="2030-09-01",
+        amount="10.00",
+    )
+    map_path = _write_cutoff_category_map(tmp_path)
+    config_path = tmp_path / "initially-absent.toml"
+    category_load_started: list[bool] = []
+    real_load_category_map = receipt_map.load_category_map
+
+    def _category_load_that_creates_config_late(path: Path) -> dict[str, str]:
+        category_load_started.append(True)
+        config_path.write_text(_config_with_received_since("2030-10-01"), encoding="utf-8")
+        return real_load_category_map(path)
+
+    monkeypatch.setattr(receipt_map, "load_category_map", _category_load_that_creates_config_late)
+
+    with pytest.raises(FileNotFoundError):
+        cli.main(
+            [
+                "map-receipts",
+                "--source",
+                str(source),
+                "--category-map",
+                str(map_path),
+                "--config",
+                str(config_path),
+            ]
+        )
+
+    assert category_load_started == []
+    assert not config_path.exists()
+
+
+class _PersistingReceiptSheetsClient:
+    """Fake the RAW grid plus USER_ENTERED apostrophe handling across two CLI runs."""
+
+    def __init__(self) -> None:
+        self.grid: list[list[object]] = []
+        self.numeric_columns_calls: list[list[str]] = []
+        self.events: list[str] = []
+
+    def list_worksheet_titles(self) -> list[str]:
+        return ["Example Reimbursements"] if self.grid else []
+
+    def read_values(self, _tab: str) -> list[list[str]]:
+        self.events.append("snapshot-read")
+        return [[str(cell) for cell in row] for row in self.grid]
+
+    def read_snapshot_values(self, _tab: str) -> list[list[dict[str, object]]]:
+        self.events.append("snapshot-read")
+        return tagged_user_entered_grid(self.grid)
+
+    def replace_tab_grid(
+        self,
+        _tab: str,
+        header: Sequence[str],
+        rows: Sequence[Sequence[str]],
+        *,
+        numeric_columns: Sequence[str] = (),
+    ) -> str:
+        self.events.append("replace")
+        existed = bool(self.grid)
+        header_row: list[object] = list(header)
+        data: list[list[object]] = [list(row) for row in rows]
+        self.numeric_columns_calls.append(list(numeric_columns))
+        amount_index = header_row.index("amount")
+        for row in data:
+            amount = str(row[amount_index])
+            if amount.startswith("'"):
+                row[amount_index] = amount[1:]
+            else:
+                row[amount_index] = float(receipt_map.parse_finite_amount(amount))
+        self.grid = [header_row, *data]
+        return "replaced" if existed else "created"
+
+
+def test_map_receipts_first_backup_safes_existing_grid_and_keeps_lossless_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "submission.eml",
+        message_id="<first-safe-backup@example.invalid>",
+        received="Sun, 01 Sep 2030 08:00:00 +0000",
+        item_date="2030-09-01",
+        amount="10.00",
+    )
+    map_path = _write_cutoff_category_map(tmp_path)
+    config_path = _write_config(tmp_path)
+    existing_grid = [
+        ["equals", "plus", "minus", "at", "plain"],
+        ["=1+1", "  +1+1", "\t-command", "  @SUM(A1:A2)", "unchanged"],
+    ]
+    client = _PersistingReceiptSheetsClient()
+    client.grid = [list(row) for row in existing_grid]
+    monkeypatch.setattr(cli, "SheetsClient", lambda _config: client)
+
+    rc = cli.main(
+        [
+            "map-receipts",
+            "--source",
+            str(source),
+            "--category-map",
+            str(map_path),
+            "--write-tab",
+            "Example Reimbursements",
+            "--dest",
+            str(tmp_path),
+            "--config",
+            str(config_path),
+        ]
+    )
+
+    assert rc == 0
+    assert client.events == ["snapshot-read", "replace"]
+    (csv_path,) = list((tmp_path / "snapshots").glob("*/Example Reimbursements.csv"))
+    with csv_path.open(encoding="utf-8", newline="") as handle:
+        safe_grid = list(csv.reader(handle))
+    assert safe_grid == [
+        existing_grid[0],
+        ["'=1+1", "'  +1+1", "'\t-command", "'  @SUM(A1:A2)", "unchanged"],
+    ]
+    lossless_path = csv_path.with_suffix(".raw.json")
+    assert json.loads(lossless_path.read_text(encoding="utf-8")) == {
+        "schema_version": 1,
+        "value_model": "google-sheets-userEnteredValue",
+        "grid": tagged_user_entered_grid(existing_grid),
+    }
+
+
+def test_map_receipts_sheet_values_remain_formula_safe_in_next_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    _write_cutoff_email(
+        source / "submission.eml",
+        message_id="<snapshot-safety@example.invalid>",
+        received="Sun, 01 Sep 2030 08:00:00 +0000",
+        item_date="2030-09-01",
+        amount="10.00",
+    )
+    map_path = _write_cutoff_category_map(tmp_path)
+    config_path = _write_config(tmp_path)
+    text_fields = [name for name in receipt_map.FIELDNAMES if name != "amount"]
+    dangerous_values = ["=1+1", "  +1+1", "\t-command", "  @SUM(A1:A2)"]
+    formula_row = {
+        field: dangerous_values[index % len(dangerous_values)]
+        for index, field in enumerate(text_fields)
+    }
+    formula_row["amount"] = "=2+2"
+
+    def _safe_row(message_id: str, amount: str) -> dict[str, str]:
+        row = {field: "safe" for field in receipt_map.FIELDNAMES}
+        row["message_id"] = message_id
+        row["amount"] = amount
+        row["needs_review"] = ""
+        return row
+
+    mapped_rows = [
+        formula_row,
+        _safe_row("<negative-snapshot@example.invalid>", "-12.50"),
+        _safe_row("<positive-snapshot@example.invalid>", "+20.50"),
+        _safe_row("<apostrophe-snapshot@example.invalid>", "'oops"),
+        _safe_row("<double-apostrophe-snapshot@example.invalid>", "''=2+2"),
+        _safe_row("=message", "1.00"),
+        _safe_row("'=message", "1.00"),
+        _safe_row("''=message", "1.00"),
+    ]
+    client = _PersistingReceiptSheetsClient()
+    monkeypatch.setattr(
+        receipt_map,
+        "map_submissions",
+        lambda *_args, **_kwargs: [dict(row) for row in mapped_rows],
+    )
+    monkeypatch.setattr(cli, "SheetsClient", lambda _config: client)
+    args = [
+        "map-receipts",
+        "--source",
+        str(source),
+        "--category-map",
+        str(map_path),
+        "--write-tab",
+        "Example Reimbursements",
+        "--dest",
+        str(tmp_path),
+        "--config",
+        str(config_path),
+    ]
+
+    assert cli.main(args) == 0
+    assert cli.main(args) == 0
+
+    snapshot_paths = list((tmp_path / "snapshots").glob("*/Example Reimbursements.csv"))
+    assert len(snapshot_paths) == 1
+    snapshot_rows = _read_csv_rows(snapshot_paths[0])
+    formula_snapshot = snapshot_rows[0]
+    for field in text_fields:
+        assert formula_snapshot[field] == "''" + formula_row[field]
+    assert [row["amount"] for row in snapshot_rows] == [
+        "''=2+2",
+        "-12.5",
+        "20.5",
+        "'oops",
+        "''''=2+2",
+        "1.0",
+        "1.0",
+        "1.0",
+    ]
+    assert [row["message_id"] for row in snapshot_rows[-3:]] == [
+        "''=message",
+        "'''=message",
+        "''''=message",
+    ]
+    exact = json.loads(snapshot_paths[0].with_suffix(".raw.json").read_text(encoding="utf-8"))
+    message_index = list(receipt_map.FIELDNAMES).index("message_id")
+    assert [
+        row[message_index]["userEnteredValue"]["stringValue"] for row in exact["grid"][-3:]
+    ] == ["'=message", "''=message", "'''=message"]
+    assert client.numeric_columns_calls == [["amount"], ["amount"]]

@@ -103,16 +103,19 @@ Ambiguous legacy rows get a `needs_review` flag column rather than being discard
 
 ### Corruption protection
 
-1. **Snapshot before every write:** `snapshot` exports each tab to CSV under `snapshots/<utc>/`
-   (and optionally a private Drive backup folder) before any mutating run.
+1. **Snapshot before every write:** `snapshot` exports each tab through the spreadsheet-safe CSV
+   boundary under `snapshots/<utc>/` before any mutating run. Every safe CSV has an adjacent
+   versioned `.raw.json` tagged `userEnteredValue` grid that distinguishes formulas from identical
+   literal text and preserves native scalar types; formatting and comments are outside these
+   artifacts. Snapshot directories are claimed atomically and timestamp collisions use suffixes.
 2. **Atomic writes:** all writes go through `gspread` `batch_update` — all-or-nothing; a failed
    subrequest rolls back the whole batch.
-3. **Sheets version history** is the automatic secondary safety net.
+3. **Sheets version history** is the automatic primary recovery path.
 4. **Rate-limit safety:** writes batch 10–50 rows per request and retry on HTTP 429 with
    exponential backoff + jitter (project quota: 300 req/min; per-user: 60 req/min).
-5. **Restore:** roll back via Sheets version history (primary), or re-import the latest
-   `snapshots/<utc>/` CSVs (belt-and-suspenders). A dedicated `restore` CLI command is a
-   candidate Phase-2 add; v1 relies on version history + the CSV snapshots.
+5. **Restore:** roll back via Sheets version history. The safe CSV is for inspection/import
+   convenience; the adjacent `.raw.json` is the exact entered-value/formula recovery source.
+   Recovery from JSON is currently manual; there is no automated `restore` command.
 
 Writes **target specific rows/ranges by ID**, never a full-tab overwrite — this bounds the
 blast radius of a write and reduces the chance of clobbering a concurrent human edit.
@@ -183,8 +186,9 @@ path.
 - **`sheets.py`** — `gspread` service-account client wrapper: open spreadsheet, read a tab to
   records, atomic `batch_update` writes with 429 backoff + jitter, schema validation. The only
   module that talks to Google.
-- **`backup.py`** — CSV snapshot export (corruption protection); defaults to the live tab set
-  (`report_log` + Budget Timeseries, skipping any absent tab), with `tabs=` for legacy callers.
+- **`backup.py`** — spreadsheet-safe CSV plus exact tagged entered-value JSON snapshots (corruption
+  protection); defaults to the live tab set (`report_log` + Budget Timeseries, skipping any absent
+  tab), with `tabs=` for legacy callers.
 - **`etl.py`** — normalize legacy/raw rows → canonical schema; assign missing IDs; dedup;
   `needs_review` flagging; snapshot-before-write.
 - **`budget_import.py` / `budget_sync.py`** — legacy budget import plus dry-run-first reconciliation
@@ -205,7 +209,7 @@ path.
 |---|---|
 | `pta-finance check` | Validate `report_log` schema + Budget Timeseries source readability; real round-trip read/write/delete of a test row in `report_log` (smoke) |
 | `pta-finance init-sheet [--target production\|test]` | Create the live-required tab and headers in the selected spreadsheet |
-| `pta-finance snapshot` | Export CSV backups of the live tab set (`report_log` + Budget Timeseries; skips absent tabs) |
+| `pta-finance snapshot` | Export safe CSV + exact tagged entered-value JSON backups of the live tab set (`report_log` + Budget Timeseries; skips absent tabs) |
 | `pta-finance normalize` | (legacy) Normalize legacy/raw ledger → canonical schema, assign IDs, dedup (snapshot first) |
 | `pta-finance analyze [--fy YYYY]` | Run analytics over the Budget Timeseries tab; print summary |
 | `pta-finance report [--fy YYYY] [--variant internal\|external\|both]` | Generate fiscal-year report(s) from the Budget Timeseries tab (default: current FY) |
@@ -285,7 +289,7 @@ pta_finance/                      # repo root (standalone public repo)
 │   ├── test_workflows.py         # static safety guards on monthly-report.yml
 │   └── test_smoke_pipeline.py    # end-to-end wiring gate (mock sheet)
 ├── secrets/                      # gitignored; holds service-account.json locally
-└── snapshots/                    # gitignored; CSV backups
+└── snapshots/                    # gitignored; safe CSV + exact tagged entered-value JSON backups
 ```
 
 ## 8. Key Design Decisions
@@ -581,6 +585,9 @@ drive_reports_folder_id  = "<private-drive-folder-id>"     # report outputs (nev
 [google]
 service_account_file = "secrets/service-account.json"
 
+# [receipt_mapping]             # optional; omit for all-history mapping
+# received_since = "YYYY-MM-DD" # inclusive outer RFC-822 Date-header cutoff
+
 # [llm]            # Phase 4
 # api_key_env = "ANTHROPIC_API_KEY"
 ```
@@ -589,8 +596,8 @@ service_account_file = "secrets/service-account.json"
 
 ## Phase 1 — v1 Automated Build (Steps 1–8)
 
-**All 8 issues (#1–#8) closed. 113 tests passing (+1 skipped, pyyaml-gated). Zero type errors
-(`mypy --strict`). Zero lint violations. Built directly on `main` (sequential greenfield, no
+**All 8 issues (#1–#8) closed. The full test suite, `mypy --strict`, and Ruff gates passed. Built
+directly on `main` (sequential greenfield, no
 worktrees); pushed `cbeeecc..193bed2`.**
 
 ### What was built
@@ -617,7 +624,7 @@ worktrees); pushed `cbeeecc..193bed2`.**
 |---|---|
 | Package | `pta_finance/{config,ids,schema,models,sheets,backup,etl,cli}.py`, `analytics/{aggregate,trends}.py`, `reports/{builder,charts,render}.py` + `templates/{internal,external}.html.j2` |
 | Config / CI | `pyproject.toml`, `config.example.toml`, `scripts/check_no_identity.py`, `.github/workflows/{ci,monthly-report}.yml`, `.github/last-run.txt` |
-| Tests | `tests/conftest.py` + 12 `test_*.py` (113 passing + 1 skipped) |
+| Tests | `tests/conftest.py` + 12 `test_*.py` (full suite passing) |
 
 ### Fresh-context notes
 
@@ -633,8 +640,8 @@ worktrees); pushed `cbeeecc..193bed2`.**
 ## Phase 4 — Receipt ingestion (shipped: profiler + mapping engine + Reimbursements ledger + Receipts Explorer + the `fetch-mail` Gmail connector)
 
 **Shipped end-to-end against a real, gitignored Takeout mailbox and live Sheet with all categories
-mapped. 219 tests passing (+1 skipped, pyyaml-gated). Zero type errors (`mypy --strict`). Zero lint
-violations. Built on `main`; the live write path was revalidated with snapshot + semantic read-back
+mapped. The full test suite, `mypy --strict`, and Ruff gates passed. Built on `main`; the live write
+path was revalidated with snapshot + semantic read-back
 reconciliation on 2026-08-20. Private mailbox counts and financial totals remain outside the repo.**
 
 ### What was built
@@ -644,14 +651,25 @@ reconciliation on 2026-08-20. Private mailbox counts and financial totals remain
   spacing and missing fields. Adds `.mbox`/Takeout reading (`iter_mbox` / `iter_source`), a PII-free
   batch **`Profile`** (form types, category vocabulary, blank-field rates, reconciliation, FY span,
   and the **email-date span** for completeness), and `is_reply_or_forward` (drops `Re:`/`Fwd:` thread
-  duplicates that `Message-ID` dedup can't catch).
+  duplicates that `Message-ID` dedup can't catch), plus one shared RFC-822 received-date parser
+  used by the profile and mapper FY fallback without converting the header-local calendar date.
 - **`receipt_map.py`** — pure `Submission` → flat **Reimbursements** ledger rows: carry-forward blank
   category/date, skip blank-amount lines, canonical-category lookup + per-form default,
   `Message-ID` + content-hash dedup, `needs_review` reasons.
 - **`ingest-receipts` CLI** — preview each submission, or `--profile` the whole batch (`--csv` writes
   a category-map seed). **`map-receipts` CLI** — build the ledger; `--write-tab` creates/replaces a
   machine-owned Sheet tab via `SheetsClient.replace_tab_grid` (RAW grid + USER_ENTERED amount so it
-  totals in native SUM/QUERY).
+  totals in native SUM/QUERY); only validated finite amounts take that numeric path, while rejected
+  amount text remains reviewable. Category-seed, ingest, mapped-ledger, and snapshot CSVs share one
+  injective formula-neutralization boundary; each backup pairs the inspection/import CSV with a
+  versioned tagged `userEnteredValue` JSON grid before replacement. Mapping without explicit
+  `--start-month` freezes one
+  required config snapshot before
+  category/source parsing and reuses it for both fiscal-year and cutoff policy.
+  Optional private `[receipt_mapping] received_since` is the
+  authoritative inclusive ledger cutoff; explicit `--received-since` / `--all-received` overrides
+  win, recognized originals are partitioned before the mapper's single dedup call, and every
+  zero-ledger-row `--write-tab` refuses before Sheet-client construction.
 - **Receipts Explorer** (Sheet-side, not repo code) — a dropdown-driven QUERY+pie dashboard over the
   Reimbursements tab: Panel A breaks down by dimension, Panel B drills into one category. Operator
   load procedure: [docs/loading-receipts.md](docs/loading-receipts.md).
@@ -680,10 +698,10 @@ Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready),
 
 | File | Change |
 |---|---|
-| `pta_finance/receipt_ingest.py` | `.eml`/`.mbox` parser + PII-free `Profile` + `is_reply_or_forward` (structural recognition, no identity hard-coded) |
+| `pta_finance/receipt_ingest.py` | `.eml`/`.mbox` parser + PII-free `Profile` + shared RFC-822 received-date parser + `is_reply_or_forward` (structural recognition, no identity hard-coded) |
 | `pta_finance/receipt_map.py` | New — pure `Submission` → flat Reimbursements ledger rows (dedup, carry-forward, per-form default, `needs_review`) |
 | `pta_finance/sheets.py` | New `replace_tab_grid` — schema-independent create/replace of a machine-owned tab (RAW grid + USER_ENTERED numeric column) |
-| `pta_finance/cli.py` | `ingest-receipts` (+ `--profile` / `--originals-only`) + new `map-receipts` (+ `--write-tab`) |
+| `pta_finance/cli.py` | `ingest-receipts` (+ `--profile` / `--originals-only`) + `map-receipts` (+ pre-dedup received cutoff / `--write-tab`) |
 | `tests/test_receipt_ingest.py`, `test_receipt_map.py`, `test_sheets.py` | Parser / profiler / mapper / writer coverage over synthetic fixtures |
 | `docs/loading-receipts.md`, `SETUP.md` | Operator load how-to + completeness check; acquisition half since replaced by `fetch-mail` (Gmail → `fetch-mail` → `map-receipts`), and SETUP.md §6 adds the OAuth stage |
 

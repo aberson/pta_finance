@@ -48,6 +48,25 @@ service_account_file = "secrets/service-account.json"
 """
 
 
+def tagged_user_entered_grid(
+    grid: Iterable[Iterable[object]],
+) -> list[list[dict[str, object]]]:
+    """Tag fake grid cells using the Sheets ``userEnteredValue`` vocabulary."""
+
+    def _tag(value: object) -> dict[str, object]:
+        if value is None or value == "":
+            return {"userEnteredValue": None}
+        if isinstance(value, bool):
+            return {"userEnteredValue": {"boolValue": value}}
+        if isinstance(value, (int, float)):
+            return {"userEnteredValue": {"numberValue": value}}
+        if isinstance(value, str) and value.startswith("="):
+            return {"userEnteredValue": {"formulaValue": value}}
+        return {"userEnteredValue": {"stringValue": str(value)}}
+
+    return [[_tag(value) for value in row] for row in grid]
+
+
 @pytest.fixture
 def fake_config(tmp_path: Path) -> Config:
     """A loaded :class:`Config` with fake placeholder identity."""
@@ -137,7 +156,7 @@ class FakeWorksheet:
         header = self.grid[0]
         return [dict(zip(header, row, strict=False)) for row in self.grid[1:]]
 
-    def get_all_values(self) -> list[list[str]]:
+    def get_all_values(self, *, value_render_option: Any = None) -> list[list[str]]:
         self._maybe_fail("get_all_values")
         return [list(row) for row in self.grid]
 
@@ -222,6 +241,7 @@ class FakeSpreadsheet:
                 ws.title = title
             self._worksheets[title] = ws
         self.add_worksheet_calls: list[tuple[str, int, int]] = []
+        self.metadata_params: list[dict[str, Any]] = []
         # When set, add_worksheet inserts the worksheet (the create applied server-side)
         # and THEN raises — simulating a retried-create that already took effect, so the
         # caller's recovery path sees the tab as now-present.
@@ -232,6 +252,25 @@ class FakeSpreadsheet:
 
     def worksheets(self) -> list[FakeWorksheet]:
         return list(self._worksheets.values())
+
+    def fetch_sheet_metadata(self, params: Mapping[str, Any]) -> dict[str, Any]:
+        """Return tagged user-entered cells for the one absolute worksheet range requested."""
+        self.metadata_params.append(dict(params))
+        raw_range = str(params["ranges"])
+        title = raw_range.split("!", 1)[0]
+        if title.startswith("'") and title.endswith("'"):
+            title = title[1:-1].replace("''", "'")
+        ws = self.worksheet(title)
+
+        return {
+            "sheets": [
+                {
+                    "data": [
+                        {"rowData": [{"values": row} for row in tagged_user_entered_grid(ws.grid)]}
+                    ]
+                }
+            ]
+        }
 
     def add_worksheet(self, *, title: str, rows: int, cols: int) -> FakeWorksheet:
         self.add_worksheet_calls.append((title, rows, cols))
