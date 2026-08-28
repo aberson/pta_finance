@@ -12,6 +12,8 @@ Wired subcommands:
     import-budget  (legacy) load a messy "budget" worksheet into the canonical budget tab
     fetch-mail     Phase 4 - fetch a date window of Gmail into .eml files (counts only)
     ingest-receipts / map-receipts  Phase 4 - parse those .eml/.mbox files into ledger rows
+    report-reimbursements  render the private queue from its validated local bundle
+    update-reimbursements  optional mail fetch -> local evidence refresh -> private report
 
 The LIVE data flow sources ``report`` / ``analyze`` from the operator-maintained "Budget
 Timeseries" tab and writes only ``report_log``; ``check`` / ``init-sheet`` / ``snapshot``
@@ -40,6 +42,8 @@ from pta_finance import (
     models,
     receipt_ingest,
     receipt_map,
+    reimbursement_pipeline,
+    reimbursement_report,
     report_source,
     reports,
     schema,
@@ -993,8 +997,6 @@ def _cmd_fetch_mail(args: argparse.Namespace, *, service: Any = None) -> int:
         return 1
 
     config = _load(args)
-    matched = 0
-    counts = {"new": 0, "unchanged": 0, "rewritten": 0}
     try:
         out_dir = Path(args.out) if args.out else gmail_source.inbox_dir(config)
         if service is None:
@@ -1005,33 +1007,179 @@ def _cmd_fetch_mail(args: argparse.Namespace, *, service: Any = None) -> int:
                 )
             service = gmail_source.build_service(gmail_source.load_or_mint_credentials(config))
 
-        query = gmail_source.build_query(since, until, extra=args.query)
-        print(f"fetch-mail: query {query!r}")
+        summary = gmail_source.fetch_window(
+            service,
+            since=since,
+            until=until,
+            extra_query=args.query,
+            out_dir=out_dir,
+            limit=args.limit,
+            dry_run=args.dry_run,
+        )
+        print(f"fetch-mail: query {summary.query!r}")
         print(f"  destination : {out_dir}")
-
-        for message_id in gmail_source.list_message_ids(service, query, limit=args.limit):
-            matched += 1
-            if args.dry_run:
-                continue
-            raw = gmail_source.fetch_raw(service, message_id)
-            counts[gmail_source.write_eml(raw, out_dir).status] += 1
     except gmail_source.GmailError as exc:
         print(f"fetch-mail: {exc}")
         return 1
 
     if args.dry_run:
-        print(f"fetch-mail: {matched} message(s) match — --dry-run, no .eml files written")
+        print(f"fetch-mail: {summary.matched} message(s) match — --dry-run, no .eml files written")
         return 0
 
     print(
-        f"fetch-mail: {matched} message(s) matched -> "
-        f"{counts['new']} new, {counts['unchanged']} unchanged, {counts['rewritten']} rewritten"
+        f"fetch-mail: {summary.matched} message(s) matched -> "
+        f"{summary.new} new, {summary.unchanged} unchanged, {summary.rewritten} rewritten"
     )
     print(
         "  next: map the .eml files AND the .mbox archives in ONE run — "
         f"`pta-finance map-receipts --source {out_dir}` (two separate runs would "
         "double-count every message the two sources share)"
     )
+    return 0
+
+
+def _print_reimbursement_report_result(result: reimbursement_report.BuildResult) -> None:
+    """Print one aggregate-only reimbursement report receipt."""
+    summary = result.summary
+    print(
+        "report-reimbursements: "
+        f"{summary.active} active, {summary.settled} settled, "
+        f"{summary.live_unreviewed} unreviewed, {summary.item_lines} item line(s)"
+    )
+    print(
+        f"  recommendation : ${summary.approved:,.2f} approved, "
+        f"${summary.clarification:,.2f} clarification, "
+        f"${summary.declined:,.2f} declined, ${summary.question:,.2f} question"
+    )
+    print(f"  email drafts   : {summary.emails_to_send}")
+    print(f"  output         : {result.output_path}")
+    print(f"  sha256         : {result.sha256}")
+
+
+def _cmd_report_reimbursements(args: argparse.Namespace) -> int:
+    """Render the private reimbursement report from one validated local bundle.
+
+    This command is intentionally offline: it does not load ``config.toml``, credentials, Gmail,
+    or Sheets.  The private bundle is the complete input and the HTML is replaced atomically only
+    after validation and rendering succeed.
+    """
+    try:
+        result = reimbursement_report.build_report(Path(args.data), Path(args.output))
+    except (OSError, reimbursement_report.ReimbursementReportError) as exc:
+        print(f"report-reimbursements: {exc}")
+        return 1
+    _print_reimbursement_report_result(result)
+    return 0
+
+
+def _cmd_update_reimbursements(args: argparse.Namespace, *, service: Any = None) -> int:
+    """Run optional Gmail acquisition, local evidence refresh, then offline report rendering.
+
+    The convenience command deliberately stops at private local artifacts.  It never sends mail
+    and never writes either Google Sheet tab; ``map-receipts --write-tab`` retains that separate,
+    explicit permission boundary.
+    """
+    if args.fetch_since is None and any(
+        value is not None for value in (args.fetch_until, args.fetch_query, args.fetch_limit)
+    ):
+        print(
+            "update-reimbursements: --fetch-until, --fetch-query, and --fetch-limit "
+            "require --fetch-since"
+        )
+        return 1
+
+    config = _load(args)
+    start_month = _receipt_start_month(args, config=config)
+    received_since, cutoff_source = _receipt_received_cutoff(args, config=config)
+    source = (
+        Path(args.source)
+        if args.source
+        else (gmail_source.inbox_dir(config) if config.gmail is not None else Path("mail_samples"))
+    )
+    as_of = args.as_of or date.today()
+
+    if args.fetch_since is not None:
+        if args.fetch_until is not None and args.fetch_until <= args.fetch_since:
+            print(
+                "update-reimbursements: --fetch-until must be after --fetch-since "
+                "(the until date is exclusive)"
+            )
+            return 1
+        if source.exists() and not source.is_dir():
+            print("update-reimbursements: the combined fetch source must be a directory")
+            return 1
+        try:
+            if service is None:
+                if gmail_source.needs_consent(config):
+                    print(
+                        "update-reimbursements: no Gmail token on this machine yet — opening a "
+                        "browser for the one-time, READ-ONLY consent"
+                    )
+                service = gmail_source.build_service(gmail_source.load_or_mint_credentials(config))
+            fetched = gmail_source.fetch_window(
+                service,
+                since=args.fetch_since,
+                until=args.fetch_until,
+                extra_query=args.fetch_query,
+                out_dir=source,
+                limit=args.fetch_limit,
+                dry_run=args.dry_run,
+            )
+        except gmail_source.GmailError as exc:
+            print(f"update-reimbursements: email acquisition failed: {exc}")
+            return 1
+        if fetched.dry_run:
+            print(
+                f"update-reimbursements: {fetched.matched} message(s) match — dry run, "
+                "no .eml files written"
+            )
+        else:
+            print(
+                f"update-reimbursements: email archive -> {fetched.new} new, "
+                f"{fetched.unchanged} unchanged, {fetched.rewritten} rewritten"
+            )
+
+    try:
+        refresh_kwargs = {
+            "bundle_path": Path(args.data),
+            "source": source,
+            "category_map_path": Path(args.category_map),
+            "start_month": start_month,
+            "received_since": received_since,
+            "as_of": as_of,
+            "subject_filter": args.subject_filter,
+        }
+        if args.dry_run:
+            _planned, summary = reimbursement_pipeline.plan_bundle_refresh(**refresh_kwargs)
+        else:
+            summary = reimbursement_pipeline.refresh_bundle(**refresh_kwargs)
+    except (
+        OSError,
+        reimbursement_pipeline.ReimbursementPipelineError,
+        reimbursement_report.ReimbursementReportError,
+    ) as exc:
+        print(f"update-reimbursements: local evidence refresh failed: {exc}")
+        return 1
+
+    print(
+        f"update-reimbursements: {summary.total_source_tickets} source submission(s), "
+        f"{summary.mapped_rows} line(s), ${summary.mapped_total:,.2f} "
+        f"({cutoff_source})"
+    )
+    print(f"  review bundle : {summary.new_tickets} new, {summary.unchanged_tickets} unchanged")
+    if args.dry_run:
+        print("update-reimbursements [dry-run]: no bundle or report files written")
+        return 0
+
+    try:
+        result = reimbursement_report.build_report(Path(args.data), Path(args.output))
+    except (OSError, reimbursement_report.ReimbursementReportError) as exc:
+        print(
+            "update-reimbursements: bundle refreshed, but report rendering failed; "
+            f"the prior HTML was preserved: {exc}"
+        )
+        return 1
+    _print_reimbursement_report_result(result)
     return 0
 
 
@@ -1455,6 +1603,116 @@ def build_parser() -> argparse.ArgumentParser:
     )
     _add_config_arg(p_fetch)
     p_fetch.set_defaults(func=_cmd_fetch_mail)
+
+    p_reimbursement_report = sub.add_parser(
+        "report-reimbursements",
+        help="render the private reimbursement queue from a validated local bundle",
+    )
+    p_reimbursement_report.add_argument(
+        "--data",
+        default="reports/output/reimbursement-report.json",
+        help="private structured report bundle (default: reports/output/reimbursement-report.json)",
+    )
+    p_reimbursement_report.add_argument(
+        "--output",
+        default="reports/output/reimbursement-queue-breakdown.html",
+        help="private HTML output (default: reports/output/reimbursement-queue-breakdown.html)",
+    )
+    p_reimbursement_report.set_defaults(func=_cmd_report_reimbursements)
+
+    p_reimbursement_update = sub.add_parser(
+        "update-reimbursements",
+        help=(
+            "optionally fetch mail, refresh private evidence, then render the reimbursement report"
+        ),
+    )
+    p_reimbursement_update.add_argument(
+        "--source",
+        default=None,
+        help=(
+            "complete top-level .eml/.mbox archive "
+            "(default: configured Gmail inbox or mail_samples)"
+        ),
+    )
+    p_reimbursement_update.add_argument(
+        "--category-map",
+        default="reports/output/category_map.csv",
+        help="category-map CSV (default: reports/output/category_map.csv)",
+    )
+    p_reimbursement_update.add_argument(
+        "--data",
+        default="reports/output/reimbursement-report.json",
+        help="private structured report bundle (default: reports/output/reimbursement-report.json)",
+    )
+    p_reimbursement_update.add_argument(
+        "--output",
+        default="reports/output/reimbursement-queue-breakdown.html",
+        help="private HTML output (default: reports/output/reimbursement-queue-breakdown.html)",
+    )
+    p_reimbursement_update.add_argument(
+        "--start-month",
+        type=int,
+        help="override the configured fiscal-year start month for evidence mapping",
+    )
+    p_reimbursement_update.add_argument(
+        "--subject-filter",
+        default=None,
+        help="only recognize reimbursement forms whose subject contains this substring",
+    )
+    update_received = p_reimbursement_update.add_mutually_exclusive_group()
+    update_received.add_argument(
+        "--received-since",
+        type=_received_since_arg,
+        metavar="YYYY-MM-DD",
+        help="inclusive email Date-header cutoff; overrides private config",
+    )
+    update_received.add_argument(
+        "--all-received",
+        action="store_true",
+        help="disable the configured reimbursement received-date cutoff for this run",
+    )
+    p_reimbursement_update.add_argument(
+        "--fetch-since",
+        type=_received_since_arg,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="optionally acquire Gmail from this inclusive date before local refresh",
+    )
+    p_reimbursement_update.add_argument(
+        "--fetch-until",
+        type=_received_since_arg,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="first Gmail date not acquired (exclusive)",
+    )
+    p_reimbursement_update.add_argument(
+        "--fetch-query",
+        default=None,
+        help="optional raw Gmail search terms appended to the acquisition window",
+    )
+    p_reimbursement_update.add_argument(
+        "--fetch-limit",
+        type=int,
+        default=None,
+        help="stop Gmail acquisition after this many messages",
+    )
+    p_reimbursement_update.add_argument(
+        "--as-of",
+        type=_received_since_arg,
+        default=None,
+        metavar="YYYY-MM-DD",
+        help="reproducible report date (default: today)",
+    )
+    p_reimbursement_update.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "list Gmail matches and validate the local refresh plan; write no email, "
+            "bundle, or HTML"
+        ),
+    )
+    _add_config_arg(p_reimbursement_update)
+    p_reimbursement_update.set_defaults(func=_cmd_update_reimbursements)
 
     return parser
 

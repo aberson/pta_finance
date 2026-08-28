@@ -48,6 +48,7 @@ uv run pta-finance sync-budget --fy 2027                  # dry run: prints the 
 uv run pta-finance fetch-mail --since <date> --dry-run    # counts; MAY mint secrets/gmail-token.json
 uv run pta-finance ingest-receipts --source mail_samples --profile --originals-only  # no writes
 uv run pta-finance map-receipts --source mail_samples                                # no writes
+uv run pta-finance update-reimbursements --dry-run       # validates local refresh; no bundle/HTML/Sheet writes
 ```
 
 These write. Each comment names exactly what:
@@ -59,10 +60,13 @@ uv run pta-finance report --fy YYYY --variant both        # HTML + 1 report_log 
 uv run pta-finance sync-budget --fy 2027 --apply          # writes amount/notes to Budget Timeseries
 uv run pta-finance fetch-mail --since <date>              # .eml into [gmail] inbox_dir; no Sheet
 uv run pta-finance map-receipts --source mail_samples --write-tab Reimbursements  # replaces it
+uv run pta-finance report-reimbursements                  # atomically replaces private HTML; no Sheet
+uv run pta-finance update-reimbursements --fetch-since <date>  # .eml + private bundle + HTML; no Sheet
 ```
 
-Every writing verb above snapshots first, except `check` (it deletes its own probe row) and
-`fetch-mail` (it writes no Sheet). Receipt commands use `[fiscal_year] start_month` from config;
+Every live-Sheet writing verb above snapshots first, except `check` (it deletes its own probe row).
+The email/report writers touch only gitignored local artifacts and use idempotent or atomic writes;
+they never send email or write a Sheet. Receipt commands use `[fiscal_year] start_month` from config;
 `--start-month` is an intentional override. `map-receipts` uses optional private
 `[receipt_mapping] received_since` as its inclusive ledger cutoff; `fetch-mail --since` controls
 acquisition only. `--received-since` overrides the configured cutoff and `--all-received` disables
@@ -79,6 +83,8 @@ pta_finance/        package (flat layout): config, ids, schema, models, sheets,
                     read-only OAuth + query/list/fetch + deterministic .eml writer),
                     receipt_ingest (.eml/.mbox parser + profiler),
                     receipt_map (Submission → flat "Reimbursements" ledger rows),
+                    reimbursement_pipeline (stable evidence + fail-closed refresh),
+                    reimbursement_report (strict bundle + deterministic HTML/email rendering),
                     budget_sync (editable-budget-tab → Budget Timeseries reconcile),
                     report_source (Budget Timeseries → report/analyze inputs),
                     analytics/, reports/(templates/)
@@ -119,6 +125,10 @@ documentation/      committed feature plans (e.g. gmail-ingest-plan.md)
 - **Reports** (`reports/`): builder computes a data model → Jinja2 renders internal + external
   variants (matplotlib charts; optional WeasyPrint PDF). **Reports are never committed to the
   repo** — they go to `reports/output/` + a private Drive folder + an ephemeral CI artifact.
+- **Reimbursement refresh** (`reimbursement_pipeline.py`, `reimbursement_report.py`): stable-keyed
+  local evidence refresh to a strict private schema-v1 bundle and deterministic Jinja HTML. Existing
+  reviewed evidence fails closed if it changes or disappears. `report-reimbursements` is offline;
+  `update-reimbursements` may acquire Gmail first but never sends mail or writes Sheets.
 - **Access:** a Google **service account** (Sheet + Drive folder shared with its email). Its JSON
   key is the only secret — gitignored locally, base64 GitHub Actions secret in CI, decoded to a
   file without echoing.
@@ -145,8 +155,16 @@ replacement of an external grid preserves formulas versus identical literal text
 string/number/boolean/empty types. Snapshot directories are claimed atomically and collisions use
 a suffix instead of overwriting an older set. Formatting/comments are not captured; Sheets version
 history remains the primary recovery path, and there is no automated JSON restore command.
+**The reimbursement refresh generator has shipped**
+(`documentation/reimbursement-refresh-plan.md`): `report-reimbursements` rebuilds the private HTML
+offline from one strict bundle, while `update-reimbursements` optionally fetches mail, refreshes
+stable-keyed local evidence, appends only genuinely new records as unreviewed, and renders. Existing
+reviewed evidence fails closed if it changes or disappears. Neither command sends mail or writes
+Sheets. The current repository gate is **436 tests passing** (plus one optional skip), zero strict-
+mypy errors, and zero Ruff lint/format violations.
 **The Gmail read-only ingest connector has also shipped** (`documentation/gmail-ingest-plan.md`,
-issues #15–#22): `gmail_source.py` + the `fetch-mail` CLI replace the manual Google Takeout export —
+tracking span #15–#22; deferred #18 and its umbrella #22 remain open): `gmail_source.py` + the
+`fetch-mail` CLI replace the manual Google Takeout export —
 user OAuth pinned to `gmail.readonly` (exact-equality-tested, re-checked at runtime), a date-scoped
 `after:`/`before:` query (no sender/subject filter, by design), and an idempotent `.eml` writer whose
 filename is `<sanitised Message-ID stem>-<8 hex of sha256(full raw message bytes)>.eml` — the hash is

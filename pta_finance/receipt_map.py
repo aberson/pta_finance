@@ -33,6 +33,7 @@ from pta_finance.receipt_ingest import Submission
 
 __all__ = [
     "FIELDNAMES",
+    "deduplicate_submissions",
     "load_category_map",
     "load_form_defaults",
     "map_submissions",
@@ -168,6 +169,30 @@ def _needs_review(amount: str, canonical: str, reconciles: bool | None) -> str:
     return " | ".join(reasons)
 
 
+def deduplicate_submissions(subs: Iterable[Submission]) -> tuple[Submission, ...]:
+    """Return the submissions selected by the mapper's two stable deduplication rules.
+
+    Keeping this selection step public lets other local consumers, such as the private
+    reimbursement-report evidence builder, retain the full parsed submission while agreeing
+    exactly with the flat ledger about which originals survived.  Input order is preserved.
+    """
+    selected: list[Submission] = []
+    seen_ids: set[str] = set()
+    seen_hashes: set[str] = set()
+    for sub in subs:
+        message_id = sub.message_id.strip()
+        if message_id and message_id in seen_ids:
+            continue
+        content_key = _content_hash(sub)
+        if content_key in seen_hashes:
+            continue
+        if message_id:
+            seen_ids.add(message_id)
+        seen_hashes.add(content_key)
+        selected.append(sub)
+    return tuple(selected)
+
+
 def map_submissions(
     subs: Iterable[Submission],
     *,
@@ -187,20 +212,8 @@ def map_submissions(
     """
     defaults = form_defaults or {}
     rows: list[dict[str, str]] = []
-    seen_ids: set[str] = set()
-    seen_hashes: set[str] = set()
-
-    for sub in subs:
+    for sub in deduplicate_submissions(subs):
         message_id = sub.message_id.strip()
-        if message_id and message_id in seen_ids:
-            continue
-        content_key = _content_hash(sub)
-        if content_key in seen_hashes:
-            continue
-        if message_id:
-            seen_ids.add(message_id)
-        seen_hashes.add(content_key)
-
         reconciles = receipt_ingest.total_reconciles(sub)
         reconciles_text = {True: "yes", False: "no", None: "n/a"}[reconciles]
         submission_fy = _submission_fy(sub, start_month)

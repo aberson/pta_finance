@@ -77,6 +77,7 @@ import re
 import tempfile
 import webbrowser
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date
 from email.parser import BytesHeaderParser
 from functools import partial
@@ -92,6 +93,7 @@ from pta_finance.config import Config, Gmail
 __all__ = [
     "SCOPES",
     "EmlWrite",
+    "FetchSummary",
     "GmailAuthError",
     "GmailError",
     "GmailFetchError",
@@ -99,6 +101,7 @@ __all__ = [
     "build_service",
     "eml_filename",
     "fetch_raw",
+    "fetch_window",
     "inbox_dir",
     "list_message_ids",
     "load_credentials",
@@ -1175,3 +1178,55 @@ def write_eml(raw: bytes, out_dir: Path, message_id: str | None = None) -> EmlWr
                 tmp_path.unlink()
 
     return EmlWrite(path, status)
+
+
+@dataclass(frozen=True)
+class FetchSummary:
+    """Aggregate-only result of one Gmail acquisition window."""
+
+    query: str
+    out_dir: Path
+    matched: int
+    new: int
+    unchanged: int
+    rewritten: int
+    dry_run: bool
+
+
+def fetch_window(
+    service: Any,
+    *,
+    since: date,
+    until: date | None,
+    extra_query: str | None,
+    out_dir: Path,
+    limit: int | None = None,
+    dry_run: bool = False,
+) -> FetchSummary:
+    """Fetch one date window and return counts without exposing message identifiers or content.
+
+    Authentication is intentionally outside this function.  Both ``fetch-mail`` and the local
+    reimbursement orchestrator can therefore share one acquisition loop while tests inject a fake
+    read-only Gmail service.  In dry-run mode the mailbox is listed but no raw messages are fetched
+    and no ``.eml`` files are written.
+    """
+    if until is not None and until <= since:
+        raise ValueError("until must be after since")
+    query = build_query(since, until, extra=extra_query)
+    matched = 0
+    counts = {"new": 0, "unchanged": 0, "rewritten": 0}
+    for message_id in list_message_ids(service, query, limit=limit):
+        matched += 1
+        if dry_run:
+            continue
+        raw = fetch_raw(service, message_id)
+        counts[write_eml(raw, out_dir).status] += 1
+    return FetchSummary(
+        query=query,
+        out_dir=out_dir,
+        matched=matched,
+        new=counts["new"],
+        unchanged=counts["unchanged"],
+        rewritten=counts["rewritten"],
+        dry_run=dry_run,
+    )

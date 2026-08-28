@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>{{ report.settings.title }}</title>
+  <style>
+    :root {
+      --ink:#20323f; --ink-2:#475d69; --ink-3:#71838d; --paper:#fff;
+      --wash:#f4f8f7; --line:#ccd9d6; --deep:#123f4a; --sea:#147d83;
+      --sun:#edb528; --go:#236c48; --go-line:#80b797; --go-tint:#edf8f1;
+      --clr:#8a5716; --clr-line:#d7ad68; --clr-tint:#fff7e7;
+      --ask:#74580d; --ask-line:#dbc56f; --ask-tint:#fffbe8;
+      --stop:#922f38; --stop-line:#d5a2a8; --stop-tint:#fff1f2;
+      --shadow:0 8px 28px rgba(26,57,67,.09);
+    }
+    *{box-sizing:border-box}
+    html{background:#e9efed;color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+    body{margin:0;padding:24px}
+    .sheet{max-width:1200px;margin:auto;background:var(--paper);padding:24px 28px 36px;box-shadow:var(--shadow)}
+    h1,h2,h3,p{margin:0} h1,h2,h3{color:var(--deep)}
+    .mast{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:18px;align-items:center;border-bottom:5px solid var(--sun);padding-bottom:16px}
+    .logo{width:78px;height:78px;object-fit:contain}.brandmark{width:68px;height:68px;border-radius:50%;display:grid;place-items:center;background:var(--deep);color:white;font-size:1.45rem;font-weight:800}
+    .eyebrow{font-size:.72rem;text-transform:uppercase;letter-spacing:.12em;color:var(--sea);font-weight:800}
+    h1{font-size:clamp(1.45rem,3vw,2.2rem);line-height:1.06;margin-top:3px}.sub{color:var(--ink-2);margin-top:5px;font-size:.9rem}
+    .gates{display:flex;gap:7px;align-items:stretch;justify-content:flex-end;flex-wrap:wrap}
+    .gate{border:2px solid var(--go-line);background:var(--go-tint);color:var(--go);padding:9px 12px;text-align:center;font-weight:800;font-size:.82rem;line-height:1.35;min-width:132px}
+    .gate.review{border-color:var(--ask-line);background:var(--ask-tint);color:var(--ask)}
+    .current-state{margin-top:16px;border:2px solid var(--sea);background:var(--wash);padding:15px}
+    .current-state h2{font-size:1.08rem}.current-lede{font-size:.86rem;color:var(--ink-2);margin-top:3px}
+    .current-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:11px}
+    .score{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-top:11px}
+    .box{border:1px solid var(--line);background:var(--paper);padding:9px 10px}.box .n{font-size:1.1rem;font-weight:800;color:var(--deep);line-height:1.2}.box .k{font-size:.64rem;font-weight:800;letter-spacing:.075em;text-transform:uppercase;color:var(--ink-3);margin-top:2px}
+    .box.a{border-left:4px solid var(--go-line);background:var(--go-tint)}.box.a .n{color:var(--go)}
+    .box.c{border-left:4px solid var(--clr-line);background:var(--clr-tint)}.box.c .n{color:var(--clr)}
+    .box.d{border-left:4px solid var(--stop-line);background:var(--stop-tint)}.box.d .n{color:var(--stop)}
+    .box.q{border-left:4px solid var(--ask-line);background:var(--ask-tint)}.box.q .n{color:var(--ask)}
+    .review-disclaimer{margin-top:11px;border:1px solid var(--ask-line);background:var(--ask-tint);padding:9px 12px;font-size:.84rem;color:var(--ink-2)}
+    .legend{display:flex;align-items:center;gap:7px 10px;flex-wrap:wrap;margin-top:12px;padding:8px 10px;background:var(--wash);border:1px solid var(--line);font-size:.76rem;color:var(--ink-2)}
+    .chip{display:inline-block;padding:3px 7px;border-radius:999px;font-size:.62rem;font-weight:900;letter-spacing:.055em;white-space:nowrap}.v-a{color:var(--go);background:var(--go-tint);border:1px solid var(--go-line)}.v-c{color:var(--clr);background:var(--clr-tint);border:1px solid var(--clr-line)}.v-d{color:var(--stop);background:var(--stop-tint);border:1px solid var(--stop-line)}.v-q{color:var(--ask);background:var(--ask-tint);border:1px solid var(--ask-line)}.v-n{color:var(--ink-3);background:var(--wash);border:1px solid var(--line)}
+    .index,.new-queue,.legacy-divider,.closed,.amend,.tail{margin-top:22px}.cap{border-left:5px solid var(--sea);padding:5px 0 5px 11px;margin-bottom:9px}.cap h2,.cap h3{font-size:1.1rem}.cap p{color:var(--ink-2);font-size:.82rem;margin-top:3px}
+    .tablewrap{width:100%;overflow-x:auto;border:1px solid var(--line)}table{width:100%;border-collapse:collapse}th{background:var(--deep);color:white;text-align:left;font-size:.67rem;text-transform:uppercase;letter-spacing:.065em;padding:8px}td{border-top:1px solid var(--line);padding:8px;vertical-align:top;font-size:.79rem}td.amt,th.amt{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}.ix{min-width:850px}.ix-id{font-weight:850;color:var(--deep);white-space:nowrap}.ix-group td{background:var(--wash);color:var(--deep);font-size:.65rem;font-weight:850;letter-spacing:.09em;text-transform:uppercase}.form{font-size:.62rem;color:var(--ink-3);font-weight:700}.none{color:var(--ink-3)}
+    .new-queue{padding-top:16px;border-top:4px solid var(--sun)}.legacy-divider{padding:13px 15px;border:1px solid var(--line);border-left:4px solid var(--sea);background:var(--wash)}.legacy-divider p{font-size:.84rem;color:var(--ink-2);margin-top:3px}
+    .ticket{margin-top:13px;border:1px solid var(--line);border-top:5px solid var(--sea);box-shadow:0 3px 12px rgba(26,57,67,.05);min-width:0}.ticket.t-v-a{border-top-color:var(--go-line)}.ticket.t-v-c{border-top-color:var(--clr-line)}.ticket.t-v-d{border-top-color:var(--stop-line)}.ticket.t-v-q{border-top-color:var(--ask-line)}
+    .thead{display:flex;gap:13px;align-items:center;padding:12px 14px;background:var(--wash);flex-wrap:wrap}.tid{font-weight:950;color:var(--deep);font-size:.94rem}.tname{min-width:170px;flex:1}.tname h2{font-size:1rem}.tsub,.tmeta{font-size:.72rem;color:var(--ink-3);margin-top:2px}.ttot{font-weight:900;font-size:1.12rem;color:var(--deep);white-space:nowrap}.tvd{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.act{font-size:.72rem;font-weight:750;color:var(--ink-2)}.flag{font-size:.6rem;text-transform:uppercase;letter-spacing:.06em;color:var(--ask);border:1px solid var(--ask-line);background:var(--ask-tint);padding:3px 6px}.items{min-width:840px}.items th:nth-child(1){width:105px}.items th:nth-child(3){width:100px}.items th:nth-child(4){width:125px}.items .grp td{background:#eaf3f1;color:var(--deep);font-weight:850;font-size:.67rem;text-transform:uppercase;letter-spacing:.07em}.items .nm{font-weight:650}.items .wy{color:var(--ink-2)}
+    .do{border-left:5px solid var(--sun);margin:12px 14px 0;padding:8px 11px;background:var(--ask-tint);font-size:.84rem}.do b{display:block;color:var(--deep);text-transform:uppercase;font-size:.62rem;letter-spacing:.08em;margin-bottom:2px}.asks{margin:7px 0 0 18px;padding:0;color:var(--ink-2)}.nt{margin:9px 14px;color:var(--ink-3);font-size:.76rem}
+    .mail{margin:11px 14px 14px;border:1px solid #a8c7cf;background:#f3fafc}.mail-hd{background:#d9edf2;color:var(--deep);font-size:.66rem;text-transform:uppercase;letter-spacing:.08em;font-weight:900;padding:6px 9px}.mail-hd.sent{background:#e5ecea}.mail-body{font-family:inherit;font-size:.78rem;white-space:pre-wrap;overflow-wrap:anywhere;margin:0;padding:10px 11px;color:var(--ink)}
+    .closed details{border:1px solid var(--line);margin-top:7px}.closed summary{cursor:pointer;display:grid;grid-template-columns:90px 1fr 110px 100px;gap:8px;padding:9px 11px;background:var(--wash);font-size:.78rem;align-items:center}.closed summary strong{color:var(--deep)}.closed-body{padding:0 10px 10px}.archive-note{font-size:.78rem;color:var(--ink-2);margin:8px 2px}
+    .amend{border:2px solid var(--sea);background:var(--wash);padding:14px}.amend h3{font-size:1.06rem}.amend ol{padding-left:22px;margin:10px 0 0}.amend li{margin:9px 0;color:var(--ink-2);font-size:.82rem}.amend li b{color:var(--deep);display:block}.am-eff,.am-scope{display:block;margin-top:3px}.am-scope{font-size:.72rem;color:var(--ink-3)}
+    .plain{border:1px solid var(--line);margin-top:8px}.plain th{width:24%}.tail h3{font-size:1rem;margin-top:16px}.defects{color:var(--ink-2);font-size:.82rem}.defects li{margin:5px 0}.foot{margin-top:22px;border-top:1px solid var(--line);padding-top:11px;color:var(--ink-3);font-size:.7rem}.private{font-weight:850;color:var(--stop)}
+    @media(max-width:720px){body{padding:0}.sheet{padding:17px 14px;box-shadow:none}.mast{grid-template-columns:auto 1fr}.mast .gates{grid-column:1/-1;justify-content:flex-start}.current-grid,.score{grid-template-columns:repeat(2,minmax(0,1fr))}.thead{align-items:flex-start}.tvd{flex:1 1 100%;min-width:0;white-space:normal}.closed summary{grid-template-columns:70px 1fr}.closed summary span:nth-child(3),.closed summary span:nth-child(4){display:none}.ticket,.new-queue,.tail{max-width:100%;min-width:0}}
+    @media print{@page{size:letter landscape;margin:.35in}html,body{background:white}.sheet{max-width:none;padding:0;box-shadow:none}.ticket,.current-state,.amend,.closed details{break-inside:avoid}.new-queue{break-before:page}.closed details>.closed-body{display:block!important}}
+  </style>
+</head>
+{% macro chip(code) -%}
+<span class="chip {{ status_meta[code][1] }}">{{ status_meta[code][0] }}</span>
+{%- endmacro %}
+{% macro ticket_card(ticket) -%}
+  <section class="ticket t-{{ status_meta[ticket.review.status][1] }}" id="{{ (ticket.ref ~ ('-' ~ ticket.form_label if ticket.form_label else ''))|lower|replace(' ', '-') }}">
+    <header class="thead">
+      <div class="tid">{{ ticket.ref }}{% if ticket.form_label %} <span class="form">{{ ticket.form_label }}</span>{% endif %}</div>
+      <div class="tname"><h2>{{ ticket.requestor_name }}</h2><p class="tsub">{{ ticket.form_type }}{% if ticket.source.categories %} &middot; {{ ticket.source.categories|join(' &middot; ') }}{% endif %}</p><p class="tmeta">Submitted <b>{{ ticket.submitted_display }}</b> &middot; {{ ticket.payment_method }}</p></div>
+      <div class="ttot">{{ money(ticket.total) }}</div>
+      <div class="tvd">{{ chip(ticket.review.status) }} <span class="act">{{ ticket.review.action }}</span>{% if ticket.live.decision == 'UNREVIEWED' %}<span class="flag">Review recommendation</span>{% endif %}</div>
+    </header>
+    <div class="tablewrap"><table class="items">
+      <thead><tr><th>Date</th><th>Item</th><th class="amt">Amount</th><th>Status</th><th>Why</th></tr></thead>
+      <tbody>
+      {% for category, items in ticket.item_groups %}
+        <tr class="grp"><td colspan="5">Category &middot; {{ category }}</td></tr>
+        {% for item in items %}<tr><td>{{ iso_date(item.effective_date) }}</td><td class="nm">{{ item.effective_item }}</td><td class="amt">{{ money(item.effective_amount) }}</td><td>{{ chip(item.status) }}</td><td class="wy">{{ item.why }}</td></tr>{% endfor %}
+      {% endfor %}
+      </tbody>
+    </table></div>
+    <div class="do"><p><b>Next</b>{{ ticket.review.block }}</p>{% if ticket.review.asks %}<ul class="asks">{% for ask in ticket.review.asks %}<li>{{ ask }}</li>{% endfor %}</ul>{% endif %}</div>
+    <p class="nt">{{ ticket.review.note }}</p>
+    {% for message in email_blocks[ticket.review_key] %}<div class="mail"><div class="mail-hd{% if message.kind == 'sent' %} sent{% endif %}">{% if message.kind == 'sent' %}Email sent &middot; {{ iso_date(message.date) }}{% else %}Email to send{% endif %}</div><pre class="mail-body">{{ message.body }}</pre></div>{% endfor %}
+  </section>
+{%- endmacro %}
+<body>
+<main class="sheet">
+  <header class="mast">
+    {% if report.settings.logo_data_uri %}<img class="logo" src="{{ report.settings.logo_data_uri }}" alt="{{ report.settings.organization }} logo">{% else %}<div class="brandmark" aria-hidden="true">$</div>{% endif %}
+    <div><div class="eyebrow">{{ report.settings.eyebrow }}</div><h1>{{ report.settings.title }}</h1><p class="sub">{{ report.settings.subtitle }}</p></div>
+    <div class="gates"><div class="gate">{{ money(report.settings.confirmed_outstanding) }} still to pay<br>confirmed balance</div><div class="gate review">{{ summary.live_unreviewed }} live submission{% if summary.live_unreviewed != 1 %}s{% endif %}<br>need Review</div></div>
+  </header>
+
+  <section class="current-state">
+    <h2>Verified current Review state</h2><p class="current-lede">Private snapshot as of {{ iso_date(report.settings.as_of_date) }} under policy {{ report.settings.policy_version }}.</p>
+    <div class="current-grid">
+      <div class="box"><div class="n">{{ summary.review_rows }}</div><div class="k">Review rows</div></div>
+      <div class="box"><div class="n">{{ summary.legacy_records }} + {{ summary.new_records }}</div><div class="k">Legacy + new</div></div>
+      <div class="box"><div class="n">{{ report.source_summary.mapped_rows }} lines &middot; {{ report.source_summary.mapped_submissions }} submissions</div><div class="k">Mapped ledger</div></div>
+      <div class="box"><div class="n">{{ money(report.source_summary.mapped_total) }}</div><div class="k">Mapped ledger total</div></div>
+      <div class="box a"><div class="n">{{ summary.settled }}</div><div class="k">Settled</div></div>
+      <div class="box c"><div class="n">{{ summary.active }}</div><div class="k">Active</div></div>
+      <div class="box q"><div class="n">{{ summary.live_unreviewed }}</div><div class="k">Live unreviewed</div></div>
+      <div class="box"><div class="n">{{ iso_date(report.source_summary.first_received) }} &ndash; {{ iso_date(report.source_summary.last_received) }}</div><div class="k">Received range</div></div>
+    </div>
+    <p class="review-disclaimer"><b>Decision boundary:</b> recommendation cards whose live decision remains UNREVIEWED are reading aids. Record the decision in the system of record before treating a recommendation as payment authorization.</p>
+  </section>
+
+  <div class="score">
+    <div class="box"><div class="n">{{ money(summary.known_total) }}</div><div class="k">Known reviewed total</div></div>
+    <div class="box a"><div class="n">{{ money(summary.approved) }}</div><div class="k">Approved</div></div>
+    <div class="box c"><div class="n">{{ money(summary.clarification) }}</div><div class="k">Clarification</div></div>
+    <div class="box d"><div class="n">{{ money(summary.declined) }}</div><div class="k">Decline</div></div>
+    <div class="box q"><div class="n">{{ money(summary.question) }}</div><div class="k">Unreviewed items</div></div>
+  </div>
+
+  <div class="legend">{{ chip('A') }} <span>Cleared</span>{{ chip('C') }} <span>Specific fact remains</span>{{ chip('D') }} <span>Cannot be reimbursed</span>{{ chip('Q') }} <span>Not yet adjudicated</span></div>
+
+  <section class="index" id="action-index">
+    <div class="cap"><h3>What to do, ticket by ticket</h3><p>All {{ summary.active }} active records in one action index.</p></div>
+    <div class="tablewrap"><table class="ix"><thead><tr><th>Ref</th><th>Who</th><th>Submitted</th><th class="amt">Total</th><th>Status</th><th>Action</th><th class="amt">Pay now</th></tr></thead><tbody>
+      {% if report.active_new %}<tr class="ix-group"><td colspan="7">New live rows &middot; report recommendations</td></tr>{% for ticket in report.active_new %}<tr><td class="ix-id">{{ ticket.ref }}{% if ticket.form_label %} <span class="form">{{ ticket.form_label }}</span>{% endif %}</td><td>{{ ticket.requestor_name }}</td><td>{{ ticket.submitted_display }}</td><td class="amt">{{ money(ticket.total) }}</td><td>{{ chip(ticket.review.status) }}</td><td>{{ ticket.review.action }}</td><td class="amt">{% if ticket.pay_now %}{{ money(ticket.pay_now) }}{% else %}<span class="none">&mdash;</span>{% endif %}</td></tr>{% endfor %}{% endif %}
+      {% if report.active_legacy %}<tr class="ix-group"><td colspan="7">Prior reviewed queue</td></tr>{% for ticket in report.active_legacy %}<tr><td class="ix-id">{{ ticket.ref }}{% if ticket.form_label %} <span class="form">{{ ticket.form_label }}</span>{% endif %}</td><td>{{ ticket.requestor_name }}</td><td>{{ ticket.submitted_display }}</td><td class="amt">{{ money(ticket.total) }}</td><td>{{ chip(ticket.review.status) }}</td><td>{{ ticket.review.action }}</td><td class="amt">{% if ticket.pay_now %}{{ money(ticket.pay_now) }}{% else %}<span class="none">&mdash;</span>{% endif %}</td></tr>{% endfor %}{% endif %}
+    </tbody></table></div>
+  </section>
+
+  {% if report.active_new %}<section class="new-queue" id="new-intake"><div class="cap"><h2>New submission review</h2><p>{{ report.active_new|length }} active submission records with structured item-level adjudication.</p></div>{% for ticket in report.active_new %}{{ ticket_card(ticket) }}{% endfor %}</section>{% endif %}
+
+  {% if report.active_legacy %}<section class="legacy-divider"><h2>Prior reviewed queue</h2><p>{{ report.active_legacy|length }} active legacy records preserved under their recorded policy scope.</p></section>{% for ticket in report.active_legacy %}{{ ticket_card(ticket) }}{% endfor %}{% endif %}
+
+  {% if report.closed_tickets %}<section class="closed"><div class="cap"><h3>Appendix &mdash; closed cases</h3><p>Approved and settled; nothing remains to pay.</p></div>{% for ticket in report.closed_tickets %}<details><summary><strong>{{ ticket.ref }}</strong><span>{{ ticket.requestor_name }}</span><span>{{ ticket.submitted_display }}</span><span class="amt">{{ money(ticket.total) }}</span></summary><div class="closed-body">{% if ticket.archive_note %}<p class="archive-note">{{ ticket.archive_note }}</p>{% endif %}{{ ticket_card(ticket) }}</div></details>{% endfor %}</section>{% endif %}
+
+  {% if report.appendix.amendments %}<section class="amend" id="rule-appendix"><h3>Appendix &mdash; General rule interpretations and amendments</h3><ol>{% for amendment in report.appendix.amendments %}<li><b>{{ loop.index }}. {{ amendment.title }}</b><span>{{ amendment.body }}</span><span class="am-eff">{{ amendment.effect }}</span><span class="am-scope">Scope: {{ amendment.scope }}</span></li>{% endfor %}</ol></section>{% endif %}
+
+  <div class="tail">
+    {% if report.appendix.cfo_checks %}<h3>Checks the CFO asked for</h3><div class="tablewrap"><table class="plain"><thead><tr><th>Ticket</th><th>Question</th><th>What the evidence shows</th></tr></thead><tbody>{% for check in report.appendix.cfo_checks %}<tr><td>{{ check.ticket }}</td><td>{{ check.question }}</td><td>{{ check.answer }}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+    {% if report.appendix.excluded %}<h3>Excluded on purpose &mdash; not silently dropped</h3><table class="plain"><tbody>{% for entry in report.appendix.excluded %}<tr><th>{{ entry.label }}</th><td>{{ entry.detail }}</td></tr>{% endfor %}</tbody></table>{% endif %}
+    {% if report.appendix.defects %}<h3>Defects to fix before the next round</h3><ol class="defects">{% for defect in report.appendix.defects %}<li>{{ defect }}</li>{% endfor %}</ol>{% endif %}
+  </div>
+
+  <p class="foot">Source snapshot {{ report.provenance.source_snapshot_sha256[:12] }} &middot; mapped evidence {{ report.provenance.mapped_sha256[:12] }} &middot; policy {{ report.provenance.policy_sha256[:12] }}. Cutoff {{ iso_date(report.settings.cutoff_date) }}. Generated from a validated schema-v1 private bundle; no live sheet or mailbox was changed.<br><span class="private">Private &mdash; contains requestor names and reimbursement detail. Do not circulate outside authorized reviewers.</span></p>
+</main>
+</body>
+</html>

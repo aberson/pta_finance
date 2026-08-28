@@ -34,8 +34,8 @@ See **§ Roadmap** for Phases 2–4 (Apps Script automation, admin web UI, wiki/
 
 | Layer | Tool | Why |
 |---|---|---|
-| Language / runtime | Python `>=3.12` | Matches workspace convention; `tomllib` in stdlib (no TOML dep) |
-| Dependency / build | `uv` + `hatchling` | Workspace standard (`switchboard/pyproject.toml`); reproducible, fast |
+| Language / runtime | Python `>=3.12` | Maintained runtime baseline; `tomllib` in stdlib (no TOML dep) |
+| Dependency / build | `uv` + `hatchling` | Reproducible dependency resolution and a small standards-based build backend |
 | Sheets/Drive access | `gspread` 6.x + `google-auth` | Clean service-account API (`service_account()`, `batch_update()`, `get_all_records()`); atomic batch writes. Low-level `google-api-python-client` deferred to Phase 2 (formatting/web) |
 | Data / analytics | `pandas` | C-optimized `groupby` + `pd.Grouper(freq="MS")` for by-category/grade/month aggregation; fine for PTA volumes |
 | Charts | `matplotlib` (Agg backend) | Deterministic, headless, zero-browser rendering in CI. **Not** Plotly/Kaleido (needs Chrome) |
@@ -197,6 +197,11 @@ path.
   `analyze` and `report`.
 - **`receipt_ingest.py` / `receipt_map.py`** — parse `.eml`/`.mbox` form submissions and map them
   into the flat, machine-owned Reimbursements ledger.
+- **`gmail_source.py`** — read-only Gmail OAuth, bounded query/list/fetch, and deterministic
+  idempotent `.eml` acquisition shared by `fetch-mail` and the reimbursement refresh command.
+- **`reimbursement_pipeline.py` / `reimbursement_report.py`** — stable-keyed private evidence
+  refresh, strict schema-v1 bundle validation, deterministic email composition, and atomic Jinja
+  rendering for the reimbursement review queue.
 - **`analytics/`** — `aggregate.py`, `trends.py` (pandas).
 - **`reports/`** — `builder.py` (compute report data model), `render.py` (Jinja2 → HTML, optional
   WeasyPrint PDF), `charts.py` (matplotlib Agg), `templates/` (`internal.html.j2`, `external.html.j2`).
@@ -217,6 +222,9 @@ path.
 | `pta-finance sync-budget --fy YYYY [--apply]` | Preview or apply editable-budget changes to Budget Timeseries; snapshots before writes |
 | `pta-finance ingest-receipts --source <path> [--profile]` | Parse or profile reimbursement-form `.eml`/`.mbox` exports |
 | `pta-finance map-receipts --source <path> [--write-tab Reimbursements]` | Map submissions to the flat ledger and optionally replace its machine-owned Sheet tab |
+| `pta-finance fetch-mail --since YYYY-MM-DD` | Acquire a bounded Gmail window into the local `.eml` archive; no Sheet write |
+| `pta-finance report-reimbursements` | Validate the private structured review bundle and atomically render its HTML offline |
+| `pta-finance update-reimbursements [--fetch-since YYYY-MM-DD]` | Optionally acquire mail, refresh stable-keyed local evidence, then render; never sends mail or writes Sheets |
 
 ## 6. API Route Contract
 
@@ -252,8 +260,11 @@ pta_finance/                      # repo root (standalone public repo)
 │   ├── budget_sync.py
 │   ├── etl.py
 │   ├── cli.py
+│   ├── gmail_source.py
 │   ├── receipt_ingest.py
 │   ├── receipt_map.py
+│   ├── reimbursement_pipeline.py
+│   ├── reimbursement_report.py
 │   ├── report_source.py
 │   ├── analytics/
 │   │   ├── __init__.py
@@ -266,7 +277,8 @@ pta_finance/                      # repo root (standalone public repo)
 │       ├── charts.py
 │       └── templates/
 │           ├── internal.html.j2
-│           └── external.html.j2
+│           ├── external.html.j2
+│           └── reimbursement_queue.html.j2
 ├── scripts/
 │   └── check_no_identity.py      # CI guard: blocks staged credentials / identity strings
 ├── tests/
@@ -283,6 +295,9 @@ pta_finance/                      # repo root (standalone public repo)
 │   ├── test_analytics.py
 │   ├── test_receipt_ingest.py
 │   ├── test_receipt_map.py
+│   ├── test_reimbursement_cli.py
+│   ├── test_reimbursement_pipeline.py
+│   ├── test_reimbursement_report.py
 │   ├── test_report_source.py
 │   ├── test_reports.py
 │   ├── test_cli.py
@@ -435,7 +450,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 - **Status:** DONE (2026-06-23)
 
 ### Step 6: Report generation (internal + external)
-- **Problem:** Implement `reports/builder.py` (compute the report data model from analytics), `reports/charts.py` (matplotlib Agg PNGs), `reports/render.py` (Jinja2 → HTML with autoescape on payee/memo; optional WeasyPrint PDF behind the `[pdf]` extra), and `templates/internal.html.j2` + `templates/external.html.j2`. **Pin the exact internal vs external field lists here.** The external variant must exclude payee names, receipt links, and member PII — enforce this as a **runtime invariant**, not just a test: the external builder raises a stable `ExternalReportPIIError` if any payee/receipt/PII field appears in the external data model (per `.claude/rules/security.md` § "Pair unsafe configs with startup safety checks" — a public-facing safety control must be a guard, not documentation). Wire the `report` CLI subcommand; append to `report_log`; write to `reports/output/` + (configured) private Drive folder — never to the repo.
+- **Problem:** Implement `reports/builder.py` (compute the report data model from analytics), `reports/charts.py` (matplotlib Agg PNGs), `reports/render.py` (Jinja2 → HTML with autoescape on payee/memo; optional WeasyPrint PDF behind the `[pdf]` extra), and `templates/internal.html.j2` + `templates/external.html.j2`. **Pin the exact internal vs external field lists here.** The external variant must exclude payee names, receipt links, and member PII — enforce this as a **runtime invariant**, not just a test: the external builder raises a stable `ExternalReportPIIError` if any payee/receipt/PII field appears in the external data model. A public-facing safety control must be a runtime guard, not documentation alone. Wire the `report` CLI subcommand; append to `report_log`; write to `reports/output/` + (configured) private Drive folder — never to the repo.
 - **Type:** code
 - **Issue:** #6
 - **Flags:** --reviewers code --isolation worktree
@@ -639,10 +654,12 @@ worktrees); pushed `cbeeecc..193bed2`.**
 
 ## Phase 4 — Receipt ingestion (shipped: profiler + mapping engine + Reimbursements ledger + Receipts Explorer + the `fetch-mail` Gmail connector)
 
-**Shipped end-to-end against a real, gitignored Takeout mailbox and live Sheet with all categories
-mapped. The full test suite, `mypy --strict`, and Ruff gates passed. Built on `main`; the live write
-path was revalidated with snapshot + semantic read-back
-reconciliation on 2026-08-20. Private mailbox counts and financial totals remain outside the repo.**
+**Reimbursement refresh milestone complete: all four steps in
+`documentation/reimbursement-refresh-plan.md` shipped. The repository gate is 436 tests passing
+(plus one optional skip), zero type errors, and zero lint/format violations. Receipt ingestion was
+also shipped end-to-end against a real, gitignored mailbox and live Sheet; the live write path was
+revalidated with snapshot + semantic read-back reconciliation on 2026-08-20. Private mailbox
+counts and financial totals remain outside the repo.**
 
 ### What was built
 - **`receipt_ingest.py`** — a credential-free parser for reimbursement-form `.eml`/`.mbox` emails
@@ -679,6 +696,13 @@ reconciliation on 2026-08-20. Private mailbox counts and financial totals remain
   in `mail_samples/` beside the archives so ONE `map-receipts` run dedups both. Fetching only — the
   unattended cron half is deliberately not built (see "Not yet built" below).
 
+- **Data-driven reimbursement review report** (shipped 2026-08-27;
+  `documentation/reimbursement-refresh-plan.md`) — `report-reimbursements` renders a strict,
+  gitignored schema-v1 bundle offline; `update-reimbursements` optionally acquires Gmail, refreshes
+  the complete local archive once, preserves stable reviewed identities, appends only genuinely new
+  submissions as unreviewed, and then renders atomically. Changed or missing accounted evidence
+  fails closed. Mail sending and all Sheet writes remain separate permission boundaries.
+
 ### Deliberate design choice
 Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready), NOT the canonical
 `transactions`/`receipts` schema — so no schema change was needed and the dashboard reads it directly.
@@ -700,9 +724,12 @@ Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready),
 |---|---|
 | `pta_finance/receipt_ingest.py` | `.eml`/`.mbox` parser + PII-free `Profile` + shared RFC-822 received-date parser + `is_reply_or_forward` (structural recognition, no identity hard-coded) |
 | `pta_finance/receipt_map.py` | New — pure `Submission` → flat Reimbursements ledger rows (dedup, carry-forward, per-form default, `needs_review`) |
+| `pta_finance/reimbursement_pipeline.py` | Stable-keyed full-archive evidence snapshot, fail-closed merge, and atomic private-bundle refresh |
+| `pta_finance/reimbursement_report.py`, `pta_finance/reports/templates/reimbursement_queue.html.j2` | Strict schema-v1 loader, deterministic email composition, summary model, and offline atomic HTML renderer |
 | `pta_finance/sheets.py` | New `replace_tab_grid` — schema-independent create/replace of a machine-owned tab (RAW grid + USER_ENTERED numeric column) |
-| `pta_finance/cli.py` | `ingest-receipts` (+ `--profile` / `--originals-only`) + `map-receipts` (+ pre-dedup received cutoff / `--write-tab`) |
+| `pta_finance/cli.py` | Receipt ingestion/mapping plus separate `report-reimbursements` and `update-reimbursements` entry points |
 | `tests/test_receipt_ingest.py`, `test_receipt_map.py`, `test_sheets.py` | Parser / profiler / mapper / writer coverage over synthetic fixtures |
+| `tests/test_reimbursement_pipeline.py`, `test_reimbursement_report.py`, `test_reimbursement_cli.py` | Synthetic stable-key, fail-closed, strict-schema, renderer, email, and CLI-boundary coverage |
 | `docs/loading-receipts.md`, `SETUP.md` | Operator load how-to + completeness check; acquisition half since replaced by `fetch-mail` (Gmail → `fetch-mail` → `map-receipts`), and SETUP.md §6 adds the OAuth stage |
 
 ### Fresh-context notes

@@ -27,6 +27,7 @@ New here? Read only the guide that matches what you need — you do **not** have
 | **Just ask an AI** (ChatGPT/Claude) instead of reading — ready-made prompts | **[docs/ask-an-ai-assistant.md](docs/ask-an-ai-assistant.md)** | **anyone** |
 | Connect the toolkit to your Google Sheet (one-time) | [SETUP.md](SETUP.md) | whoever runs the tools |
 | Load reimbursement receipts from email | [docs/loading-receipts.md](docs/loading-receipts.md) | whoever runs the tools |
+| Refresh or rebuild the private reimbursement queue | [docs/loading-receipts.md#step-4--refresh-the-private-review-report](docs/loading-receipts.md#step-4--refresh-the-private-review-report) | treasurer/reviewer |
 
 **The one rule that saves everyone time:** the spreadsheet _is_ the database, and there is exactly
 **one** place to change a year's budget — the tab named **"FY&lt;year&gt; Budget"** (e.g.
@@ -107,6 +108,7 @@ the service-account JSON) and `PTA_CONFIG_B64` (base64 of `config.toml`) — and
 ```
 pta_finance/        package: config, ids, schema, models, sheets, backup, etl, cli,
                     gmail_source, budget_sync, report_source, receipt_ingest, receipt_map,
+                    reimbursement_pipeline, reimbursement_report,
                     analytics/, reports/(templates/)
 tests/              fake-org fixtures + mocked gspread; an end-to-end wiring smoke gate
 .github/workflows/  ci.yml (PR gate) + monthly-report.yml (cron)
@@ -148,6 +150,15 @@ identical literal text. Native numbers, booleans, strings, and empty cells remai
 Formatting/comments are outside the artifact; Sheets version history is the primary recovery path,
 and there is no automated JSON restore command. The full test suite, `mypy --strict`, and Ruff gates
 pass.
+
+**Phase 4 reimbursement refresh milestone complete.** The private reimbursement queue is
+data-driven: `report-reimbursements` validates one
+gitignored structured bundle and renders the complete HTML offline, while `update-reimbursements`
+optionally runs `fetch-mail`, refreshes stable-keyed local evidence, appends genuinely new records as
+**unreviewed**, and then renders. Neither command sends mail or writes Sheets. Existing reviewed
+records fail closed if their source evidence changes or disappears, so a refresh cannot silently
+attach an old decision to different evidence. The current repository gate is **436 tests passing**
+(plus one optional skip), zero strict-mypy errors, and zero Ruff lint/format violations.
 
 The live `map-receipts --write-tab` path was revalidated on 2026-08-20 with a pre-write snapshot
 and a semantic read-back reconciliation. Private mailbox counts, financial totals, and generated

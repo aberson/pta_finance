@@ -318,6 +318,61 @@ either.
 
 ---
 
+## Step 4 — Refresh the private review report
+
+The report workflow deliberately has three separate entry points:
+
+```text
+fetch-mail              update the local email archive only
+report-reimbursements   rebuild HTML from the current private bundle only
+update-reimbursements   optionally run the first, refresh evidence, then run the second
+```
+
+All report data and HTML stay under gitignored `reports/output/`. The report command is fully
+offline: it does not load `config.toml`, Google credentials, Gmail, or Sheets.
+
+**Rebuild the report without checking Gmail:**
+
+```powershell
+$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance report-reimbursements
+```
+
+**Preview a combined local refresh** (Gmail is counted, but no `.eml`, bundle, or HTML is written):
+
+```powershell
+$receivedSince = "YYYY-MM-DD"
+$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance update-reimbursements --fetch-since $receivedSince --dry-run
+```
+
+**Run the combined local refresh:**
+
+```powershell
+$receivedSince = "YYYY-MM-DD"
+$env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance update-reimbursements --fetch-since $receivedSince
+```
+
+The combined command performs these stages in order:
+
+1. Fetch the overlapping Gmail window into the configured top-level archive.
+2. Parse the entire `.eml` + `.mbox` archive once, apply the configured received cutoff before
+   deduplication, and compute stable submission/item keys plus evidence hashes.
+3. Preserve every unchanged reviewed ticket. Append new source records to the private bundle as
+   **Question / Unreviewed**, with item rows and a deterministic acknowledgement draft.
+4. Validate the complete bundle and atomically replace
+   `reports/output/reimbursement-queue-breakdown.html`.
+
+If an already-accounted email disappears or its evidence changes, the command stops before changing
+the bundle or HTML. That requires deliberate review; the tool never carries an approval forward by
+guessing. A late-arriving older email is still detected because the bundle persists every accounted
+source key rather than relying on a moving date horizon.
+
+This command does **not** update either worksheet. Keeping that permission boundary visible is
+intentional. When you also want the machine-owned `Reimbursements` tab replaced, run Step 2's
+explicit `map-receipts --write-tab Reimbursements` command separately. The workflow creates no third
+tab; item-level report decisions remain in the private structured bundle.
+
+---
+
 ## How the ledger cleans the data (so the numbers make sense)
 
 - **`Re:`/`Fwd:` replies** are thread duplicates (same reimbursement, different email) → dropped.

@@ -24,6 +24,7 @@ import json
 import os
 import re
 import webbrowser
+from dataclasses import fields
 from email.message import EmailMessage
 from pathlib import Path
 from types import SimpleNamespace
@@ -1111,6 +1112,139 @@ def test_write_eml_reports_an_unwritable_destination_actionably(tmp_path: Path) 
     with pytest.raises(gmail_source.GmailFetchError) as exc_info:
         gmail_source.write_eml(_raw_message(), blocker)
     assert exc_info.value.remediation
+
+
+# --------------------------------------------------------------------------------------
+# fetch_window / FetchSummary — the reusable, aggregate-only acquisition API.
+# --------------------------------------------------------------------------------------
+
+
+def test_fetch_window_lists_fetches_writes_and_counts_every_outcome(tmp_path: Path) -> None:
+    raws = _mailbox(5)
+    out_dir = tmp_path / "fetched-mail"
+    query = "after:2026/07/01 before:2026/08/01 has:attachment"
+
+    first_service = FakeGmail(raws, page_size=2)
+    first = gmail_source.fetch_window(
+        first_service,
+        since=datetime.date(2026, 7, 1),
+        until=datetime.date(2026, 8, 1),
+        extra_query="has:attachment",
+        out_dir=out_dir,
+        limit=3,
+    )
+
+    assert first == gmail_source.FetchSummary(
+        query=query,
+        out_dir=out_dir,
+        matched=3,
+        new=3,
+        unchanged=0,
+        rewritten=0,
+        dry_run=False,
+    )
+    assert first_service.messages_resource.get_calls == ["id-0", "id-1", "id-2"]
+    assert len(first_service.messages_resource.list_calls) == 2
+    assert {call["q"] for call in first_service.messages_resource.list_calls} == {query}
+    assert len(list(out_dir.glob("*.eml"))) == 3
+
+    selected: dict[str, bytes] = {}
+    for message_id in ("id-0", "id-1", "id-2"):
+        raw = raws[message_id]
+        assert raw is not None
+        selected[message_id] = raw
+        assert (out_dir / gmail_source.eml_filename(raw)).read_bytes() == raw
+
+    # The same real write path should report every possible outcome on an overlapping run:
+    # one missing file, one untouched file, and one damaged file repaired in place.
+    (out_dir / gmail_source.eml_filename(selected["id-0"])).unlink()
+    (out_dir / gmail_source.eml_filename(selected["id-2"])).write_bytes(b"damaged")
+
+    second_service = FakeGmail(raws, page_size=2)
+    second = gmail_source.fetch_window(
+        second_service,
+        since=datetime.date(2026, 7, 1),
+        until=datetime.date(2026, 8, 1),
+        extra_query="has:attachment",
+        out_dir=out_dir,
+        limit=3,
+    )
+
+    assert second == gmail_source.FetchSummary(
+        query=query,
+        out_dir=out_dir,
+        matched=3,
+        new=1,
+        unchanged=1,
+        rewritten=1,
+        dry_run=False,
+    )
+    assert second_service.messages_resource.get_calls == ["id-0", "id-1", "id-2"]
+    for raw in selected.values():
+        assert (out_dir / gmail_source.eml_filename(raw)).read_bytes() == raw
+
+
+def test_fetch_window_dry_run_lists_but_does_not_fetch_raw_or_write(tmp_path: Path) -> None:
+    out_dir = tmp_path / "must-not-exist"
+    service = FakeGmail(_mailbox(5), page_size=2)
+
+    summary = gmail_source.fetch_window(
+        service,
+        since=datetime.date(2026, 7, 1),
+        until=None,
+        extra_query=None,
+        out_dir=out_dir,
+        limit=3,
+        dry_run=True,
+    )
+
+    assert summary == gmail_source.FetchSummary(
+        query="after:2026/07/01",
+        out_dir=out_dir,
+        matched=3,
+        new=0,
+        unchanged=0,
+        rewritten=0,
+        dry_run=True,
+    )
+    assert len(service.messages_resource.list_calls) == 2
+    assert service.messages_resource.get_calls == []
+    assert not out_dir.exists()
+
+
+def test_fetch_summary_fields_and_repr_are_aggregate_only(tmp_path: Path) -> None:
+    raws = _mailbox(1)
+    out_dir = tmp_path / "fetched-mail"
+    summary = gmail_source.fetch_window(
+        FakeGmail(raws),
+        since=datetime.date(2026, 7, 1),
+        until=datetime.date(2026, 8, 1),
+        extra_query="has:attachment",
+        out_dir=out_dir,
+    )
+
+    assert tuple(field.name for field in fields(summary)) == (
+        "query",
+        "out_dir",
+        "matched",
+        "new",
+        "unchanged",
+        "rewritten",
+        "dry_run",
+    )
+    representation = repr(summary)
+    raw = raws["id-0"]
+    assert raw is not None
+    for leak in (
+        "id-0",
+        "m0@example.org",
+        gmail_source.eml_filename(raw),
+        _SAMPLE_SUBJECT,
+        _SAMPLE_SENDER,
+        _SAMPLE_BODY.strip(),
+        "treasurer@example.org",
+    ):
+        assert leak not in representation
 
 
 # --------------------------------------------------------------------------------------
