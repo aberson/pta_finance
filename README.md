@@ -151,8 +151,8 @@ Formatting/comments are outside the artifact; Sheets version history is the prim
 and there is no automated JSON restore command. The full test suite, `mypy --strict`, and Ruff gates
 pass.
 
-**Phase 4 reimbursement refresh milestone complete.** The private reimbursement queue is
-data-driven: `report-reimbursements` validates one
+**Phase 4 reimbursement refresh complete** — issues #24 closed. The private reimbursement queue
+is data-driven: `report-reimbursements` validates one
 gitignored structured bundle and renders the complete HTML offline, while `update-reimbursements`
 optionally runs `fetch-mail`, refreshes stable-keyed local evidence, appends genuinely new records as
 **unreviewed**, and then renders. Neither command sends mail or writes Sheets. Existing reviewed

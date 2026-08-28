@@ -659,7 +659,7 @@ worktrees); pushed `cbeeecc..193bed2`.**
 (plus one optional skip), zero type errors, and zero lint/format violations. Receipt ingestion was
 also shipped end-to-end against a real, gitignored mailbox and live Sheet; the live write path was
 revalidated with snapshot + semantic read-back reconciliation on 2026-08-20. Private mailbox
-counts and financial totals remain outside the repo.**
+counts and financial totals remain outside the repo. Posterity issue #24 is closed.**
 
 ### What was built
 - **`receipt_ingest.py`** — a credential-free parser for reimbursement-form `.eml`/`.mbox` emails

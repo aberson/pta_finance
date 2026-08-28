@@ -156,7 +156,7 @@ string/number/boolean/empty types. Snapshot directories are claimed atomically a
 a suffix instead of overwriting an older set. Formatting/comments are not captured; Sheets version
 history remains the primary recovery path, and there is no automated JSON restore command.
 **The reimbursement refresh generator has shipped**
-(`documentation/reimbursement-refresh-plan.md`): `report-reimbursements` rebuilds the private HTML
+(`documentation/reimbursement-refresh-plan.md`, closeout issue #24): `report-reimbursements` rebuilds the private HTML
 offline from one strict bundle, while `update-reimbursements` optionally fetches mail, refreshes
 stable-keyed local evidence, appends only genuinely new records as unreviewed, and renders. Existing
 reviewed evidence fails closed if it changes or disappears. Neither command sends mail or writes

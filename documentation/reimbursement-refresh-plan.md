@@ -110,7 +110,7 @@ apply.
 - **Status:** DONE (2026-08-27)
 - **Problem:** Replace snapshot-specific report construction with a strict private bundle and one
   full Jinja template.
-- **Issue:** N/A (single local feature span)
+- **Issue:** #24 (posterity closeout)
 - **Flags:** `--reviewers code --isolation worktree`
 - **Produces:** report model/loader, template, deterministic email composition, atomic writer,
   fictional unit tests
@@ -123,7 +123,7 @@ apply.
 - **Status:** DONE (2026-08-27)
 - **Problem:** Connect existing mail acquisition to evidence refresh and offline rendering without
   coupling in Sheet writes.
-- **Issue:** N/A (single local feature span)
+- **Issue:** #24 (posterity closeout)
 - **Flags:** `--reviewers code --isolation worktree`
 - **Produces:** evidence preparation module, report CLI, refresh orchestrator, aggregate-only output
 - **Done when:** synthetic new, unchanged, and stale evidence flows exercise all stages and stop on
@@ -135,7 +135,7 @@ apply.
 - **Status:** DONE (2026-08-27)
 - **Problem:** Convert the current ignored snapshot into the new schema without committing private
   values and prove semantic parity.
-- **Issue:** N/A (single local feature span)
+- **Issue:** #24 (posterity closeout)
 - **Flags:** `--reviewers code --isolation worktree`
 - **Produces:** private ignored bundle and parity/readback artifacts
 - **Done when:** one real local cycle parses the current archive, validates every reviewed ticket,
@@ -148,7 +148,7 @@ apply.
 - **Status:** DONE (2026-08-27)
 - **Problem:** Make each command's reads, writes, and required confirmations unambiguous.
 - **Type:** operator
-- **Issue:** N/A (single local feature span)
+- **Issue:** #24 (posterity closeout)
 - **Produces:** none
 - **Done when:** the operator can run email-only, report-only, and combined flows independently and
   verify the combined command completes one real local cycle without Sheet mutation
