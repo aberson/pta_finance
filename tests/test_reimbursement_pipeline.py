@@ -1389,7 +1389,11 @@ def test_scoped_approver_reply_authorizes_only_unambiguous_proposal(tmp_path: Pa
         message_id="<approval-reply@example.invalid>",
         received="Sun, 08 Sep 2030 08:00:00 +0000",
         sender="reviewer@example.invalid",
-        body="Yes, please.",
+        body=(
+            "Hello Example Reviewer,\n\n"
+            "I agree with your assessment and I would like to add a synthetic note if follow-up "
+            "is needed.\n\nThank you,\nExample Approver\n"
+        ),
         in_reply_to=proposal_id,
         references=(proposal_id,),
     )
@@ -1491,6 +1495,14 @@ def test_scoped_approver_reply_authorizes_only_unambiguous_proposal(tmp_path: Pa
     event_kinds = [event["kind"] for event in bundle["supplemental"]["events"]]
     assert event_kinds.count("APPROVAL_GRANTED") == 2
     assert event_kinds.count("APPROVAL_QUARANTINED") == 5
+    granted = [
+        event for event in bundle["supplemental"]["events"] if event["kind"] == "APPROVAL_GRANTED"
+    ]
+    assert {event["summary"] for event in granted} == {
+        "The configured approver authorized only the exact scoped proposal; additional reply prose "
+        "was not interpreted."
+    }
+    assert [item["status"] for item in by_ref["NEW-02"]["items"]] == ["C"]
     assert all(
         "approval-unrelated" not in evidence["message_id"]
         for evidence in bundle["supplemental"]["evidence"]

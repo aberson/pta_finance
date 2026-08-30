@@ -103,6 +103,70 @@ def test_approval_reply_classifier_is_deliberately_narrow(text: str, expected: s
     assert reimbursement_events.classify_approval_reply(text) == expected
 
 
+def test_approval_reply_classifier_accepts_leading_assessment_agreement_only() -> None:
+    sentence_reply = """\
+Hello Example Reviewer,
+
+I agree with your assessment. If a synthetic follow-up is needed, use the existing process.
+
+Thank you,
+Example Approver
+"""
+    conjunction_reply = """\
+Hi Example Reviewer.
+
+I agree with your assessment and I would like to add a synthetic note if follow-up is needed.
+
+Thank you,
+Example Approver
+"""
+
+    assert reimbursement_events.classify_approval_reply(sentence_reply) == "POSITIVE"
+    assert reimbursement_events.classify_approval_reply(conjunction_reply) == "POSITIVE"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I agree with your assessment, but only for NEW-01.",
+        "I agree with your assessment. Except for the second synthetic item.",
+        "I agree with your assessment. I dispute the held recommendation.",
+        "I agree with your assessment. Decline the remaining synthetic item.",
+        "I agree with your assessment. Do-not approve the second ticket.",
+        "I agree with your assessment. The second ticket is not-approved.",
+        "I disagree with your assessment.",
+        "I agree with your assessment and only the first synthetic ticket.",
+        "I agree with your assessment; however, check the second synthetic ticket.",
+        "I agree with your assessment, though one synthetic item needs review.",
+        "I agree with your assessment, although one synthetic item needs review.",
+        "I agree with your assessment unless the amount changes.",
+        "I agree with your assessment subject to another review.",
+        "I agree with your assessment provided the first synthetic ticket is excluded.",
+        "I agree with your assessment and",
+        "I agree with your assessment and not the second synthetic ticket.",
+        "I agree with your assessment and I don't approve the second synthetic ticket.",
+        "I agree with your assessment and I cannot approve the second synthetic ticket.",
+        "I agree with your assessment and can't approve the second synthetic ticket.",
+        "I agree with your assessment and won’t approve the second synthetic ticket.",
+        "I agree with your assessment and no thanks.",
+        "I agree with your assessment and reject the second synthetic ticket.",
+        "I agree with your assessment and exclude the second synthetic ticket.",
+        "I agree with your assessment and without the second synthetic ticket.",
+        "I agree with your assessment and oppose the second synthetic ticket.",
+        "I agree with your assessment and apart from the second synthetic ticket.",
+        "I agree with your assessment and with the exception of the second synthetic ticket.",
+        (
+            "Hi Example Reviewer, but do not approve the second synthetic ticket.\n\n"
+            "I agree with your assessment."
+        ),
+        "The reviewer said: I agree with your assessment.",
+        "For context:\nI agree with your assessment.",
+    ],
+)
+def test_approval_reply_classifier_rejects_modified_or_embedded_agreement(text: str) -> None:
+    assert reimbursement_events.classify_approval_reply(text) is None
+
+
 def test_payment_parser_requires_one_amount_and_one_reference() -> None:
     parsed = reimbursement_events.parse_payment_evidence(
         "Payment sent: $12.34. Confirmation EXAMPLE-123."

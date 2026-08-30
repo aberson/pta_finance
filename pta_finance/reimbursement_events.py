@@ -161,6 +161,25 @@ _PROPOSAL_ACTION_RE = re.compile(
 _PROPOSAL_APPROVE_ALL_RE = re.compile(
     r"^\s*(?:[*-]\s+)?approve\s+as\s+is\s*[.!]?\s*$", re.IGNORECASE
 )
+_APPROVAL_GREETING_RE = re.compile(
+    r"^(?:(?:hi|hello|dear)(?:\s+[^.!?]{1,80})?"
+    r"|good\s+(?:morning|afternoon|evening)(?:\s+[^.!?]{1,80})?)[,.!:]?$",
+    re.IGNORECASE,
+)
+_ASSESSMENT_AGREEMENT_RE = re.compile(
+    r"^i\s+agree\s+with\s+your\s+assessment(?=$|[.!](?:\s|$)|\s+and\s+\S)",
+    re.IGNORECASE,
+)
+_APPROVAL_MODIFIER_RE = re.compile(
+    r"\b(?:no|but|except|however|(?:al)?though|unless|only|provided|cannot|without"
+    r"|apart\s+from|with\s+the\s+exception\s+of"
+    r"|reject(?:ed|s|ing|ion)?|exclud(?:e|ed|es|ing|ion)"
+    r"|oppos(?:e|ed|es|ing|ition)"
+    r"|disagree(?:d|s|ing|ment)?|disput(?:e|ed|es|ing)"
+    r"|declin(?:e|ed|es|ing))\b"
+    r"|\b(?:do[-\s]+not|subject[-\s]+to)\b|\bnot\b|\b[a-z]+n['’]t\b",
+    re.IGNORECASE,
+)
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+$")
 
 
@@ -514,11 +533,12 @@ def parse_payment_evidence(text: str) -> PaymentEvidence | None:
 
 
 def classify_approval_reply(text: str) -> str | None:
-    """Classify a short top-authored reply as POSITIVE/NEGATIVE, else fail closed.
+    """Classify explicit top-authored approval as POSITIVE/NEGATIVE, else fail closed.
 
     ``receipt_ingest.parse_mail_evidence`` removes quoted history before this function runs.  The
-    remaining reply must be a short, stand-alone response; incidental prose is deliberately not
-    interpreted as authorization.
+    remaining reply must be a short stand-alone response, or begin (after one optional greeting)
+    with the exact assessment-agreement sentence. Trailing prose is never parsed as instructions,
+    and adversative/negative modifiers reject the extended form.
     """
 
     normalized = " ".join(line.strip() for line in text.splitlines() if line.strip()).casefold()
@@ -546,7 +566,14 @@ def classify_approval_reply(text: str) -> str | None:
         return "NEGATIVE"
     if normalized in positive:
         return "POSITIVE"
-    return None
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if _APPROVAL_MODIFIER_RE.search(" ".join(lines)) is not None:
+        return None
+    if lines and _APPROVAL_GREETING_RE.fullmatch(lines[0]) is not None:
+        lines = lines[1:]
+    if not lines or _ASSESSMENT_AGREEMENT_RE.match(lines[0]) is None:
+        return None
+    return "POSITIVE"
 
 
 def parse_proposal_recommendations(

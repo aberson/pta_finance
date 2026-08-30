@@ -1201,7 +1201,10 @@ def _build_supplemental_and_reduce(
                 summary = "The configured approver declined the exact scoped proposal."
             else:
                 kind = "APPROVAL_GRANTED"
-                summary = "The configured approver authorized the exact scoped proposal."
+                summary = (
+                    "The configured approver authorized only the exact scoped proposal; "
+                    "additional reply prose was not interpreted."
+                )
             for ticket in selected_tickets:
                 event_value = _event(
                     evidence_key=mail.message_key,
