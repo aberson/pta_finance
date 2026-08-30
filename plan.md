@@ -199,9 +199,10 @@ path.
   into the flat, machine-owned Reimbursements ledger.
 - **`gmail_source.py`** — read-only Gmail OAuth, bounded query/list/fetch, and deterministic
   idempotent `.eml` acquisition shared by `fetch-mail` and the reimbursement refresh command.
-- **`reimbursement_pipeline.py` / `reimbursement_report.py`** — stable-keyed private evidence
-  refresh, strict schema-v1 bundle validation, deterministic email composition, and atomic Jinja
-  rendering for the reimbursement review queue.
+- **`reimbursement_events.py` / `reimbursement_pipeline.py` / `reimbursement_report.py`** — strict
+  private anchor/review configuration, stable-keyed original and supplemental evidence, schema-v2
+  validation with explicit v1 migration, scoped lifecycle reduction, deterministic email
+  composition, and atomic Jinja rendering for the reimbursement review queue.
 - **`analytics/`** — `aggregate.py`, `trends.py` (pandas).
 - **`reports/`** — `builder.py` (compute report data model), `render.py` (Jinja2 → HTML, optional
   WeasyPrint PDF), `charts.py` (matplotlib Agg), `templates/` (`internal.html.j2`, `external.html.j2`).
@@ -263,6 +264,7 @@ pta_finance/                      # repo root (standalone public repo)
 │   ├── gmail_source.py
 │   ├── receipt_ingest.py
 │   ├── receipt_map.py
+│   ├── reimbursement_events.py
 │   ├── reimbursement_pipeline.py
 │   ├── reimbursement_report.py
 │   ├── report_source.py
@@ -654,8 +656,8 @@ worktrees); pushed `cbeeecc..193bed2`.**
 
 ## Phase 4 — Receipt ingestion (shipped: profiler + mapping engine + Reimbursements ledger + Receipts Explorer + the `fetch-mail` Gmail connector)
 
-**Reimbursement refresh milestone complete: all four steps in
-`documentation/reimbursement-refresh-plan.md` shipped. The repository gate is 436 tests passing
+**Reimbursement refresh milestone complete: all six steps in
+`documentation/reimbursement-refresh-plan.md` shipped. The repository gate is 535 tests passing
 (plus one optional skip), zero type errors, and zero lint/format violations. Receipt ingestion was
 also shipped end-to-end against a real, gitignored mailbox and live Sheet; the live write path was
 revalidated with snapshot + semantic read-back reconciliation on 2026-08-20. Private mailbox
@@ -696,12 +698,15 @@ counts and financial totals remain outside the repo. Posterity issue #24 is clos
   in `mail_samples/` beside the archives so ONE `map-receipts` run dedups both. Fetching only — the
   unattended cron half is deliberately not built (see "Not yet built" below).
 
-- **Data-driven reimbursement review report** (shipped 2026-08-27;
-  `documentation/reimbursement-refresh-plan.md`) — `report-reimbursements` renders a strict,
-  gitignored schema-v1 bundle offline; `update-reimbursements` optionally acquires Gmail, refreshes
-  the complete local archive once, preserves stable reviewed identities, appends only genuinely new
-  submissions as unreviewed, and then renders atomically. Changed or missing accounted evidence
-  fails closed. Mail sending and all Sheet writes remain separate permission boundaries.
+- **Data-driven reimbursement review report** (shipped 2026-08-27; supplemental email-event lane
+  shipped 2026-08-30; `documentation/reimbursement-refresh-plan.md`) — `report-reimbursements`
+  renders a strict, gitignored schema-v2 bundle offline; `update-reimbursements` optionally acquires
+  Gmail, refreshes the complete local archive once, preserves stable reviewed identities, appends
+  genuinely new submissions as unreviewed, and accounts for follow-up receipts, clarification,
+  payment, and scoped approval mail in an append-only event ledger. Exact RFC ancestry or an
+  explicit private anchor is required; ambiguous evidence cannot mutate a ticket. Changed or
+  missing accounted evidence fails closed. Mail sending and all Sheet writes remain separate
+  permission boundaries.
 
 ### Deliberate design choice
 Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready), NOT the canonical
@@ -724,12 +729,13 @@ Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready),
 |---|---|
 | `pta_finance/receipt_ingest.py` | `.eml`/`.mbox` parser + PII-free `Profile` + shared RFC-822 received-date parser + `is_reply_or_forward` (structural recognition, no identity hard-coded) |
 | `pta_finance/receipt_map.py` | New — pure `Submission` → flat Reimbursements ledger rows (dedup, carry-forward, per-form default, `needs_review`) |
-| `pta_finance/reimbursement_pipeline.py` | Stable-keyed full-archive evidence snapshot, fail-closed merge, and atomic private-bundle refresh |
-| `pta_finance/reimbursement_report.py`, `pta_finance/reports/templates/reimbursement_queue.html.j2` | Strict schema-v1 loader, deterministic email composition, summary model, and offline atomic HTML renderer |
+| `pta_finance/reimbursement_events.py` | Strict private anchor, actor, proposal, payment, and item-complete operator-review parsing |
+| `pta_finance/reimbursement_pipeline.py` | Stable-keyed full-archive snapshot, exact supplemental linkage, lifecycle reduction, item recommendations, fail-closed merge, and atomic private-bundle refresh |
+| `pta_finance/reimbursement_report.py`, `pta_finance/reports/templates/reimbursement_queue.html.j2` | Strict schema-v2 loader with explicit v1 migration, supplemental history/unmatched evidence, deterministic email composition, summary model, and offline atomic HTML renderer |
 | `pta_finance/sheets.py` | New `replace_tab_grid` — schema-independent create/replace of a machine-owned tab (RAW grid + USER_ENTERED numeric column) |
 | `pta_finance/cli.py` | Receipt ingestion/mapping plus separate `report-reimbursements` and `update-reimbursements` entry points |
 | `tests/test_receipt_ingest.py`, `test_receipt_map.py`, `test_sheets.py` | Parser / profiler / mapper / writer coverage over synthetic fixtures |
-| `tests/test_reimbursement_pipeline.py`, `test_reimbursement_report.py`, `test_reimbursement_cli.py` | Synthetic stable-key, fail-closed, strict-schema, renderer, email, and CLI-boundary coverage |
+| `tests/test_reimbursement_events.py`, `test_reimbursement_pipeline.py`, `test_reimbursement_report.py`, `test_reimbursement_cli.py` | Synthetic anchor/proposal/payment parsing, stable-key, fail-closed, strict-schema, renderer, email, and CLI-boundary coverage |
 | `docs/loading-receipts.md`, `SETUP.md` | Operator load how-to + completeness check; acquisition half since replaced by `fetch-mail` (Gmail → `fetch-mail` → `map-receipts`), and SETUP.md §6 adds the OAuth stage |
 
 ### Fresh-context notes
@@ -738,4 +744,5 @@ Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready),
 |---|---|
 | Operational scope | Parsing, mapping, and `--write-tab` are shipped; Gmail OAuth **fetching** shipped later as `fetch-mail` (see the Monthly-automation bullet above). Unattended/cron ingestion and linked Drive-file retrieval remain deferred. |
 | Identity rule | Recognition is structural; no org/person/email in code or tests. Real `.eml` samples stay gitignored (default source `./mail_samples`). |
+| Supplemental linkage | Follow-up mail changes a ticket only through exact RFC ancestry or a strict private anchor. Secondary approval applies only to the fully parsed anchored proposal; trailing prose does not broaden scope. |
 | Sheet-side work | Related dashboard work (chart recolor, FY2025/27 `raw_category` canonicalization, the Group Explorer tab) lives in the Google Sheet, not this repo. |

@@ -2,9 +2,10 @@
 
 > **Identity rule (load-bearing).** This is a **generic, reusable finance toolkit** for a
 > PTA / booster club / small nonprofit. **Never hard-code any organization, school, person,
-> or email** in committed code, docs, tests, fixtures, or examples. All identity lives only in
-> the private, gitignored `config.toml`. Tests/examples use fake placeholders (`Example PTA`,
-> `treasurer@example.org`). The repo is **public**; the data is **private**.
+> or email** in committed code, docs, tests, fixtures, or examples. All real identity remains in
+> gitignored private inputs/configuration (`config.toml`, `mail_samples/`, and `reports/output/`,
+> including the optional reimbursement anchors). Tests/examples use fake placeholders
+> (`Example PTA`, `treasurer@example.org`). The repo is **public**; the data is **private**.
 
 ## 1. Overview
 
@@ -83,8 +84,11 @@ pta_finance/        package (flat layout): config, ids, schema, models, sheets,
                     read-only OAuth + query/list/fetch + deterministic .eml writer),
                     receipt_ingest (.eml/.mbox parser + profiler),
                     receipt_map (Submission → flat "Reimbursements" ledger rows),
-                    reimbursement_pipeline (stable evidence + fail-closed refresh),
-                    reimbursement_report (strict bundle + deterministic HTML/email rendering),
+                    reimbursement_events (strict private anchors, actors, proposals, payments,
+                    and item-complete operator reviews),
+                    reimbursement_pipeline (stable original/supplemental evidence + scoped reducers),
+                    reimbursement_report (strict schema-v2 bundle + v1 migration + deterministic
+                    HTML/email rendering),
                     budget_sync (editable-budget-tab → Budget Timeseries reconcile),
                     report_source (Budget Timeseries → report/analyze inputs),
                     analytics/, reports/(templates/)
@@ -125,13 +129,18 @@ documentation/      committed feature plans (e.g. gmail-ingest-plan.md)
 - **Reports** (`reports/`): builder computes a data model → Jinja2 renders internal + external
   variants (matplotlib charts; optional WeasyPrint PDF). **Reports are never committed to the
   repo** — they go to `reports/output/` + a private Drive folder + an ephemeral CI artifact.
-- **Reimbursement refresh** (`reimbursement_pipeline.py`, `reimbursement_report.py`): stable-keyed
-  local evidence refresh to a strict private schema-v1 bundle and deterministic Jinja HTML. Existing
-  reviewed evidence fails closed if it changes or disappears. `report-reimbursements` is offline;
-  `update-reimbursements` may acquire Gmail first but never sends mail or writes Sheets.
-- **Access:** a Google **service account** (Sheet + Drive folder shared with its email). Its JSON
-  key is the only secret — gitignored locally, base64 GitHub Actions secret in CI, decoded to a
-  file without echoing.
+- **Reimbursement refresh** (`reimbursement_events.py`, `reimbursement_pipeline.py`,
+  `reimbursement_report.py`): stable-keyed original submissions plus an append-only supplemental
+  email/event lane in a strict private schema-v2 bundle (with explicit v1 migration) and
+  deterministic Jinja HTML. Exact RFC ancestry or a strict private anchor is required before
+  follow-up evidence can mutate a ticket; unmatched/ambiguous mail remains visible. Existing
+  reviewed evidence fails closed if it changes or disappears. Secondary approval applies only to
+  an exact parsed proposal and trailing prose is not interpreted. `report-reimbursements` is
+  offline; `update-reimbursements` may acquire Gmail first but never sends mail or writes Sheets.
+- **Access:** Sheet/Drive access uses a Google **service account** (the Sheet + Drive folder are
+  shared with its email); its JSON key is gitignored locally and supplied as a base64 GitHub
+  Actions secret in CI. Optional Gmail fetching uses a separate OAuth Desktop-app client plus a
+  user refresh token. Those Gmail credentials are also gitignored and deliberately never enter CI.
 
 ## 6. Current state
 
@@ -157,11 +166,14 @@ a suffix instead of overwriting an older set. Formatting/comments are not captur
 history remains the primary recovery path, and there is no automated JSON restore command.
 **The reimbursement refresh generator has shipped**
 (`documentation/reimbursement-refresh-plan.md`, closeout issue #24): `report-reimbursements` rebuilds the private HTML
-offline from one strict bundle, while `update-reimbursements` optionally fetches mail, refreshes
-stable-keyed local evidence, appends only genuinely new records as unreviewed, and renders. Existing
-reviewed evidence fails closed if it changes or disappears. Neither command sends mail or writes
-Sheets. The current repository gate is **436 tests passing** (plus one optional skip), zero strict-
-mypy errors, and zero Ruff lint/format violations.
+offline from one strict schema-v2 bundle, while `update-reimbursements` optionally fetches mail,
+refreshes stable-keyed original submissions plus supplemental email events, appends only genuinely
+new submissions as unreviewed, supplies non-authoritative item-level recommendations, and renders.
+Exact RFC/private-anchor linkage supports follow-up receipts, clarification, payment, and scoped
+secondary approval while quarantining ambiguity; existing reviewed evidence fails closed if it
+changes or disappears. Neither command sends mail or writes Sheets. The current repository gate is
+**535 tests passing** (plus one optional skip), zero strict-mypy errors, and zero Ruff lint/format
+violations.
 **The Gmail read-only ingest connector has also shipped** (`documentation/gmail-ingest-plan.md`,
 tracking span #15–#22; deferred #18 and its umbrella #22 remain open): `gmail_source.py` + the
 `fetch-mail` CLI replace the manual Google Takeout export —
@@ -208,6 +220,10 @@ setup + M2 real-sheet smoke are DONE). **Next = operator-gated observation:** M3
   they did not initiate. Console labels drift: prefer the deep links
   (`console.cloud.google.com/auth/overview`, `/auth/clients`, `/auth/scopes`, `/auth/audience`), and
   do not upload a logo (it triggers app verification).
+- **For supplemental reimbursement linkage/review only (optional):** a gitignored
+  `reports/output/reimbursement-anchors.json` beside the private report bundle. It contains strict
+  RFC/direct links, configured actor addresses, and item-complete operator reviews; committed code
+  and documentation must never contain its real identities or decisions.
 - **Never print, `cat`, or `Get-Content`** `secrets/gmail-token.json` or
   `secrets/gmail-client-secret.json`.
   Metadata checks (`Test-Path`, size) and effect-based verification (run `fetch-mail --dry-run`,

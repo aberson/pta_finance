@@ -54,21 +54,27 @@ closed.
 New submissions receive deterministic, non-authoritative A/C advice from metadata rather than a
 generic Q placeholder, but their recorded decision remains UNREVIEWED. Explicit private operator
 reviews may update every item on one exact ticket. A configured payment operator's exact linked
-confirmation may settle only that ticket, and a configured secondary approver's short top-authored
-reply may authorize only a fully parsed, explicitly anchored proposal. Payment remains a separate
-event; ambiguous proposals, spoofed senders, quoted approvals, and unrelated affirmatives do not
-mutate decisions.
+confirmation may settle only that ticket, and a configured secondary approver's narrow
+top-authored reply may authorize only a fully parsed, explicitly anchored proposal. Besides the
+existing short affirmative tokens, the approval classifier accepts an optional greeting followed
+by the exact leading statement `I agree with your assessment`; negative or scope-changing modifiers
+fail closed, and trailing prose is never interpreted as new instructions. Payment remains a
+separate event; ambiguous proposals, spoofed senders, quoted approvals, and unrelated affirmatives
+do not mutate decisions.
 
 ## 4. Impact Analysis
 
 | File | Change Type | Reason | Verified |
 |---|---|---|---|
+| `pta_finance/receipt_ingest.py` | extend | Extract strict RFC ancestry, top-authored text, and decoded attachment evidence without changing original-submission identity | MIME, transfer-encoding, nested-message, and hash behavior covered by synthetic regression matrices |
+| `pta_finance/reimbursement_events.py` | add | Validate private anchors/actors/reviews and parse scoped proposals, payment evidence, and narrow approval replies | Parser inputs use fictional identities; adversarial grammar and ambiguity matrices fail closed |
 | `pta_finance/reimbursement_report.py` | add | Strict bundle model, validation, totals, emails, rendering entry point, atomic output | New module; existing report model/render pattern inspected in `pta_finance/reports/` |
-| `pta_finance/reimbursement_pipeline.py` | add | Parse/filter/deduplicate private evidence, preserve reviewed records, identify new or stale tickets, orchestrate stages | Parser and mapper producers inspected; Message-ID consumers grep-checked in `receipt_map.py`, `cli.py`, and private Review overlay |
+| `pta_finance/reimbursement_pipeline.py` | add | Parse/filter/deduplicate private evidence, preserve reviewed records, reduce linked supplemental lifecycle events, quarantine ambiguity, and orchestrate stages | Parser and mapper producers inspected; Message-ID consumers grep-checked in `receipt_map.py`, `cli.py`, and private Review overlay |
 | `pta_finance/reports/templates/reimbursement_queue.html.j2` | add | Complete data-driven reimbursement HTML without source-code literals or marker surgery | Existing Jinja loader and templates inspected |
 | `pta_finance/cli.py` | extend | Register offline report and refresh commands | All `build_parser`, `main`, `_cmd_fetch_mail`, and `_cmd_map_receipts` call sites grep-checked; CLI functions are local to this module/tests |
 | `tests/test_reimbursement_report.py` | add | Bundle, rendering, privacy, email, determinism, and atomic-write gates | Standard pytest discovers `tests/` only |
-| `tests/test_reimbursement_pipeline.py` | add | Evidence-key, cutoff, new/stale review, stage ordering, and failure-stop gates | Existing synthetic receipt fixtures inspected |
+| `tests/test_reimbursement_pipeline.py` | add | Evidence-key, cutoff, source freshness, supplemental linkage/reduction, recommendation, stage ordering, and failure-stop gates | Existing synthetic receipt fixtures inspected |
+| `tests/test_reimbursement_events.py` | add | Anchor validation, exact proposal expansion, payment parsing, and approval-classifier safety gates | Fictional fixtures plus an independent adversarial grammar matrix |
 | `tests/test_reimbursement_cli.py` | add | Parser and orchestration wiring tests | All CLI calls go through `cli.main` or direct test seams |
 | `docs/loading-receipts.md` | extend | Operator commands and permission/write boundaries | Existing acquisition and mapping workflow inspected |
 | `README.md`, `CLAUDE.md`, `plan.md` | extend | Current-state and command inventory | Command and architecture sections located with repository-wide search |
@@ -81,9 +87,10 @@ so the dashboard-oriented 15-column `Reimbursements` contract remains backward c
 ### Private report bundle
 
 A versioned JSON document under `reports/output/` holds report metadata, provenance, stable ticket
-and item keys, source evidence, adjudications, message drafts/history, and appendix material. New
-or changed source evidence is visibly unreviewed or stale; unchanged reviewed records retain their
-operator-authored decisions.
+and item keys, original and supplemental evidence, lifecycle events, adjudications, message
+drafts/history, and appendix material. New submissions enter as unreviewed. Any changed or missing
+accounted original or supplemental evidence fails closed before the bundle or HTML is mutated;
+unchanged reviewed records retain their operator-authored decisions.
 
 ### Offline report renderer
 
@@ -95,7 +102,7 @@ model to Jinja, and atomically replaces the requested private HTML file.
 
 The orchestrator runs the existing Gmail acquisition stage, refreshes local report evidence, then
 renders the report. It stops after a failed stage and prints aggregate counts only. It does not send
-mail, decide policy, or write Sheets.
+mail, initiate payment, make unscoped policy decisions, or write Sheets.
 
 ## 6. Design Decisions
 
@@ -110,9 +117,10 @@ so no `Reimbursement Review Items` worksheet is introduced.
 references are persisted in the private bundle. A late-arriving older message cannot renumber an
 already reviewed ticket.
 
-**Per-record freshness.** Each reviewed ticket records a canonical evidence hash and policy
-version. Only new or changed evidence needs semantic review; unchanged tickets require no model or
-human re-analysis.
+**Per-record freshness.** Each reviewed ticket records a canonical original-evidence hash and
+accounted supplemental evidence/events carry their own canonical hashes. New submissions receive
+non-authoritative review advice; changed or missing accounted evidence aborts the refresh for
+operator reconciliation. Unchanged tickets require no model or human re-analysis.
 
 **Full-template rendering.** One complete Jinja template replaces legacy HTML string surgery.
 Autoescape applies by default; any intentionally formatted legacy content must use a narrowly
@@ -173,12 +181,37 @@ apply.
   verify the combined command completes one real local cycle without Sheet mutation
 - **Depends on:** Step 3
 
+### Step 5: Add supplemental email evidence and scoped lifecycle events
+
+- **Status:** DONE (2026-08-30)
+- **Problem:** Process follow-up receipt, clarification, payment, and secondary-approval mail
+  without weakening original-form identity or silently guessing ticket linkage.
+- **Flags:** `--reviewers code --isolation worktree`
+- **Produces:** schema-v2 evidence/event model, strict private anchors and operator reviews,
+  attachment-byte hashes, lifecycle reducers, unmatched-evidence queue, and item-level advice
+- **Done when:** synthetic and adversarial tests prove exact linkage, append-only freshness,
+  ambiguity quarantine, scoped authorization, payment discrepancy handling, v1 migration, and
+  deterministic reruns
+- **Depends on:** Steps 1 through 4
+
+### Step 6: Verify the live end-to-end supplemental flow
+
+- **Status:** DONE (2026-08-30)
+- **Problem:** Prove the complete read-only Gmail-to-private-report path handles real follow-up
+  evidence and secondary approval without sending mail or writing Sheets.
+- **Type:** operator
+- **Produces:** none
+- **Done when:** one real `update-reimbursements --fetch-since <date>` run validates and renders the
+  private bundle, the named cases reach their expected lifecycle/recommendation states, and a
+  subsequent dry-run reports the same evidence/event counts without writes
+- **Depends on:** Step 5
+
 ## 8. Risks and Open Questions
 
 | Item | Risk | Mitigation |
 |---|---|---|
 | Private-data leakage | Real identities enter tracked fixtures or logs | Fictional fixtures, gitignore path guard, aggregate-only console output, repository search gate |
-| Evidence changes after review | Old decisions attach to changed items | Canonical per-ticket evidence hash; mark stale and fail publication or render a visible stale state |
+| Evidence changes after review | Old decisions attach to changed items | Canonical original/supplemental hashes; abort before bundle or HTML mutation and require operator reconciliation |
 | Late-arriving mail | Positional `NEW-##` identifiers shift | Persist display references; never derive existing refs from current sort order |
 | Partial pipeline failure | Report appears current after acquisition/preparation failure | Stop immediately; atomic output; print completed stage and unchanged output status |
 | Hidden remote mutation | Convenience command unexpectedly changes Sheets | Orchestrator performs no Sheet write; keep existing explicit `map-receipts --write-tab` boundary |
@@ -190,13 +223,21 @@ apply.
   stable references, deterministic templates, all payment placeholders, and injection escaping.
 - Unit-test evidence selection across `.eml` plus `.mbox`, reply filtering, cutoff inclusivity,
   content deduplication, stable source/item hashes, and preservation of reviewed fields.
+- Unit-test RFC/direct linkage, decoded attachment hashes, malformed MIME rejection, append-only
+  supplemental freshness, unmatched evidence, lifecycle reduction, payment discrepancies, strict
+  proposal scope, approval ambiguity, and item-level recommendation preservation.
 - CLI-test report-only and combined stage ordering, aggregate-only output, failure short-circuiting,
   and absence of Sheet construction.
 - Run `pytest`, Ruff check/format, and strict mypy over tracked code.
 - Run a real-component local smoke gate over the current private mail archive and bundle. The smoke
   gate may write only gitignored evidence/report artifacts and must not contact Gmail or Sheets.
+- Run the explicitly authorized end-to-end command once against read-only Gmail, then run the same
+  local refresh as a dry-run to prove stable evidence/event counts. Neither run may send email or
+  write Sheets.
 
-Completion evidence (2026-08-27): 436 tests passed with one optional skip; strict mypy, Ruff lint,
-and Ruff format checks passed. The private report was regenerated from the migrated bundle and its
-desktop/mobile layouts were independently reviewed from browser screenshots plus structured
-read-back evidence.
+Completion evidence (updated 2026-08-30): 535 tests passed with one optional skip; strict mypy,
+Ruff lint, Ruff format, identity, and diff checks passed. The supplemental approval grammar also
+passed an independent adversarial review. The private report was regenerated by the real
+read-only Gmail flow, every targeted case was structurally read back, and an immediate dry-run
+proved the result idempotent. Private identities, mailbox counts, and financial totals remain
+outside the repository.

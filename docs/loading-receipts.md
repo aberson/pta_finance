@@ -472,8 +472,11 @@ item or exactly the currently non-A/held positions, preserving existing A positi
 comma-separated group of exact refs is allowed only with one optionally bulleted `Approve as is`,
 which expands to all A for each grouped ticket. Every anchored ref must occur exactly once and every
 count must resolve unambiguously; otherwise the reply is quarantined without changing a decision.
-Only a short positive/negative top-authored reply from the configured approver is classified;
-quoted history and unrelated affirmative mail do nothing.
+Only a narrow positive/negative top-authored reply from the configured approver is classified.
+Besides the short affirmative tokens, the classifier accepts an optional greeting followed by the
+exact leading statement `I agree with your assessment`. Negative or scope-changing modifiers fail
+closed, and any trailing prose is recorded but never interpreted as a new instruction. Quoted
+history and unrelated affirmative mail do nothing.
 
 This command does **not** update either worksheet. Keeping that permission boundary visible is
 intentional. When you also want the machine-owned `Reimbursements` tab replaced, run Step 2's

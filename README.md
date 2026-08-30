@@ -108,7 +108,7 @@ the service-account JSON) and `PTA_CONFIG_B64` (base64 of `config.toml`) — and
 ```
 pta_finance/        package: config, ids, schema, models, sheets, backup, etl, cli,
                     gmail_source, budget_sync, report_source, receipt_ingest, receipt_map,
-                    reimbursement_pipeline, reimbursement_report,
+                    reimbursement_events, reimbursement_pipeline, reimbursement_report,
                     analytics/, reports/(templates/)
 tests/              fake-org fixtures + mocked gspread; an end-to-end wiring smoke gate
 .github/workflows/  ci.yml (PR gate) + monthly-report.yml (cron)
@@ -152,12 +152,15 @@ and there is no automated JSON restore command. The full test suite, `mypy --str
 pass.
 
 **Phase 4 reimbursement refresh complete** — issues #24 closed. The private reimbursement queue
-is data-driven: `report-reimbursements` validates one
-gitignored structured bundle and renders the complete HTML offline, while `update-reimbursements`
-optionally runs `fetch-mail`, refreshes stable-keyed local evidence, appends genuinely new records as
-**unreviewed**, and then renders. Neither command sends mail or writes Sheets. Existing reviewed
+is data-driven: `report-reimbursements` validates one gitignored schema-v2 bundle and renders the
+complete HTML offline, while `update-reimbursements` optionally runs `fetch-mail`, refreshes
+stable-keyed original submissions plus append-only supplemental email evidence, and then renders.
+Exact RFC ancestry or an explicit private anchor links follow-up receipts, clarification/payment
+responses, and scoped secondary approvals; ambiguous mail remains visible but cannot mutate a
+ticket. New submissions receive non-authoritative item-level recommendations while their recorded
+decision remains **unreviewed**. Neither command sends mail or writes Sheets. Existing reviewed
 records fail closed if their source evidence changes or disappears, so a refresh cannot silently
-attach an old decision to different evidence. The current repository gate is **436 tests passing**
+attach an old decision to different evidence. The current repository gate is **535 tests passing**
 (plus one optional skip), zero strict-mypy errors, and zero Ruff lint/format violations.
 
 The live `map-receipts --write-tab` path was revalidated on 2026-08-20 with a pre-write snapshot
