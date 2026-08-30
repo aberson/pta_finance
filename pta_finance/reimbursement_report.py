@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import copy
 import hashlib
 import json
 import os
@@ -20,16 +21,21 @@ import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, NoReturn
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-SCHEMA_VERSION = 1
+from pta_finance import receipt_ingest
+
+SCHEMA_VERSION = 2
 _MONEY_RE = re.compile(r"^(?:0|[1-9][0-9]*)\.[0-9]{2}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_MAIL_KEY_RE = re.compile(r"^mail:v1:[0-9a-f]{64}$")
+_OPERATOR_KEY_RE = re.compile(r"^operator-review:v1:[0-9a-f]{64}$")
+_EVENT_KEY_RE = re.compile(r"^event:v1:[0-9a-f]{64}$")
 _PNG_DATA_PREFIX = "data:image/png;base64,"
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 _TEMPLATE_NAME = "reimbursement_queue.html.j2"
@@ -144,6 +150,69 @@ class TicketMessage:
     date: date | None
     mode: str
     body: str
+
+
+@dataclass(frozen=True)
+class SupplementalAttachment:
+    """Decoded attachment metadata retained without embedding the private bytes."""
+
+    mime_type: str
+    filename: str
+    decoded_size: int
+    content_sha256: str
+
+
+@dataclass(frozen=True)
+class SupplementalEvidence:
+    """One accounted mail or explicit operator-review evidence record."""
+
+    evidence_key: str
+    source_type: str
+    message_id: str
+    in_reply_to: tuple[str, ...]
+    references: tuple[str, ...]
+    occurred_on: date | None
+    occurred_at: str
+    top_authored_sha256: str
+    evidence_sha256: str
+    attachments: tuple[SupplementalAttachment, ...]
+    record_sha256: str
+
+
+@dataclass(frozen=True)
+class TicketEvent:
+    """One append-only lifecycle event linked to exactly one ticket."""
+
+    event_key: str
+    evidence_key: str
+    ticket_review_key: str
+    kind: str
+    occurred_on: date | None
+    occurred_at: str
+    evidence_sha256: str
+    summary: str
+    amount: Decimal | None
+    reference: str
+    discrepancy: str
+    record_sha256: str
+
+
+@dataclass(frozen=True)
+class UnmatchedEvidence:
+    """A candidate supplemental record deliberately left outside every ticket."""
+
+    evidence_key: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class SupplementalLedger:
+    """Strict schema-v2 supplemental evidence/event inventory."""
+
+    anchors_sha256: str
+    evidence: tuple[SupplementalEvidence, ...]
+    events: tuple[TicketEvent, ...]
+    unmatched: tuple[UnmatchedEvidence, ...]
 
 
 @dataclass(frozen=True)
@@ -273,6 +342,7 @@ class ReimbursementReport:
     source_summary: SourceSummary
     tickets: tuple[Ticket, ...]
     appendix: Appendix
+    supplemental: SupplementalLedger
 
     @property
     def active_tickets(self) -> tuple[Ticket, ...]:
@@ -289,6 +359,20 @@ class ReimbursementReport:
     @property
     def closed_tickets(self) -> tuple[Ticket, ...]:
         return tuple(ticket for ticket in self.tickets if ticket.is_closed)
+
+    def events_for(self, review_key: str) -> tuple[TicketEvent, ...]:
+        """Return the deterministic event history for one stable ticket key."""
+
+        return tuple(
+            event for event in self.supplemental.events if event.ticket_review_key == review_key
+        )
+
+    def evidence_for(self, evidence_key: str) -> SupplementalEvidence:
+        """Return already-validated evidence for a rendered event or unmatched record."""
+
+        return next(
+            item for item in self.supplemental.evidence if item.evidence_key == evidence_key
+        )
 
     @property
     def summary(self) -> ReportSummary:
@@ -409,11 +493,29 @@ def _money(value: Any, *, label: str, blank: bool = False) -> Decimal | None:
     return amount
 
 
+def _timestamp(value: Any, *, label: str, blank: bool = False) -> str:
+    text = _string(value, label=label, blank=blank)
+    if not text and blank:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ReimbursementReportError(f"{label} must be an ISO timestamp") from exc
+    if parsed.tzinfo is None or parsed.astimezone(UTC).isoformat() != text:
+        _fail(f"{label} must be a normalized UTC ISO timestamp")
+    return text
+
+
 def _sha256(value: Any, *, label: str) -> str:
     text = _string(value, label=label)
     if not _SHA256_RE.fullmatch(text):
         _fail(f"{label} must be 64 lowercase hexadecimal characters")
     return text
+
+
+def _json_sha256(value: Any) -> str:
+    canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _choice(value: Any, *, label: str, choices: frozenset[str]) -> str:
@@ -683,6 +785,253 @@ def _parse_message(value: Any, *, label: str) -> TicketMessage:
     return TicketMessage(kind=kind, date=message_date, mode=mode, body=body)
 
 
+def _parse_supplemental_attachment(value: Any, *, label: str) -> SupplementalAttachment:
+    raw = _object(
+        value,
+        label=label,
+        keys=frozenset({"mime_type", "filename", "decoded_size", "content_sha256"}),
+    )
+    return SupplementalAttachment(
+        mime_type=_string(raw["mime_type"], label=f"{label}.mime_type"),
+        filename=_string(raw["filename"], label=f"{label}.filename", blank=True),
+        decoded_size=_integer(raw["decoded_size"], label=f"{label}.decoded_size"),
+        content_sha256=_sha256(raw["content_sha256"], label=f"{label}.content_sha256"),
+    )
+
+
+def _parse_supplemental(value: Any) -> SupplementalLedger:
+    raw = _object(
+        value,
+        label="supplemental",
+        keys=frozenset({"anchors_sha256", "evidence", "events", "unmatched"}),
+    )
+    raw_evidence = raw["evidence"]
+    raw_events = raw["events"]
+    raw_unmatched = raw["unmatched"]
+    if not isinstance(raw_evidence, list):
+        _fail("supplemental.evidence must be an array")
+    if not isinstance(raw_events, list):
+        _fail("supplemental.events must be an array")
+    if not isinstance(raw_unmatched, list):
+        _fail("supplemental.unmatched must be an array")
+
+    evidence: list[SupplementalEvidence] = []
+    for index, item in enumerate(raw_evidence):
+        label = f"supplemental.evidence[{index}]"
+        entry = _object(
+            item,
+            label=label,
+            keys=frozenset(
+                {
+                    "evidence_key",
+                    "source_type",
+                    "message_id",
+                    "in_reply_to",
+                    "references",
+                    "occurred_on",
+                    "occurred_at",
+                    "top_authored_sha256",
+                    "evidence_sha256",
+                    "attachments",
+                    "record_sha256",
+                }
+            ),
+        )
+        record_sha256 = _sha256(entry["record_sha256"], label=f"{label}.record_sha256")
+        record_payload = {key: entry[key] for key in entry if key != "record_sha256"}
+        if _json_sha256(record_payload) != record_sha256:
+            _fail(f"{label}.record_sha256 does not match the stored evidence metadata")
+        raw_attachments = entry["attachments"]
+        if not isinstance(raw_attachments, list):
+            _fail(f"{label}.attachments must be an array")
+        source_type = _choice(
+            entry["source_type"],
+            label=f"{label}.source_type",
+            choices=frozenset({"MAIL", "OPERATOR_REVIEW"}),
+        )
+        message_id = _string(entry["message_id"], label=f"{label}.message_id", blank=True)
+        in_reply_to = _strings(entry["in_reply_to"], label=f"{label}.in_reply_to")
+        references = _strings(entry["references"], label=f"{label}.references")
+        if message_id and receipt_ingest.normalize_message_id(message_id) != message_id:
+            _fail(f"{label}.message_id must be normalized")
+        if any(receipt_ingest.normalize_message_id(item) != item for item in in_reply_to):
+            _fail(f"{label}.in_reply_to must contain normalized Message-IDs")
+        if any(receipt_ingest.normalize_message_id(item) != item for item in references):
+            _fail(f"{label}.references must contain normalized Message-IDs")
+        if len(in_reply_to) != len(set(in_reply_to)) or len(references) != len(set(references)):
+            _fail(f"{label} ancestry must not contain duplicate Message-IDs")
+        attachments = tuple(
+            _parse_supplemental_attachment(
+                attachment, label=f"{label}.attachments[{attachment_index}]"
+            )
+            for attachment_index, attachment in enumerate(raw_attachments)
+        )
+        if source_type == "OPERATOR_REVIEW" and (
+            message_id
+            or in_reply_to
+            or references
+            or attachments
+            or entry["occurred_on"]
+            or entry["occurred_at"]
+        ):
+            _fail(f"{label} operator reviews cannot impersonate mail evidence")
+        evidence_key = _string(entry["evidence_key"], label=f"{label}.evidence_key")
+        expected_key_pattern = _MAIL_KEY_RE if source_type == "MAIL" else _OPERATOR_KEY_RE
+        if expected_key_pattern.fullmatch(evidence_key) is None:
+            _fail(f"{label}.evidence_key has the wrong stable-key shape")
+        top_authored_sha256 = _sha256(
+            entry["top_authored_sha256"], label=f"{label}.top_authored_sha256"
+        )
+        evidence_sha256 = _sha256(entry["evidence_sha256"], label=f"{label}.evidence_sha256")
+        if source_type == "OPERATOR_REVIEW" and top_authored_sha256 != evidence_sha256:
+            _fail(f"{label} operator-review digests must match")
+        if source_type == "OPERATOR_REVIEW" and not evidence_key.endswith(evidence_sha256):
+            _fail(f"{label} operator-review key must match its digest")
+        if source_type == "MAIL" and message_id:
+            expected_mail_key = "mail:v1:" + hashlib.sha256(message_id.encode("utf-8")).hexdigest()
+            if evidence_key != expected_mail_key:
+                _fail(f"{label} mail key must match its normalized Message-ID")
+        evidence.append(
+            SupplementalEvidence(
+                evidence_key=evidence_key,
+                source_type=source_type,
+                message_id=message_id,
+                in_reply_to=in_reply_to,
+                references=references,
+                occurred_on=_date(entry["occurred_on"], label=f"{label}.occurred_on", blank=True),
+                occurred_at=_timestamp(
+                    entry["occurred_at"], label=f"{label}.occurred_at", blank=True
+                ),
+                top_authored_sha256=top_authored_sha256,
+                evidence_sha256=evidence_sha256,
+                attachments=attachments,
+                record_sha256=record_sha256,
+            )
+        )
+
+    events: list[TicketEvent] = []
+    event_kinds = frozenset(
+        {
+            "RECEIPT_RECEIVED",
+            "CLARIFICATION_RECEIVED",
+            "PAYMENT_RECORDED",
+            "PAYMENT_DISCREPANCY",
+            "APPROVAL_GRANTED",
+            "APPROVAL_DECLINED",
+            "APPROVAL_QUARANTINED",
+            "OPERATOR_REVIEW",
+        }
+    )
+    for index, item in enumerate(raw_events):
+        label = f"supplemental.events[{index}]"
+        entry = _object(
+            item,
+            label=label,
+            keys=frozenset(
+                {
+                    "event_key",
+                    "evidence_key",
+                    "ticket_review_key",
+                    "kind",
+                    "occurred_on",
+                    "occurred_at",
+                    "evidence_sha256",
+                    "summary",
+                    "amount",
+                    "reference",
+                    "discrepancy",
+                    "record_sha256",
+                }
+            ),
+        )
+        record_sha256 = _sha256(entry["record_sha256"], label=f"{label}.record_sha256")
+        record_payload = {key: entry[key] for key in entry if key != "record_sha256"}
+        if _json_sha256(record_payload) != record_sha256:
+            _fail(f"{label}.record_sha256 does not match the stored event metadata")
+        kind = _choice(entry["kind"], label=f"{label}.kind", choices=event_kinds)
+        occurred_on = _date(entry["occurred_on"], label=f"{label}.occurred_on", blank=True)
+        amount = _money(entry["amount"], label=f"{label}.amount", blank=True)
+        reference = _string(entry["reference"], label=f"{label}.reference", blank=True)
+        discrepancy = _string(entry["discrepancy"], label=f"{label}.discrepancy", blank=True)
+        payment_kinds = {"PAYMENT_RECORDED", "PAYMENT_DISCREPANCY"}
+        if kind in payment_kinds and (
+            occurred_on is None or amount is None or not reference.strip()
+        ):
+            _fail(f"{label} payment events require date, amount, and reference")
+        if kind == "PAYMENT_RECORDED" and discrepancy:
+            _fail(f"{label} recorded payments cannot carry a discrepancy")
+        if kind == "PAYMENT_DISCREPANCY" and not discrepancy:
+            _fail(f"{label} payment discrepancies require discrepancy detail")
+        if kind not in payment_kinds and (amount is not None or reference or discrepancy):
+            _fail(f"{label} non-payment events cannot carry payment fields")
+        event_key = _string(entry["event_key"], label=f"{label}.event_key")
+        if _EVENT_KEY_RE.fullmatch(event_key) is None:
+            _fail(f"{label}.event_key has the wrong stable-key shape")
+        events.append(
+            TicketEvent(
+                event_key=event_key,
+                evidence_key=_string(entry["evidence_key"], label=f"{label}.evidence_key"),
+                ticket_review_key=_string(
+                    entry["ticket_review_key"], label=f"{label}.ticket_review_key"
+                ),
+                kind=kind,
+                occurred_on=occurred_on,
+                occurred_at=_timestamp(
+                    entry["occurred_at"], label=f"{label}.occurred_at", blank=True
+                ),
+                evidence_sha256=_sha256(entry["evidence_sha256"], label=f"{label}.evidence_sha256"),
+                summary=_string(entry["summary"], label=f"{label}.summary"),
+                amount=amount,
+                reference=reference,
+                discrepancy=discrepancy,
+                record_sha256=record_sha256,
+            )
+        )
+
+    unmatched: list[UnmatchedEvidence] = []
+    unmatched_reasons = frozenset(
+        {
+            "NO_EXACT_LINK",
+            "AMBIGUOUS_LINK",
+            "MISSING_MESSAGE_ID",
+            "AUTHORIZATION_REJECTED",
+            "PROPOSAL_AMBIGUOUS",
+            "NO_ACTIONABLE_CONTENT",
+        }
+    )
+    for index, item in enumerate(raw_unmatched):
+        label = f"supplemental.unmatched[{index}]"
+        entry = _object(
+            item,
+            label=label,
+            keys=frozenset({"evidence_key", "reason"}),
+        )
+        unmatched.append(
+            UnmatchedEvidence(
+                evidence_key=_string(entry["evidence_key"], label=f"{label}.evidence_key"),
+                reason=_choice(entry["reason"], label=f"{label}.reason", choices=unmatched_reasons),
+            )
+        )
+
+    evidence_keys = [item.evidence_key for item in evidence]
+    if evidence_keys != sorted(evidence_keys) or len(evidence_keys) != len(set(evidence_keys)):
+        _fail("supplemental.evidence must have unique evidence_key values in sorted order")
+    event_order = [(item.occurred_at, item.event_key) for item in events]
+    if event_order != sorted(event_order) or len({item.event_key for item in events}) != len(
+        events
+    ):
+        _fail("supplemental.events must have unique event_key values in deterministic order")
+    unmatched_keys = [item.evidence_key for item in unmatched]
+    if unmatched_keys != sorted(unmatched_keys) or len(unmatched_keys) != len(set(unmatched_keys)):
+        _fail("supplemental.unmatched must have unique evidence_key values in sorted order")
+    return SupplementalLedger(
+        anchors_sha256=_sha256(raw["anchors_sha256"], label="supplemental.anchors_sha256"),
+        evidence=tuple(evidence),
+        events=tuple(events),
+        unmatched=tuple(unmatched),
+    )
+
+
 def _rollup_status(items: Sequence[ReviewItem]) -> str:
     statuses = {item.status for item in items if item.status != "-"}
     if not statuses:
@@ -719,8 +1068,8 @@ def _validate_ticket(ticket: Ticket, *, label: str) -> None:
         _fail(f"{label}.source.mapped_total does not equal its source item sum")
 
     drafts = sum(message.kind == "draft" for message in ticket.messages)
-    if ticket.live.workflow_state == "ACTIVE" and drafts != 1:
-        _fail(f"{label} ACTIVE tickets require exactly one draft message")
+    if drafts > 1:
+        _fail(f"{label} tickets may contain at most one draft message")
     if ticket.live.workflow_state == "SETTLED":
         if ticket.review.status != "A" or ticket.live.decision != "APPROVED":
             _fail(f"{label} SETTLED tickets must be approved")
@@ -877,12 +1226,60 @@ def _reject_json_constant(value: str) -> NoReturn:
     raise ReimbursementReportError(f"bundle contains forbidden JSON constant {value}")
 
 
+def migrate_bundle(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a deep-copied schema-v2 bundle, explicitly migrating strict schema-v1 input."""
+
+    if not isinstance(value, Mapping):
+        _fail("bundle must be an object")
+    version = value.get("schema_version")
+    if isinstance(version, bool) or version not in {1, SCHEMA_VERSION}:
+        _fail(f"bundle.schema_version must equal 1 or {SCHEMA_VERSION}")
+    if version == SCHEMA_VERSION:
+        return copy.deepcopy(dict(value))
+    expected_v1 = frozenset(
+        {"schema_version", "report", "provenance", "source_summary", "tickets", "appendix"}
+    )
+    if frozenset(value) != expected_v1:
+        _fail("bundle has invalid keys")
+    migrated = copy.deepcopy(dict(value))
+    empty_anchor_payload = {
+        "schema_version": 1,
+        "actors": {"payment_operators": [], "secondary_approvers": []},
+        "thread_anchors": [],
+        "direct_links": [],
+        "operator_reviews": [],
+    }
+    migrated["schema_version"] = SCHEMA_VERSION
+    migrated["supplemental"] = {
+        "anchors_sha256": hashlib.sha256(
+            json.dumps(
+                empty_anchor_payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "evidence": [],
+        "events": [],
+        "unmatched": [],
+    }
+    return migrated
+
+
 def _load_data(value: Any) -> ReimbursementReport:
     root = _object(
         value,
         label="bundle",
         keys=frozenset(
-            {"schema_version", "report", "provenance", "source_summary", "tickets", "appendix"}
+            {
+                "schema_version",
+                "report",
+                "provenance",
+                "source_summary",
+                "tickets",
+                "appendix",
+                "supplemental",
+            }
         ),
     )
     if root["schema_version"] != SCHEMA_VERSION or isinstance(root["schema_version"], bool):
@@ -907,12 +1304,14 @@ def _load_data(value: Any) -> ReimbursementReport:
     submission_refs = [ticket.ref for ticket in tickets if ticket.origin == "submission"]
     if len(submission_refs) != len(set(submission_refs)):
         _fail("bundle.tickets contains duplicate submission ref values")
+    supplemental = _parse_supplemental(root["supplemental"])
     report = ReimbursementReport(
         settings=settings,
         provenance=_parse_provenance(root["provenance"]),
         source_summary=_parse_source_summary(root["source_summary"], cutoff=settings.cutoff_date),
         tickets=tickets,
         appendix=_parse_appendix(root["appendix"]),
+        supplemental=supplemental,
     )
     submission_keys = {ticket.review_key for ticket in tickets if ticket.origin == "submission"}
     accounted_keys = set(report.provenance.accounted_review_keys)
@@ -920,13 +1319,71 @@ def _load_data(value: Any) -> ReimbursementReport:
         _fail("every rendered submission ticket must be present in accounted_review_keys")
     if len(report.provenance.accounted_review_keys) != report.source_summary.mapped_submissions:
         _fail("accounted_review_keys count must match source_summary.mapped_submissions")
-    if report.summary.emails_to_send != report.summary.active:
-        _fail("every active ticket must contain exactly one draft message")
+    ticket_keys = {ticket.review_key for ticket in tickets}
+    evidence_by_key = {item.evidence_key: item for item in supplemental.evidence}
+    operator_review_targets = {
+        event.ticket_review_key for event in supplemental.events if event.kind == "OPERATOR_REVIEW"
+    }
+    event_evidence_keys = {event.evidence_key for event in supplemental.events}
+    unmatched_evidence_keys = {item.evidence_key for item in supplemental.unmatched}
+    if event_evidence_keys & unmatched_evidence_keys:
+        _fail("supplemental evidence cannot be both linked and unmatched")
+    if event_evidence_keys | unmatched_evidence_keys != set(evidence_by_key):
+        _fail("every supplemental evidence record must be linked or unmatched")
+    for event in supplemental.events:
+        evidence = evidence_by_key.get(event.evidence_key)
+        if evidence is None or evidence.evidence_sha256 != event.evidence_sha256:
+            _fail("supplemental event evidence digest does not match its accounted record")
+        if event.occurred_on != evidence.occurred_on:
+            _fail("supplemental event date does not match its accounted evidence")
+        if event.occurred_at != evidence.occurred_at:
+            _fail("supplemental event timestamp does not match its accounted evidence")
+        if event.ticket_review_key not in ticket_keys:
+            _fail("supplemental event targets an unknown ticket review key")
+        expected_event_key = (
+            "event:v1:"
+            + hashlib.sha256(
+                f"{event.evidence_key}\0{event.ticket_review_key}\0{event.kind}".encode()
+            ).hexdigest()
+        )
+        if event.event_key != expected_event_key:
+            _fail("supplemental event key does not match its scoped event payload")
+        if event.kind == "OPERATOR_REVIEW" and evidence.source_type != "OPERATOR_REVIEW":
+            _fail("operator review events require operator-review evidence")
+        if event.kind != "OPERATOR_REVIEW" and evidence.source_type != "MAIL":
+            _fail("mail lifecycle events require mail evidence")
+        target = next(ticket for ticket in tickets if ticket.review_key == event.ticket_review_key)
+        source_total = sum(
+            (item.source_amount for item in target.items if item.source_amount is not None),
+            Decimal("0.00"),
+        )
+        if event.kind == "PAYMENT_RECORDED" and (
+            target.live.workflow_state != "SETTLED"
+            or target.live.decision != "APPROVED"
+            or target.live.payment_status not in {"PAID", "PAID_PRIOR"}
+            or event.amount != source_total
+        ):
+            _fail(
+                "recorded payment events require the linked ticket total to match and be approved "
+                "and settled"
+            )
+        if event.kind == "PAYMENT_DISCREPANCY" and event.amount == source_total:
+            _fail("payment discrepancy events must differ from the linked ticket total")
+        if (
+            event.kind == "APPROVAL_GRANTED"
+            and target.live.decision == "UNREVIEWED"
+            and event.ticket_review_key not in operator_review_targets
+        ):
+            _fail("granted approval events must update the linked recorded decision")
+    for unmatched_item in supplemental.unmatched:
+        evidence = evidence_by_key.get(unmatched_item.evidence_key)
+        if evidence is None or evidence.source_type != "MAIL":
+            _fail("unmatched entries require accounted mail evidence")
     return report
 
 
 def load_bundle(path: Path) -> ReimbursementReport:
-    """Load and validate one schema-v1 private reimbursement report bundle."""
+    """Load schema-v2, explicitly migrating a strict schema-v1 private bundle in memory."""
 
     try:
         raw = path.read_text(encoding="utf-8")
@@ -936,7 +1393,9 @@ def load_bundle(path: Path) -> ReimbursementReport:
         value = json.loads(raw, parse_constant=_reject_json_constant)
     except json.JSONDecodeError as exc:
         raise ReimbursementReportError("private reimbursement bundle is invalid JSON") from exc
-    return _load_data(value)
+    if not isinstance(value, dict):
+        _fail("bundle must be an object")
+    return _load_data(migrate_bundle(value))
 
 
 def _format_money(value: Decimal | None) -> str:
@@ -1027,11 +1486,17 @@ def render_html(report: ReimbursementReport) -> str:
         ticket.review_key: _email_blocks(ticket, report.settings.email_signoff)
         for ticket in report.tickets
     }
+    ticket_events = {
+        ticket.review_key: report.events_for(ticket.review_key) for ticket in report.tickets
+    }
+    evidence_by_key = {evidence.evidence_key: evidence for evidence in report.supplemental.evidence}
     rendered = template.render(
         report=report,
         summary=report.summary,
         status_meta=STATUS_META,
         email_blocks=email_blocks,
+        ticket_events=ticket_events,
+        evidence_by_key=evidence_by_key,
         money=_format_money,
         iso_date=_format_date,
     )

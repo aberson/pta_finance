@@ -354,17 +354,126 @@ $env:PYTHONUTF8=1; $env:PYTHONIOENCODING="utf-8"; uv run pta-finance update-reim
 The combined command performs these stages in order:
 
 1. Fetch the overlapping Gmail window into the configured top-level archive.
-2. Parse the entire `.eml` + `.mbox` archive once, apply the configured received cutoff before
-   deduplication, and compute stable submission/item keys plus evidence hashes.
-3. Preserve every unchanged reviewed ticket. Append new source records to the private bundle as
-   **Question / Unreviewed**, with item rows and a deterministic acknowledgement draft.
-4. Validate the complete bundle and atomically replace
+2. Parse the `.eml` + `.mbox` archive once, apply the configured received cutoff to both original
+   submissions and supplemental mail before deduplication/linking, and compute stable keys plus
+   evidence hashes. The aggregate CLI summary reports supplemental evidence, events, unmatched
+   candidates, and cutoff-excluded messages without printing mail identifiers or content.
+3. Preserve every unchanged operator review. Append new source records with specific,
+   evidence-limited per-item **Approve** or **Clarification** recommendations while keeping the
+   recorded decision **UNREVIEWED**. These recommendations use only deterministic metadata
+   (mapping, reconciliation, available receipt assets, amount threshold, and conservative text
+   signals); they do not perform OCR, visual inspection, or policy adjudication.
+4. Process candidate supplemental mail in a separate append-only lane. Exact RFC ancestry or an
+   explicit private anchor may link it to a ticket; sender, name, subject, and prose similarity
+   never do. Unlinked or ambiguous candidates remain visible in the report's unmatched queue.
+5. Validate the complete schema-v2 bundle and atomically replace
    `reports/output/reimbursement-queue-breakdown.html`.
 
 If an already-accounted email disappears or its evidence changes, the command stops before changing
-the bundle or HTML. That requires deliberate review; the tool never carries an approval forward by
-guessing. A late-arriving older email is still detected because the bundle persists every accounted
-source key rather than relying on a moving date horizon.
+the bundle or HTML. Stored evidence and event metadata carry canonical record digests, including
+decoded attachment hashes and normalized RFC timestamps. That requires deliberate review; the tool
+never carries an approval forward by guessing. A late-arriving in-scope email is still detected
+because the bundle persists every accounted source key rather than relying on archive order.
+
+### Private supplemental anchors and operator reviews
+
+By default, `update-reimbursements` looks for
+`reports/output/reimbursement-anchors.json` beside the private bundle. Use `--anchors PATH` to
+select another gitignored file. The file is optional, strict, digestible, and must never be
+committed. It can hold exact outbound-thread anchors, exact non-threaded direct links, configured
+payment/approval actors, and explicit item-complete operator reviews. An anchor alone cannot mark
+payment; payment requires a linked, affirmative, top-authored confirmation from a configured
+payment operator with one unambiguous amount and reference (or the strict Zelle confirmation-block
+shape). Negations, questions, attribution, cancellation language, and ambiguous values fail closed.
+A secondary approval remains scoped to an exact
+proposal thread and does not record payment. If the confirmed amount differs from the ticket
+total, the discrepancy and reference remain visible but the ticket is not settled.
+
+Public fake-shape example (replace every value only in your private file):
+
+```json
+{
+  "schema_version": 1,
+  "actors": {
+    "payment_operators": ["payments@example.org"],
+    "secondary_approvers": ["reviewer@example.org"]
+  },
+  "thread_anchors": [
+    {
+      "message_id": "<outbound-case@example.org>",
+      "purpose": "CASE",
+      "tickets": [
+        {
+          "review_key": "submission:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "ref": "NEW-01",
+          "form_label": ""
+        }
+      ]
+    },
+    {
+      "message_id": "<outbound-proposal@example.org>",
+      "purpose": "APPROVAL_PROPOSAL",
+      "tickets": [
+        {
+          "review_key": "submission:v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "ref": "NEW-02",
+          "form_label": ""
+        }
+      ]
+    }
+  ],
+  "direct_links": [
+    {
+      "message_id": "<direct-receipt@example.org>",
+      "purpose": "RECEIPT",
+      "ticket": {
+        "review_key": "legacy:v1:example-form-a",
+        "ref": "P-001",
+        "form_label": "Form A"
+      }
+    }
+  ],
+  "operator_reviews": [
+    {
+      "ticket": {
+        "review_key": "legacy:v1:example-form-a",
+        "ref": "P-001",
+        "form_label": "Form A"
+      },
+      "record_decision": true,
+      "items": [
+        {
+          "source_index": 1,
+          "status": "A",
+          "why": "Operator verified the synthetic receipt and claimed amount.",
+          "reviewed_amount": ""
+        },
+        {
+          "source_index": 2,
+          "status": "C",
+          "why": "The synthetic claimed amount differs from the receipt amount.",
+          "reviewed_amount": ""
+        }
+      ],
+      "action": "Resolve the remaining amount question",
+      "block": "Confirm the intended claim amount.",
+      "asks": ["Which synthetic amount is intended for item 2?"],
+      "note": "Explicit operator visual review; payment remains separate.",
+      "email_questions": ["Which synthetic amount is intended for item 2?"],
+      "email_context": ""
+    }
+  ]
+}
+```
+
+Approval proposals use a deliberately small protocol: a line containing only the exact ticket
+reference, followed by `Approve...` or `Clarification...` action lines. The lines may cover every
+item or exactly the currently non-A/held positions, preserving existing A positions. A
+comma-separated group of exact refs is allowed only with one optionally bulleted `Approve as is`,
+which expands to all A for each grouped ticket. Every anchored ref must occur exactly once and every
+count must resolve unambiguously; otherwise the reply is quarantined without changing a decision.
+Only a short positive/negative top-authored reply from the configured approver is classified;
+quoted history and unrelated affirmative mail do nothing.
 
 This command does **not** update either worksheet. Keeping that permission boundary visible is
 intentional. When you also want the machine-owned `Reimbursements` tab replaced, run Step 2's
@@ -375,8 +484,9 @@ tab; item-level report decisions remain in the private structured bundle.
 
 ## How the ledger cleans the data (so the numbers make sense)
 
-- **`Re:`/`Fwd:` replies** are thread duplicates (same reimbursement, different email) → dropped.
-  A reply's `Message-ID` differs from the original, so only skipping them by subject catches these.
+- **`Re:`/`Fwd:` form copies** remain excluded from the original-submission lane so quoted forms do
+  not create duplicate tickets. The separate supplemental lane still accounts for exact-linked
+  receipt, clarification, payment, and approval evidence carried by those messages.
 - **Blank category** carries forward from a prior line in the same submission; a form that
   collects no category falls back to its `FORM_DEFAULT:` budget line; anything still blank →
   `needs_review`.

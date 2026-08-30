@@ -135,6 +135,10 @@ def _merge_summary() -> reimbursement_pipeline.BundleMergeSummary:
         mapped_total=Decimal("45.67"),
         first_received="2026-06-02",
         last_received="2026-08-03",
+        supplemental_evidence=5,
+        supplemental_events=3,
+        unmatched_evidence=2,
+        supplemental_excluded_by_cutoff=7,
     )
 
 
@@ -188,6 +192,7 @@ def test_update_reimbursements_dry_run_preserves_bundle_and_html(
     bundle_path = tmp_path / "bundle.json"
     output_path = tmp_path / "queue.html"
     category_map = tmp_path / "category-map.csv"
+    anchors_path = tmp_path / "anchors.json"
     bundle_path.write_text("prior bundle", encoding="utf-8")
     output_path.write_text("prior report", encoding="utf-8")
     prior_bundle = bundle_path.read_bytes()
@@ -213,6 +218,8 @@ def test_update_reimbursements_dry_run_preserves_bundle_and_html(
             str(category_map),
             "--data",
             str(bundle_path),
+            "--anchors",
+            str(anchors_path),
             "--output",
             str(output_path),
             "--received-since",
@@ -235,8 +242,10 @@ def test_update_reimbursements_dry_run_preserves_bundle_and_html(
         "received_since": date(2026, 6, 1),
         "as_of": date(2026, 8, 4),
         "subject_filter": None,
+        "anchors_path": anchors_path,
     }
     assert "3 source submission(s), 4 line(s), $45.67" in stdout
+    assert "5 evidence, 3 event(s), 2 unmatched, 7 cutoff-excluded" in stdout
     assert "no bundle or report files written" in stdout
     assert "Fictional Requester" not in stdout
 
@@ -301,6 +310,7 @@ def test_update_reimbursements_refreshes_then_reports_without_sheets(
     assert events == ["refresh", "report"]
     assert output_path.read_text(encoding="utf-8") == "rendered private report"
     assert "1 new, 2 unchanged" in stdout
+    assert "5 evidence, 3 event(s), 2 unmatched, 7 cutoff-excluded" in stdout
     assert "1 active, 0 settled" in stdout
     assert "Fictional Requester" not in stdout
 

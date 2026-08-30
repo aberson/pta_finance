@@ -31,6 +31,8 @@ service_account_file = "secrets/service-account.json"
 
 # [receipt_mapping]                           # optional - omit for all-history mapping
 # received_since = "YYYY-MM-DD"               # inclusive outer email Date-header cutoff
+# Supplemental reimbursement anchors/actors live in a separate gitignored JSON file, not TOML:
+# uv run pta-finance update-reimbursements --anchors reports/output/reimbursement-anchors.json
 
 # [gmail]                                    # optional - omit entirely if unused
 # client_secrets_file = "secrets/gmail-client-secret.json"   # OAuth Desktop-app client

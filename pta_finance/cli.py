@@ -1148,6 +1148,7 @@ def _cmd_update_reimbursements(args: argparse.Namespace, *, service: Any = None)
             "received_since": received_since,
             "as_of": as_of,
             "subject_filter": args.subject_filter,
+            "anchors_path": Path(args.anchors) if args.anchors else None,
         }
         if args.dry_run:
             _planned, summary = reimbursement_pipeline.plan_bundle_refresh(**refresh_kwargs)
@@ -1167,6 +1168,11 @@ def _cmd_update_reimbursements(args: argparse.Namespace, *, service: Any = None)
         f"({cutoff_source})"
     )
     print(f"  review bundle : {summary.new_tickets} new, {summary.unchanged_tickets} unchanged")
+    print(
+        f"  supplemental  : {summary.supplemental_evidence} evidence, "
+        f"{summary.supplemental_events} event(s), {summary.unmatched_evidence} unmatched, "
+        f"{summary.supplemental_excluded_by_cutoff} cutoff-excluded"
+    )
     if args.dry_run:
         print("update-reimbursements [dry-run]: no bundle or report files written")
         return 0
@@ -1643,6 +1649,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--data",
         default="reports/output/reimbursement-report.json",
         help="private structured report bundle (default: reports/output/reimbursement-report.json)",
+    )
+    p_reimbursement_update.add_argument(
+        "--anchors",
+        default=None,
+        help=(
+            "strict private anchor/override JSON (default: reimbursement-anchors.json beside "
+            "--data when present)"
+        ),
     )
     p_reimbursement_update.add_argument(
         "--output",

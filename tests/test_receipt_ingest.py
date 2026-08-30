@@ -13,10 +13,14 @@ in the gitignored ``mail_samples/``).
 
 from __future__ import annotations
 
+import email
+import email.policy
+import hashlib
 import mailbox
 from dataclasses import fields
 from datetime import date
 from email.message import EmailMessage
+from email.mime.message import MIMEMessage
 from pathlib import Path
 
 import pytest
@@ -176,6 +180,73 @@ def test_receipt_urls_collected_and_deduped() -> None:
         "https://example.com/ugd/receipt-a.pdf",
         "https://example.com/ugd/receipt-b.pdf",
     )
+    assert sub.source_receipt_urls_v1 == sub.receipt_urls
+
+
+def test_submission_existing_constructor_fields_remain_compatible() -> None:
+    parsed = receipt_ingest.parse_submission(_reimbursement_email())
+    assert parsed is not None
+    existing_values = {
+        item.name: getattr(parsed, item.name)
+        for item in fields(receipt_ingest.Submission)
+        if item.name != "source_receipt_urls_v1"
+    }
+
+    reconstructed = receipt_ingest.Submission(**existing_values)
+
+    assert reconstructed.source_receipt_urls_v1 == ()
+
+
+def _email_with_upload_labels(*labels: str) -> EmailMessage:
+    msg = EmailMessage()
+    msg["Subject"] = "Example Reimbursement Form got a new submission"
+    msg["From"] = "forms@example.invalid"
+    msg["Date"] = "Sun, 01 Sep 2030 09:00:00 -0700"
+    msg["Message-ID"] = "<upload-labels@example.invalid>"
+    uploads = "\n".join(
+        f"{label}:\nhttps://files.example.invalid/{index}.bin"
+        for index, label in enumerate(labels, start=1)
+    )
+    msg.set_content(
+        f"""\
+1. Description:
+Synthetic purchase
+1. Amount:
+1.00
+Total Amount $:
+1.00
+{uploads}
+"""
+    )
+    return msg
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["PDF", "pdf 12", "Jpeg", "jPeG 2", "JPG", "jpg3", "JPEG", "JPEG 4", "PNG", "pNg 5"],
+)
+def test_exact_form_upload_labels_are_recognized(label: str) -> None:
+    sub = receipt_ingest.parse_submission(_email_with_upload_labels(label))
+    assert sub is not None
+    expected_url = "https://files.example.invalid/1.bin"
+    assert sub.receipt_urls == (expected_url,)
+    expected_v1 = (expected_url,) if label.casefold().startswith("pdf") else ()
+    assert sub.source_receipt_urls_v1 == expected_v1
+
+
+def test_signature_image_and_non_receipt_labels_are_excluded() -> None:
+    sub = receipt_ingest.parse_submission(
+        _email_with_upload_labels(
+            "Signature Image",
+            "GIF",
+            "JPEG Preview",
+            "PNG Upload",
+            "PDF Document",
+        )
+    )
+    assert sub is not None
+    assert sub.receipt_urls == ()
+    assert sub.source_receipt_urls_v1 == ()
 
 
 def test_total_reconciles_when_items_sum_to_total() -> None:
@@ -273,6 +344,348 @@ def test_attachments_are_listed() -> None:
     sub = receipt_ingest.parse_submission(msg)
     assert sub is not None
     assert sub.attachments == ("receipt-a.pdf",)
+
+
+# --- stable mail evidence --------------------------------------------------
+
+
+_JPEG_BYTES = b"\xff\xd8\xff\xe0synthetic-jpeg-payload\xff\xd9"
+
+
+def _mail_evidence_email() -> EmailMessage:
+    msg = EmailMessage()
+    msg["Subject"] = "Re: Synthetic reimbursement question"
+    msg["From"] = "Example Reviewer <REVIEWER@Example.Invalid>"
+    msg["To"] = "treasurer@example.invalid"
+    msg["Date"] = "Mon, 02 Sep 2030 10:15:00 -0700"
+    msg["Message-ID"] = "<Reply.Case@Example.Invalid>"
+    msg["In-Reply-To"] = "<Root.Case@Example.Invalid>"
+    msg["References"] = (
+        "<Ancestor@Example.Invalid> <Root.Case@EXAMPLE.INVALID> <Root.Case@example.invalid>"
+    )
+    msg.set_content(
+        "Approved for the synthetic amount.\n"
+        "Please use the attached image.\n\n"
+        "On Sun, Sep 1, 2030 at 9:00 AM Example Sender wrote:\n"
+        "> Prior private thread content.\n"
+    )
+    msg.add_attachment(
+        _JPEG_BYTES,
+        maintype="image",
+        subtype="jpeg",
+        filename="synthetic-receipt.JPG",
+    )
+    return msg
+
+
+def test_normalize_message_id_is_strict_and_stable() -> None:
+    assert receipt_ingest.normalize_message_id("  <Left.Case@EXAMPLE.Invalid>  ") == (
+        "<Left.Case@example.invalid>"
+    )
+    assert receipt_ingest.normalize_message_id("Left.Case@example.invalid") == ""
+    assert receipt_ingest.normalize_message_id("<one@example.invalid> extra") == ""
+    assert receipt_ingest.normalize_message_id("<one@example.invalid> <two@example.invalid>") == ""
+    assert receipt_ingest.normalize_message_id("<folded@exam\r\n ple.invalid>") == ""
+
+
+@pytest.mark.parametrize(
+    "message_id",
+    [
+        "<comma,value@example.invalid>",
+        "<comment(value)@example.invalid>",
+        "<nönascii@example.invalid>",
+        "<leading.dot.@example.invalid>",
+        "<valid@example..invalid>",
+    ],
+)
+def test_normalize_message_id_rejects_non_dot_atom_syntax(message_id: str) -> None:
+    assert receipt_ingest.normalize_message_id(message_id) == ""
+
+
+def test_parse_mail_evidence_captures_ancestry_authored_text_and_decoded_jpeg() -> None:
+    msg = _mail_evidence_email()
+    evidence = receipt_ingest.parse_mail_evidence(msg)
+
+    assert evidence.message_id == "<Reply.Case@example.invalid>"
+    assert (
+        evidence.message_key
+        == "mail:v1:" + hashlib.sha256(evidence.message_id.encode("utf-8")).hexdigest()
+    )
+    assert evidence.in_reply_to == ("<Root.Case@example.invalid>",)
+    assert evidence.references == (
+        "<Ancestor@example.invalid>",
+        "<Root.Case@example.invalid>",
+    )
+    assert evidence.date == "Mon, 02 Sep 2030 10:15:00 -0700"
+    assert evidence.sender_address == "reviewer@example.invalid"
+    assert evidence.top_authored_text == (
+        "Approved for the synthetic amount.\nPlease use the attached image."
+    )
+    assert (
+        evidence.top_authored_sha256
+        == hashlib.sha256(evidence.top_authored_text.encode("utf-8")).hexdigest()
+    )
+    assert evidence.attachments == (
+        receipt_ingest.AttachmentEvidence(
+            mime_type="image/jpeg",
+            filename="synthetic-receipt.JPG",
+            decoded_size=len(_JPEG_BYTES),
+            content_sha256=hashlib.sha256(_JPEG_BYTES).hexdigest(),
+        ),
+    )
+    assert len(evidence.evidence_sha256) == 64
+    assert receipt_ingest.parse_mail_evidence(msg) == evidence
+
+    # Reprs are safe for incidental diagnostics and omit mailbox content/identifiers/filenames.
+    assert "reviewer@example.invalid" not in repr(evidence)
+    assert "Approved for" not in repr(evidence)
+    assert "synthetic-receipt.JPG" not in repr(evidence.attachments[0])
+
+
+@pytest.mark.parametrize(
+    "quoted_html",
+    [
+        "<blockquote><p>Prior private thread content.</p></blockquote>",
+        '<div class="gmail_quote"><p>Prior private thread content.</p></div>',
+    ],
+)
+def test_parse_mail_evidence_strips_structural_html_quotes(quoted_html: str) -> None:
+    msg = EmailMessage()
+    msg["From"] = "reviewer@example.invalid"
+    msg["Date"] = "Mon, 02 Sep 2030 10:15:00 -0700"
+    msg["Message-ID"] = "<html-reply@example.invalid>"
+    msg.set_content("Plain fallback")
+    msg.add_alternative(
+        f"<html><body><p>HTML-authored answer.</p>{quoted_html}</body></html>",
+        subtype="html",
+    )
+
+    evidence = receipt_ingest.parse_mail_evidence(msg)
+
+    assert evidence.top_authored_text == "HTML-authored answer."
+
+
+def test_missing_message_id_uses_deterministic_privacy_safe_fallback_key() -> None:
+    msg = _mail_evidence_email()
+    del msg["Message-ID"]
+
+    first = receipt_ingest.parse_mail_evidence(msg)
+    second = receipt_ingest.parse_mail_evidence(msg)
+
+    assert first.message_id == ""
+    assert first.message_key.startswith("mail:v1:")
+    assert len(first.message_key) == len("mail:v1:") + 64
+    assert first.message_key == second.message_key
+    assert "reviewer" not in first.message_key
+
+
+def test_missing_message_id_fallback_includes_rfc_ancestry() -> None:
+    first_msg = _mail_evidence_email()
+    second_msg = _mail_evidence_email()
+    del first_msg["Message-ID"]
+    del second_msg["Message-ID"]
+    del second_msg["References"]
+    second_msg["References"] = "<Different.Root@example.invalid>"
+
+    first = receipt_ingest.parse_mail_evidence(first_msg)
+    second = receipt_ingest.parse_mail_evidence(second_msg)
+
+    assert first.top_authored_sha256 == second.top_authored_sha256
+    assert first.message_key != second.message_key
+
+
+def test_inline_forwarded_message_is_not_top_authored_text() -> None:
+    forwarded = EmailMessage()
+    forwarded["From"] = "forwarded@example.invalid"
+    forwarded.set_content("Private forwarded reimbursement approval text.")
+    outer = EmailMessage()
+    outer["From"] = "reviewer@example.invalid"
+    outer["Date"] = "Mon, 02 Sep 2030 10:15:00 -0700"
+    outer["Message-ID"] = "<inline-forward@example.invalid>"
+    outer.set_content("Top-authored synthetic response.")
+    outer.make_mixed()
+    outer.attach(MIMEMessage(forwarded))
+
+    evidence = receipt_ingest.parse_mail_evidence(outer)
+
+    assert evidence.top_authored_text == "Top-authored synthetic response."
+    assert "forwarded reimbursement" not in evidence.top_authored_text
+
+
+def test_malformed_base64_attachment_fails_closed() -> None:
+    msg = EmailMessage()
+    msg["From"] = "reviewer@example.invalid"
+    msg["Date"] = "Mon, 02 Sep 2030 10:15:00 -0700"
+    msg["Message-ID"] = "<bad-base64@example.invalid>"
+    msg.set_content("Synthetic receipt attached.")
+    msg.make_mixed()
+    attachment = EmailMessage()
+    attachment["Content-Type"] = "image/jpeg"
+    attachment["Content-Disposition"] = 'attachment; filename="synthetic.jpg"'
+    attachment["Content-Transfer-Encoding"] = "base64"
+    attachment.set_payload("%%%not-valid-base64%%")
+    msg.attach(attachment)
+
+    with pytest.raises(ValueError, match="base64 MIME payload is malformed"):
+        receipt_ingest.parse_mail_evidence(msg)
+
+
+@pytest.mark.parametrize("invalid_byte", [b"\xff", b"\xfe"])
+def test_invalid_text_charset_bytes_fail_closed_without_digest_collision(
+    invalid_byte: bytes,
+) -> None:
+    raw = (
+        b"From: reviewer@example.invalid\r\n"
+        b"Date: Mon, 02 Sep 2030 10:15:00 -0700\r\n"
+        b"Message-ID: <invalid-text@example.invalid>\r\n"
+        b"Content-Type: text/plain; charset=utf-8\r\n"
+        b"Content-Transfer-Encoding: 8bit\r\n\r\n"
+        b"Synthetic response " + invalid_byte + b".\r\n"
+    )
+    message = email.message_from_bytes(raw, policy=email.policy.default)
+
+    with pytest.raises(ValueError, match="declared charset"):
+        receipt_ingest.parse_mail_evidence(message)
+
+
+@pytest.mark.parametrize(
+    ("transfer_encoding", "payload", "message"),
+    [
+        ("x-private-transform", "opaque-wire-text", "unsupported transfer encoding"),
+        ("quoted-printable", "=ZZ-not-hex", "quoted-printable MIME payload is malformed"),
+    ],
+)
+def test_unsupported_or_malformed_attachment_encoding_fails_closed(
+    transfer_encoding: str, payload: str, message: str
+) -> None:
+    msg = EmailMessage()
+    msg["From"] = "reviewer@example.invalid"
+    msg["Date"] = "Mon, 02 Sep 2030 10:15:00 -0700"
+    msg["Message-ID"] = "<bad-transfer-encoding@example.invalid>"
+    msg.set_content("Synthetic receipt attached.")
+    msg.make_mixed()
+    attachment = EmailMessage()
+    attachment["Content-Type"] = "image/jpeg"
+    attachment["Content-Disposition"] = 'attachment; filename="synthetic.jpg"'
+    attachment["Content-Transfer-Encoding"] = transfer_encoding
+    attachment.set_payload(payload)
+    msg.attach(attachment)
+
+    with pytest.raises(ValueError, match=message):
+        receipt_ingest.parse_mail_evidence(msg)
+
+
+@pytest.mark.parametrize(
+    ("transfer_headers", "message"),
+    [
+        (["x-private-transform"], "unsupported transfer encoding"),
+        (["7bit", "base64"], "ambiguous transfer encoding"),
+        (["base64"], "message attachment uses an unsupported transfer encoding"),
+    ],
+)
+@pytest.mark.parametrize("disposition", [None, "inline", "attachment"])
+def test_message_attachment_encoding_is_validated_before_nested_payload(
+    transfer_headers: list[str], message: str, disposition: str | None
+) -> None:
+    forwarded = EmailMessage()
+    forwarded["From"] = "forwarded@example.invalid"
+    forwarded.set_content("Synthetic forwarded content.")
+    attachment = MIMEMessage(forwarded)
+    if disposition is not None:
+        attachment["Content-Disposition"] = (
+            'attachment; filename="forwarded.eml"' if disposition == "attachment" else disposition
+        )
+    for transfer_header in transfer_headers:
+        attachment["Content-Transfer-Encoding"] = transfer_header
+    outer = EmailMessage()
+    outer["From"] = "reviewer@example.invalid"
+    outer["Date"] = "Mon, 02 Sep 2030 10:15:00 -0700"
+    outer["Message-ID"] = "<bad-message-encoding@example.invalid>"
+    outer.set_content("Top-authored synthetic response.")
+    outer.make_mixed()
+    outer.attach(attachment)
+
+    with pytest.raises(ValueError, match=message):
+        receipt_ingest.parse_mail_evidence(outer)
+
+
+def test_identity_encoded_message_attachment_fails_closed_without_canonicalized_hash() -> None:
+    forwarded = EmailMessage()
+    forwarded["From"] = "forwarded@example.invalid"
+    forwarded.set_content("Synthetic forwarded content.")
+    attachment = MIMEMessage(forwarded)
+    attachment["Content-Disposition"] = 'attachment; filename="forwarded.eml"'
+    outer = EmailMessage()
+    outer["From"] = "reviewer@example.invalid"
+    outer["Date"] = "Mon, 02 Sep 2030 10:15:00 -0700"
+    outer["Message-ID"] = "<message-attachment@example.invalid>"
+    outer.set_content("Top-authored synthetic response.")
+    outer.make_mixed()
+    outer.attach(attachment)
+
+    with pytest.raises(ValueError, match="cannot provide byte-exact evidence"):
+        receipt_ingest.parse_mail_evidence(outer)
+
+
+@pytest.mark.parametrize(
+    ("transfer_headers", "message"),
+    [
+        (["x-private-transform"], "unsupported transfer encoding"),
+        (["7bit", "base64"], "ambiguous transfer encoding"),
+        (["base64"], "multipart MIME payload uses an unsupported transfer encoding"),
+    ],
+)
+def test_multipart_container_encoding_fails_closed_before_recursive_parse(
+    transfer_headers: list[str], message: str
+) -> None:
+    alternative = EmailMessage()
+    alternative.set_content("Synthetic plain response.")
+    alternative.add_alternative("<p>Synthetic HTML response.</p>", subtype="html")
+    for index, transfer_header in enumerate(transfer_headers):
+        if index == 0:
+            alternative["Content-Transfer-Encoding"] = transfer_header
+        else:
+            alternative._headers.append(("Content-Transfer-Encoding", transfer_header))
+    outer = EmailMessage()
+    outer["From"] = "reviewer@example.invalid"
+    outer["Date"] = "Mon, 02 Sep 2030 10:15:00 -0700"
+    outer["Message-ID"] = "<bad-multipart-encoding@example.invalid>"
+    outer.make_mixed()
+    outer.attach(alternative)
+    reparsed = email.message_from_bytes(outer.as_bytes(), policy=email.policy.default)
+
+    with pytest.raises(ValueError, match=message):
+        receipt_ingest.parse_mail_evidence(reparsed)
+
+
+def test_v1_pdf_url_extraction_keeps_legacy_blank_pdf_fallback() -> None:
+    msg = EmailMessage()
+    msg["Subject"] = "Example Reimbursement Form got a new submission"
+    msg["Date"] = "Mon, 02 Sep 2030 10:15:00 -0700"
+    msg["Message-ID"] = "<v1-pdf-fallback@example.invalid>"
+    msg.set_content(
+        """\
+Requestor First and Last Name:
+Morgan Example
+1. Event or Budget Category:
+Supplies
+1. Description:
+Synthetic supplies
+1. Amount:
+10.00
+Total Amount $:
+10.00
+PDF:
+JPEG: https://receipts.example.invalid/synthetic.jpg
+"""
+    )
+
+    submission = receipt_ingest.parse_submission(msg)
+
+    assert submission is not None
+    expected = ("https://receipts.example.invalid/synthetic.jpg",)
+    assert submission.receipt_urls == expected
+    assert submission.source_receipt_urls_v1 == expected
 
 
 # --- reply / forward detection (thread-duplicate guard) --------------------

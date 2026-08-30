@@ -34,11 +34,30 @@ In scope:
 
 Out of scope:
 
-- Sending email, authorizing payments, or making policy decisions automatically.
+- Sending email, initiating payment, or making unscoped policy decisions automatically.
 - A third Google Sheet tab.
 - Hidden or unattended Sheet writes.
 - Gmail credentials in CI or scheduled mailbox ingestion.
 - Automatic model calls. Any future semantic suggestion layer must be optional and operator-gated.
+
+### 2026-08-30 supplemental-evidence amendment
+
+Schema v2 adds an append-only supplemental mail lane without weakening the immutable original-form
+lane. It stores normalized RFC ancestry, top-authored text digests, decoded attachment metadata and
+content hashes, normalized event timestamps, canonical evidence/event record digests, linked
+lifecycle events, and a visible unmatched queue. The configured received cutoff scopes both source
+submissions and supplemental mail. Linkage is exact RFC
+ancestry or a strict private operator anchor only. Existing schema-v1 reviews and original evidence
+hashes migrate unchanged; disappearance or mutation of accounted supplemental evidence fails
+closed.
+
+New submissions receive deterministic, non-authoritative A/C advice from metadata rather than a
+generic Q placeholder, but their recorded decision remains UNREVIEWED. Explicit private operator
+reviews may update every item on one exact ticket. A configured payment operator's exact linked
+confirmation may settle only that ticket, and a configured secondary approver's short top-authored
+reply may authorize only a fully parsed, explicitly anchored proposal. Payment remains a separate
+event; ambiguous proposals, spoofed senders, quoted approvals, and unrelated affirmatives do not
+mutate decisions.
 
 ## 4. Impact Analysis
 

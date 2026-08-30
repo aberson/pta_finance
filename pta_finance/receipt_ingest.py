@@ -27,29 +27,38 @@ than guessing; downstream mapping is where a blank amount / total mismatch becom
 
 from __future__ import annotations
 
+import base64
+import binascii
 import email
 import email.policy
+import hashlib
+import json
 import mailbox
+import quopri
 import re
 from collections import Counter
-from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Iterator
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, DecimalException
 from email.message import Message
-from email.utils import parsedate_to_datetime
+from email.utils import getaddresses, parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 
 from pta_finance import ids, models
 
 __all__ = [
+    "AttachmentEvidence",
     "LineItem",
+    "MailEvidence",
     "Submission",
     "html_to_text",
     "body_candidates",
     "message_text",
     "attachment_names",
+    "normalize_message_id",
+    "parse_mail_evidence",
     "looks_like_reimbursement",
     "is_reply_or_forward",
     "form_type",
@@ -87,6 +96,42 @@ class LineItem:
 
 
 @dataclass(frozen=True)
+class AttachmentEvidence:
+    """Stable evidence for one decoded MIME attachment.
+
+    ``filename`` is private source material and is therefore omitted from the dataclass repr.
+    The digest is always over the decoded payload bytes, never over base64/quoted-printable wire
+    text.
+    """
+
+    mime_type: str
+    filename: str = field(repr=False)
+    decoded_size: int
+    content_sha256: str
+
+
+@dataclass(frozen=True)
+class MailEvidence:
+    """Normalized, immutable evidence for one email without implicit terminal output.
+
+    Fields carrying mailbox content or identifiers are omitted from the dataclass repr so an
+    accidental log statement cannot expose them. ``message_key`` is privacy-safe: it contains
+    only a version marker and SHA-256 digest.
+    """
+
+    message_key: str
+    message_id: str = field(repr=False)
+    in_reply_to: tuple[str, ...] = field(repr=False)
+    references: tuple[str, ...] = field(repr=False)
+    date: str = field(repr=False)
+    sender_address: str = field(repr=False)
+    top_authored_text: str = field(repr=False)
+    top_authored_sha256: str
+    attachments: tuple[AttachmentEvidence, ...] = field(repr=False)
+    evidence_sha256: str
+
+
+@dataclass(frozen=True)
 class Submission:
     """A parsed reimbursement-form email. All values are RAW strings/tuples (no typing yet)."""
 
@@ -103,6 +148,9 @@ class Submission:
     receipt_urls: tuple[str, ...]
     attachments: tuple[str, ...]
     notes: str
+    # Compatibility surface for the reimbursement bundle's v1 source-evidence digest. Keep this
+    # at the end with a default so every existing Submission constructor remains valid.
+    source_receipt_urls_v1: tuple[str, ...] = ()
 
 
 # --- HTML -> text ----------------------------------------------------------
@@ -114,45 +162,61 @@ _BLOCK_TAGS = frozenset(
     {"p", "div", "br", "tr", "td", "th", "li", "table", "h1", "h2", "h3", "h4", "h5", "h6"}
 )
 _SKIP_CONTENT_TAGS = frozenset({"style", "script", "head"})
+_QUOTED_CONTAINER_CLASSES = frozenset(
+    {"gmail_quote", "moz-cite-prefix", "protonmail_quote", "yahoo_quoted"}
+)
+_QUOTED_CONTAINER_IDS = frozenset({"divrplyfwdmsg"})
+
+
+def _is_quoted_container(tag: str, attrs: list[tuple[str, str | None]]) -> bool:
+    if tag.casefold() == "blockquote":
+        return True
+    normalized = {key.casefold(): (value or "") for key, value in attrs}
+    classes = {item.casefold() for item in normalized.get("class", "").split()}
+    return bool(classes & _QUOTED_CONTAINER_CLASSES) or (
+        normalized.get("id", "").casefold() in _QUOTED_CONTAINER_IDS
+    )
 
 
 class _TextExtractor(HTMLParser):
     """Collect visible text from HTML, inserting newlines at block boundaries (stdlib only)."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, stop_at_quoted_history: bool = False) -> None:
         super().__init__(convert_charrefs=True)
         self._chunks: list[str] = []
         self._skip_depth = 0
+        self._stop_at_quoted_history = stop_at_quoted_history
+        self._stopped = False
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if self._stopped:
+            return
+        if self._stop_at_quoted_history and _is_quoted_container(tag, attrs):
+            self._chunks.append("\n")
+            self._stopped = True
+            return
         if tag in _SKIP_CONTENT_TAGS:
             self._skip_depth += 1
         if tag in _BLOCK_TAGS:
             self._chunks.append("\n")
 
     def handle_endtag(self, tag: str) -> None:
+        if self._stopped:
+            return
         if tag in _SKIP_CONTENT_TAGS and self._skip_depth > 0:
             self._skip_depth -= 1
         if tag in _BLOCK_TAGS:
             self._chunks.append("\n")
 
     def handle_data(self, data: str) -> None:
-        if self._skip_depth == 0:
+        if not self._stopped and self._skip_depth == 0:
             self._chunks.append(data)
 
     def text(self) -> str:
         return "".join(self._chunks)
 
 
-def html_to_text(html: str) -> str:
-    """Render HTML to newline-separated visible text (stdlib ``html.parser``; no deps).
-
-    Block tags become line breaks so a ``"Label:"`` element and its value element land on
-    separate lines. Runs of blank lines collapse; each line is stripped.
-    """
-    extractor = _TextExtractor()
-    extractor.feed(html)
-    raw = extractor.text()
+def _normalize_rendered_text(raw: str) -> str:
     lines = [line.strip() for line in raw.splitlines()]
     # Collapse consecutive blanks to a single blank; drop leading/trailing blanks.
     out: list[str] = []
@@ -165,19 +229,139 @@ def html_to_text(html: str) -> str:
     return "\n".join(out)
 
 
+def html_to_text(html: str) -> str:
+    """Render HTML to newline-separated visible text (stdlib ``html.parser``; no deps).
+
+    Block tags become line breaks so a ``"Label:"`` element and its value element land on
+    separate lines. Runs of blank lines collapse; each line is stripped.
+    """
+    extractor = _TextExtractor()
+    extractor.feed(html)
+    return _normalize_rendered_text(extractor.text())
+
+
+def _top_authored_html_to_text(html: str) -> str:
+    extractor = _TextExtractor(stop_at_quoted_history=True)
+    extractor.feed(html)
+    return _normalize_rendered_text(extractor.text())
+
+
 # --- Email body extraction -------------------------------------------------
 
 
-def _decode_part(part: Message) -> str:
-    """Decode one MIME part to text using its declared charset (utf-8 fallback)."""
+def _validated_transfer_encoding(part: Message) -> str:
+    """Return one supported CTE, including the stricter message/* identity-only rule."""
+
+    transfer_headers = part.get_all("Content-Transfer-Encoding", [])
+    if len(transfer_headers) > 1:
+        raise ValueError("MIME payload has ambiguous transfer encoding")
+    transfer_encoding = str(transfer_headers[0]).strip().casefold() if transfer_headers else ""
+    allowed_encodings = {"", "7bit", "8bit", "binary", "base64", "quoted-printable"}
+    if transfer_encoding not in allowed_encodings:
+        raise ValueError("MIME payload uses an unsupported transfer encoding")
+    if part.get_content_maintype() == "message":
+        # ``email`` eagerly parses message/rfc822 payloads into Message objects, so the
+        # original encoded octets are no longer available for a strict base64 or
+        # quoted-printable validation pass.  Accept only identity encodings here.
+        if transfer_encoding not in {"", "7bit", "8bit", "binary"}:
+            raise ValueError("message attachment uses an unsupported transfer encoding")
+    elif part.is_multipart() and transfer_encoding not in {"", "7bit", "8bit", "binary"}:
+        raise ValueError("multipart MIME payload uses an unsupported transfer encoding")
+    return transfer_encoding
+
+
+def _decoded_payload(part: Message) -> bytes:
+    """Decode one MIME payload, failing closed on unsupported or malformed wire encoding."""
+
+    transfer_encoding = _validated_transfer_encoding(part)
+    if part.get_content_maintype() == "message":
+        # The stdlib eagerly parses message/rfc822 and cannot recover the exact decoded wire
+        # octets afterward.  Canonical reserialization would hide byte-level mutations, so this
+        # evidence lane rejects attached messages rather than claiming a byte-exact digest.
+        raise ValueError("message attachments cannot provide byte-exact evidence")
+    if transfer_encoding in {"base64", "quoted-printable"}:
+        wire = part.get_payload(decode=False)
+        if isinstance(wire, str):
+            try:
+                encoded = wire.encode("ascii")
+            except UnicodeEncodeError as exc:
+                raise ValueError("encoded MIME payload is malformed") from exc
+        elif isinstance(wire, bytes):
+            encoded = wire
+        else:
+            raise ValueError("encoded MIME payload is malformed")
+        if transfer_encoding == "base64":
+            compact = b"".join(encoded.split())
+            try:
+                return base64.b64decode(compact, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError("base64 MIME payload is malformed") from exc
+        if re.search(rb"=(?![0-9A-Fa-f]{2}|\r?\n)", encoded):
+            raise ValueError("quoted-printable MIME payload is malformed")
+        return quopri.decodestring(encoded)
     payload = part.get_payload(decode=True)
     if not isinstance(payload, bytes):
-        return ""
+        raise ValueError("MIME payload could not be decoded")
+    if transfer_encoding in {"", "7bit"} and any(byte > 127 for byte in payload):
+        raise ValueError("7bit MIME payload contains non-ASCII bytes")
+    return payload
+
+
+def _decode_part(part: Message) -> str:
+    """Decode one MIME text part strictly using its declared charset (UTF-8 default)."""
+    payload = _decoded_payload(part)
     charset = part.get_content_charset() or "utf-8"
     try:
-        return payload.decode(charset, errors="replace")
-    except LookupError:
-        return payload.decode("utf-8", errors="replace")
+        return payload.decode(charset, errors="strict")
+    except LookupError as exc:
+        raise ValueError("text MIME payload declares an unsupported charset") from exc
+    except UnicodeDecodeError as exc:
+        raise ValueError("text MIME payload does not match its declared charset") from exc
+
+
+def _iter_body_parts(msg: Message) -> Iterator[Message]:
+    """Yield top-message body leaves without descending into attached/inline RFC messages."""
+
+    def visit(part: Message, *, root: bool = False) -> Iterator[Message]:
+        if not root and part.get_content_maintype() == "message":
+            _validated_transfer_encoding(part)
+            return
+        if not root and (part.get_content_disposition() or "") == "attachment":
+            return
+        if part.is_multipart():
+            _validated_transfer_encoding(part)
+            payload = part.get_payload()
+            if isinstance(payload, list):
+                for child in payload:
+                    if isinstance(child, Message):
+                        yield from visit(child)
+            return
+        yield part
+
+    yield from visit(msg, root=True)
+
+
+def _iter_attachment_parts(msg: Message) -> Iterator[Message]:
+    """Yield top-message attachments without recursively treating forwarded mail as authored."""
+
+    def visit(part: Message, *, root: bool = False) -> Iterator[Message]:
+        if not root and part.get_content_maintype() == "message":
+            _validated_transfer_encoding(part)
+            if (part.get_content_disposition() or "") == "attachment":
+                yield part
+            return
+        if not root and (part.get_content_disposition() or "") == "attachment":
+            yield part
+            return
+        if part.is_multipart():
+            _validated_transfer_encoding(part)
+            payload = part.get_payload()
+            if isinstance(payload, list):
+                for child in payload:
+                    if isinstance(child, Message):
+                        yield from visit(child)
+
+    yield from visit(msg, root=True)
 
 
 def body_candidates(msg: Message) -> list[str]:
@@ -190,11 +374,7 @@ def body_candidates(msg: Message) -> list[str]:
     """
     plain: list[str] = []
     html_parts: list[str] = []
-    for part in msg.walk():
-        if part.get_content_maintype() == "multipart":
-            continue
-        if (part.get_content_disposition() or "") == "attachment":
-            continue
+    for part in _iter_body_parts(msg):
         ctype = part.get_content_type()
         if ctype == "text/plain":
             plain.append(_decode_part(part))
@@ -230,6 +410,279 @@ def attachment_names(msg: Message) -> tuple[str, ...]:
     return tuple(names)
 
 
+# --- Stable mail evidence --------------------------------------------------
+
+
+_ID_ATOM = r"[A-Za-z0-9!#$%&'*+\-/=?^_`{|}~]+"
+_ID_LEFT = rf"{_ID_ATOM}(?:\.{_ID_ATOM})*"
+_DOMAIN_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+_ID_RIGHT = rf"{_DOMAIN_LABEL}(?:\.{_DOMAIN_LABEL})*"
+_MESSAGE_ID = re.compile(rf"\A<(?P<left>{_ID_LEFT})@(?P<right>{_ID_RIGHT})>\Z", re.ASCII)
+_MESSAGE_ID_TOKEN = re.compile(r"<[^<>]*>")
+_SENDER_ADDRESS = re.compile(r"\A[^@\s<>,;:]+@[^@\s<>,;:]+\Z")
+_QUOTED_LINE = re.compile(r"^\s*>")
+_ON_WROTE = re.compile(r"\Aon\s+.+\b(?:wrote|writes)\s*:\s*\Z", re.IGNORECASE)
+_QUOTED_SEPARATOR = re.compile(
+    r"\A\s*(?:(?:-{2,}\s*)?(?:original message|forwarded message)"
+    r"(?:\s*-{2,})?|begin forwarded message:)\s*\Z",
+    re.IGNORECASE,
+)
+_REPLY_HEADER = re.compile(r"^\s*(from|sent|date|to|cc|subject)\s*:", re.IGNORECASE)
+
+
+def _unfold_header(value: str) -> str:
+    """Collapse RFC header folding and outer whitespace to a stable single-line spelling."""
+    return " ".join(value.split())
+
+
+def _raw_header_values(msg: Message, name: str) -> tuple[str, ...]:
+    """All raw values for ``name`` without headerregistry's Message-ID truncation."""
+    wanted = name.casefold()
+    return tuple(str(value) for key, value in msg.raw_items() if key.casefold() == wanted)
+
+
+def normalize_message_id(value: str) -> str:
+    """Return one strict Message-ID in canonical angle-bracket form, else ``""``.
+
+    The input must contain exactly one ``<id-left@id-right>`` and no comments, extra IDs,
+    internal whitespace, or control characters. Message-ID left sides are case-sensitive and are
+    preserved; the domain-like right side is case-insensitive and normalized to lowercase.
+    """
+    clean = _unfold_header(value)
+    match = _MESSAGE_ID.fullmatch(clean)
+    if match is None:
+        return ""
+    left = match.group("left")
+    right = match.group("right")
+    if any(ord(char) < 33 or ord(char) == 127 for char in f"{left}@{right}"):
+        return ""
+    return f"<{left}@{right.lower()}>"
+
+
+def _normalized_message_id_list(values: tuple[str, ...], *, label: str) -> tuple[str, ...]:
+    """Normalize a whitespace-delimited Message-ID ancestry header, rejecting partial parses."""
+    raw = " ".join(_unfold_header(value) for value in values if _unfold_header(value))
+    if not raw:
+        return ()
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    end = 0
+    for match in _MESSAGE_ID_TOKEN.finditer(raw):
+        if raw[end : match.start()].strip():
+            raise ValueError(f"{label} header is malformed")
+        message_id = normalize_message_id(match.group(0))
+        if not message_id:
+            raise ValueError(f"{label} header is malformed")
+        if message_id not in seen:
+            seen.add(message_id)
+            normalized.append(message_id)
+        end = match.end()
+    if raw[end:].strip() or not normalized:
+        raise ValueError(f"{label} header is malformed")
+    return tuple(normalized)
+
+
+def _normalized_message_id(msg: Message) -> str:
+    values = _raw_header_values(msg, "Message-ID")
+    if not values:
+        return ""
+    if len(values) != 1:
+        raise ValueError("Message-ID header is ambiguous")
+    raw = _unfold_header(values[0])
+    if not raw:
+        return ""
+    normalized = normalize_message_id(raw)
+    if not normalized:
+        raise ValueError("Message-ID header is malformed")
+    return normalized
+
+
+def _single_header(msg: Message, name: str) -> str:
+    values = _raw_header_values(msg, name)
+    if not values:
+        return ""
+    if len(values) != 1:
+        raise ValueError(f"{name} header is ambiguous")
+    return _unfold_header(values[0])
+
+
+def _sender_address(msg: Message) -> str:
+    """One normalized addr-spec for fail-closed runtime authorization, or ``""``."""
+    values = _raw_header_values(msg, "From")
+    if len(values) != 1:
+        return ""
+    parsed = getaddresses([_unfold_header(values[0])])
+    if len(parsed) != 1:
+        return ""
+    address = parsed[0][1].strip()
+    if _SENDER_ADDRESS.fullmatch(address) is None:
+        return ""
+    return address.casefold()
+
+
+def _starts_on_wrote(lines: list[str], index: int) -> bool:
+    """Recognize common one-to-three-line ``On ... wrote:`` quote introductions."""
+    if not lines[index].strip().casefold().startswith("on "):
+        return False
+    chunks: list[str] = []
+    for line in lines[index : index + 3]:
+        clean = line.strip()
+        if not clean:
+            break
+        chunks.append(clean)
+        if clean.casefold().endswith(("wrote:", "writes:")):
+            break
+    return _ON_WROTE.fullmatch(" ".join(chunks)) is not None
+
+
+def _starts_reply_header_block(lines: list[str], index: int) -> bool:
+    """Recognize an Outlook-style quoted ``From/Sent/To/Subject`` header block."""
+    first = _REPLY_HEADER.match(lines[index])
+    if first is None or first.group(1).casefold() != "from":
+        return False
+    labels: set[str] = set()
+    for line in lines[index : index + 8]:
+        match = _REPLY_HEADER.match(line)
+        if match is not None:
+            labels.add(match.group(1).casefold())
+    return "subject" in labels and "to" in labels and bool({"sent", "date"} & labels)
+
+
+def _top_authored_text(text: str) -> str:
+    """Normalize newlines and retain only the content before quoted message history."""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    authored: list[str] = []
+    for index, line in enumerate(lines):
+        clean = line.rstrip()
+        stripped = clean.strip()
+        if (
+            _QUOTED_LINE.match(clean)
+            or _QUOTED_SEPARATOR.fullmatch(stripped)
+            or (len(stripped) >= 5 and set(stripped) == {"_"})
+            or _starts_on_wrote(lines, index)
+            or _starts_reply_header_block(lines, index)
+        ):
+            break
+        authored.append(clean)
+    while authored and not authored[0].strip():
+        authored.pop(0)
+    while authored and not authored[-1].strip():
+        authored.pop()
+    return "\n".join(authored)
+
+
+def _message_top_authored_text(msg: Message) -> str:
+    """Top-authored body, using structural HTML quote containers before text markers."""
+    plain: list[str] = []
+    html_parts: list[str] = []
+    for part in _iter_body_parts(msg):
+        content_type = part.get_content_type()
+        if content_type == "text/plain":
+            plain.append(_decode_part(part))
+        elif content_type == "text/html":
+            html_parts.append(_decode_part(part))
+
+    joined_html = "\n".join(value for value in html_parts if value).strip()
+    if joined_html and html_to_text(joined_html).strip():
+        return _top_authored_text(_top_authored_html_to_text(joined_html))
+    joined_plain = "\n".join(value for value in plain if value).strip()
+    return _top_authored_text(joined_plain) if joined_plain else ""
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _sha256_json(value: object) -> str:
+    canonical = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return _sha256_text(canonical)
+
+
+def _attachment_evidence(msg: Message) -> tuple[AttachmentEvidence, ...]:
+    attachments: list[AttachmentEvidence] = []
+    for part in _iter_attachment_parts(msg):
+        decoded = _decoded_payload(part)
+        filename = part.get_filename()
+        attachments.append(
+            AttachmentEvidence(
+                mime_type=part.get_content_type().casefold(),
+                filename=str(filename).strip() if filename is not None else "",
+                decoded_size=len(decoded),
+                content_sha256=hashlib.sha256(decoded).hexdigest(),
+            )
+        )
+    return tuple(attachments)
+
+
+def _attachment_payload(attachment: AttachmentEvidence) -> dict[str, object]:
+    return {
+        "mime_type": attachment.mime_type,
+        "filename": attachment.filename,
+        "decoded_size": attachment.decoded_size,
+        "content_sha256": attachment.content_sha256,
+    }
+
+
+def parse_mail_evidence(msg: Message) -> MailEvidence:
+    """Build deterministic evidence for one parsed RFC-822 message.
+
+    Malformed/ambiguous identifier ancestry and undecodable attachments raise a generic
+    :class:`ValueError` that never repeats private header or body values. A missing Message-ID is
+    allowed and receives a deterministic fallback key derived from the other captured evidence.
+    This function performs no I/O and never prints source fields.
+    """
+    message_id = _normalized_message_id(msg)
+    in_reply_to = _normalized_message_id_list(
+        _raw_header_values(msg, "In-Reply-To"), label="In-Reply-To"
+    )
+    references = _normalized_message_id_list(
+        _raw_header_values(msg, "References"), label="References"
+    )
+    message_date = _single_header(msg, "Date")
+    sender_address = _sender_address(msg)
+    top_authored_text = _message_top_authored_text(msg)
+    top_authored_sha256 = _sha256_text(top_authored_text)
+    attachments = _attachment_evidence(msg)
+    attachment_payload = [_attachment_payload(item) for item in attachments]
+
+    if message_id:
+        message_key = f"mail:v1:{_sha256_text(message_id)}"
+    else:
+        fallback_payload = {
+            "date": message_date,
+            "sender_address": sender_address,
+            "top_authored_sha256": top_authored_sha256,
+            "in_reply_to": list(in_reply_to),
+            "references": list(references),
+            "attachments": attachment_payload,
+        }
+        message_key = f"mail:v1:{_sha256_json(fallback_payload)}"
+
+    evidence_payload = {
+        "message_key": message_key,
+        "message_id": message_id,
+        "in_reply_to": list(in_reply_to),
+        "references": list(references),
+        "date": message_date,
+        "sender_address": sender_address,
+        "top_authored_sha256": top_authored_sha256,
+        "attachments": attachment_payload,
+    }
+    return MailEvidence(
+        message_key=message_key,
+        message_id=message_id,
+        in_reply_to=in_reply_to,
+        references=references,
+        date=message_date,
+        sender_address=sender_address,
+        top_authored_text=top_authored_text,
+        top_authored_sha256=top_authored_sha256,
+        attachments=attachments,
+        evidence_sha256=_sha256_json(evidence_payload),
+    )
+
+
 # --- Label / value extraction ----------------------------------------------
 
 # Numbered line-item label, e.g. "1. Date:", "1.Amount:", "3. Amount :". Tolerates the
@@ -250,21 +703,38 @@ _TOP_LABELS: dict[str, re.Pattern[str]] = {
     "notes": re.compile(r"^\s*notes?\s*:", re.IGNORECASE),
 }
 
-# A "PDF:" / "PDF 1:" style label whose value is a receipt URL.
+# Exact form-upload labels whose values are receipt URLs. ``_PDF_LABEL`` remains the legacy-v1
+# subset used by ``Submission.source_receipt_urls_v1`` so widening the public receipt inventory
+# does not mutate already-reviewed source-evidence digests.
 _PDF_LABEL = re.compile(r"^\s*pdf\s*\d*\s*:", re.IGNORECASE)
+_RECEIPT_URL_LABEL = re.compile(r"^\s*(?:pdf|jpe?g|png)\s*\d*\s*:", re.IGNORECASE)
 
 # A bare URL line (fallback receipt-link capture).
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
 
 def _is_any_label(line: str) -> bool:
-    """True when a line is itself a known label (so it is never mistaken for a value)."""
+    """Frozen v1 label boundary used by all original form field extraction."""
     if _ITEM_LABEL.search(line) or _PDF_LABEL.search(line):
         return True
     return any(pattern.search(line) for pattern in _TOP_LABELS.values())
 
 
-def _value_for(lines: list[str], idx: int, match_end: int) -> str:
+def _is_receipt_value_label(line: str) -> bool:
+    """Expanded boundary used only while extracting the additive receipt URL inventory."""
+
+    if _ITEM_LABEL.search(line) or _RECEIPT_URL_LABEL.search(line):
+        return True
+    return any(pattern.search(line) for pattern in _TOP_LABELS.values())
+
+
+def _value_for(
+    lines: list[str],
+    idx: int,
+    match_end: int,
+    *,
+    label_check: Callable[[str], bool] = _is_any_label,
+) -> str:
     """Value for a label found on ``lines[idx]``: same-line tail, else next non-label line."""
     tail = lines[idx][match_end:].strip()
     if tail:
@@ -274,7 +744,7 @@ def _value_for(lines: list[str], idx: int, match_end: int) -> str:
         if not stripped:
             continue
         # A blank value: the next non-empty line is the following label, not this value.
-        return "" if _is_any_label(stripped) else stripped
+        return "" if label_check(stripped) else stripped
     return ""
 
 
@@ -314,13 +784,18 @@ def _extract_line_items(lines: list[str]) -> tuple[LineItem, ...]:
     return tuple(items)
 
 
-def _extract_receipt_urls(lines: list[str]) -> tuple[str, ...]:
-    """URLs following any ``PDF:`` label, plus any bare receipt-looking URL lines."""
+def _extract_receipt_urls(
+    lines: list[str],
+    *,
+    label_pattern: re.Pattern[str] = _RECEIPT_URL_LABEL,
+    label_check: Callable[[str], bool] = _is_receipt_value_label,
+) -> tuple[str, ...]:
+    """URLs following an exact recognized form-upload label, de-duplicated in source order."""
     urls: list[str] = []
     for idx, line in enumerate(lines):
-        label = _PDF_LABEL.search(line)
+        label = label_pattern.search(line)
         if label:
-            value = _value_for(lines, idx, label.end())
+            value = _value_for(lines, idx, label.end(), label_check=label_check)
             found = _URL_RE.search(value)
             if found:
                 urls.append(found.group(0))
@@ -414,6 +889,9 @@ def parse_submission(msg: Message, *, subject_filter: str | None = None) -> Subm
         receipt_urls=_extract_receipt_urls(lines),
         attachments=attachment_names(msg),
         notes=_extract_top(lines, _TOP_LABELS["notes"]),
+        source_receipt_urls_v1=_extract_receipt_urls(
+            lines, label_pattern=_PDF_LABEL, label_check=_is_any_label
+        ),
     )
 
 

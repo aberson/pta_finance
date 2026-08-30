@@ -231,6 +231,18 @@ def _write_bundle(path: Path, bundle: dict[str, object]) -> None:
     path.write_text(json.dumps(bundle, ensure_ascii=False), encoding="utf-8")
 
 
+def _seal_record(record: dict[str, object]) -> None:
+    record.pop("record_sha256", None)
+    record["record_sha256"] = hashlib.sha256(
+        json.dumps(
+            record,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def test_load_render_aggregates_emails_and_layout(tmp_path: Path) -> None:
     path = tmp_path / "bundle.json"
     _write_bundle(path, _bundle())
@@ -376,16 +388,20 @@ def test_strict_bundle_rejects_drift(tmp_path: Path, mutate: object, message: st
         reimbursement_report.load_bundle(path)
 
 
-def test_active_ticket_requires_one_draft_and_clarification_question(tmp_path: Path) -> None:
+def test_active_ticket_may_pause_draft_while_response_is_reviewed(tmp_path: Path) -> None:
     bundle = _bundle()
     ticket = bundle["tickets"][1]  # type: ignore[index]
     ticket["messages"] = []  # type: ignore[index]
     path = tmp_path / "missing-draft.json"
     _write_bundle(path, bundle)
-    with pytest.raises(
-        reimbursement_report.ReimbursementReportError,
-        match="ACTIVE tickets require exactly one draft",
-    ):
+    reimbursement_report.load_bundle(path)
+
+    ticket["messages"] = [  # type: ignore[index]
+        {"kind": "draft", "date": "", "mode": "generated", "body": ""},
+        {"kind": "draft", "date": "", "mode": "generated", "body": ""},
+    ]
+    _write_bundle(path, bundle)
+    with pytest.raises(reimbursement_report.ReimbursementReportError, match="at most one draft"):
         reimbursement_report.load_bundle(path)
 
     bundle = _bundle()
@@ -424,6 +440,263 @@ def test_legacy_forms_share_a_ref_but_keep_distinct_identity(tmp_path: Path) -> 
     assert "2026-07-01 form / reported 2026-07-02" in html
     assert 'id="p-004-form-a"' in html
     assert 'id="p-004-form-b"' in html
+
+
+def test_schema_v1_migration_preserves_reviews_and_source_hashes() -> None:
+    original = _bundle()
+    original_tickets = copy.deepcopy(original["tickets"])
+    original_provenance = copy.deepcopy(original["provenance"])
+
+    migrated = reimbursement_report.migrate_bundle(original)
+
+    assert migrated["schema_version"] == 2
+    assert migrated["tickets"] == original_tickets
+    assert migrated["provenance"] == original_provenance
+    assert migrated["supplemental"]["evidence"] == []
+    assert original["schema_version"] == 1
+    assert "supplemental" not in original
+
+
+def test_supplemental_events_and_unmatched_render_without_changing_totals(
+    tmp_path: Path,
+) -> None:
+    bundle = reimbursement_report.migrate_bundle(_bundle())
+    before_path = tmp_path / "before.json"
+    _write_bundle(before_path, _bundle())
+    before = reimbursement_report.load_bundle(before_path).summary
+    linked_digest = "4" * 64
+    unmatched_digest = "5" * 64
+    linked_message_id = "<linked@example.invalid>"
+    unmatched_message_id = "<unmatched@example.invalid>"
+    linked_key = "mail:v1:" + hashlib.sha256(linked_message_id.encode()).hexdigest()
+    unmatched_key = "mail:v1:" + hashlib.sha256(unmatched_message_id.encode()).hexdigest()
+    ticket_review_key = "submission:v1:" + "a" * 64
+    event_key = (
+        "event:v1:"
+        + hashlib.sha256(
+            f"{linked_key}\0{ticket_review_key}\0RECEIPT_RECEIVED".encode()
+        ).hexdigest()
+    )
+    bundle["supplemental"] = {
+        "anchors_sha256": "6" * 64,
+        "evidence": [
+            {
+                "evidence_key": linked_key,
+                "source_type": "MAIL",
+                "message_id": linked_message_id,
+                "in_reply_to": ["<outbound@example.invalid>"],
+                "references": ["<outbound@example.invalid>"],
+                "occurred_on": "2026-08-04",
+                "occurred_at": "2026-08-04T12:00:00+00:00",
+                "top_authored_sha256": "7" * 64,
+                "evidence_sha256": linked_digest,
+                "attachments": [
+                    {
+                        "mime_type": "image/jpeg",
+                        "filename": "fictional-receipt.jpg",
+                        "decoded_size": 123,
+                        "content_sha256": "8" * 64,
+                    }
+                ],
+            },
+            {
+                "evidence_key": unmatched_key,
+                "source_type": "MAIL",
+                "message_id": unmatched_message_id,
+                "in_reply_to": [],
+                "references": [],
+                "occurred_on": "2026-08-04",
+                "occurred_at": "2026-08-04T12:00:00+00:00",
+                "top_authored_sha256": "9" * 64,
+                "evidence_sha256": unmatched_digest,
+                "attachments": [],
+            },
+        ],
+        "events": [
+            {
+                "event_key": event_key,
+                "evidence_key": linked_key,
+                "ticket_review_key": ticket_review_key,
+                "kind": "RECEIPT_RECEIVED",
+                "occurred_on": "2026-08-04",
+                "occurred_at": "2026-08-04T12:00:00+00:00",
+                "evidence_sha256": linked_digest,
+                "summary": "One fictional supplemental receipt was received.",
+                "amount": "",
+                "reference": "",
+                "discrepancy": "",
+            }
+        ],
+        "unmatched": [{"evidence_key": unmatched_key, "reason": "NO_EXACT_LINK"}],
+    }
+    for evidence in bundle["supplemental"]["evidence"]:
+        evidence["record_sha256"] = hashlib.sha256(
+            json.dumps(
+                evidence,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    for event in bundle["supplemental"]["events"]:
+        event["record_sha256"] = hashlib.sha256(
+            json.dumps(
+                event,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+    bundle["supplemental"]["evidence"].sort(key=lambda item: item["evidence_key"])
+    path = tmp_path / "supplemental.json"
+    _write_bundle(path, bundle)
+
+    report = reimbursement_report.load_bundle(path)
+    html = reimbursement_report.render_html(report)
+
+    assert report.summary.known_total == before.known_total
+    assert report.summary.approved == before.approved
+    assert len(report.supplemental.events) == 1
+    assert len(report.supplemental.unmatched) == 1
+    assert "Supplemental event history" in html
+    assert "fictional-receipt.jpg" in html
+    assert "Unmatched supplemental evidence" in html
+    assert "Evidence-limited recommendation" in html
+    assert "schema-v2" in html
+
+    bad = copy.deepcopy(bundle)
+    bad["supplemental"]["events"][0]["evidence_sha256"] = "0" * 64  # type: ignore[index]
+    _write_bundle(path, bad)
+    with pytest.raises(reimbursement_report.ReimbursementReportError, match="stored event|digest"):
+        reimbursement_report.load_bundle(path)
+
+    tampered_event = copy.deepcopy(bundle)
+    tampered_event["supplemental"]["events"][0]["occurred_on"] = "2026-08-05"  # type: ignore[index]
+    _write_bundle(path, tampered_event)
+    with pytest.raises(reimbursement_report.ReimbursementReportError, match="stored event"):
+        reimbursement_report.load_bundle(path)
+
+    tampered_attachment = copy.deepcopy(bundle)
+    tampered_record = next(
+        item
+        for item in tampered_attachment["supplemental"]["evidence"]  # type: ignore[index]
+        if item["attachments"]
+    )
+    tampered_record["attachments"][0]["content_sha256"] = "f" * 64
+    _write_bundle(path, tampered_attachment)
+    with pytest.raises(reimbursement_report.ReimbursementReportError, match="stored evidence"):
+        reimbursement_report.load_bundle(path)
+
+
+def test_payment_event_amount_and_discrepancy_kind_are_strict(tmp_path: Path) -> None:
+    bundle = reimbursement_report.migrate_bundle(_bundle())
+    ticket = bundle["tickets"][0]
+    ticket["live"] = {
+        "workflow_state": "SETTLED",
+        "decision": "APPROVED",
+        "payment_status": "PAID",
+        "payment_date": "2026-08-04",
+        "confirmations": ["Reference EXAMPLE-100; amount $10.00"],
+    }
+    ticket["messages"] = []
+    ticket["archive_note"] = "Synthetic payment event test."
+    message_id = "<payment-report@example.invalid>"
+    evidence_key = "mail:v1:" + hashlib.sha256(message_id.encode()).hexdigest()
+    evidence_digest = "d" * 64
+    evidence: dict[str, object] = {
+        "evidence_key": evidence_key,
+        "source_type": "MAIL",
+        "message_id": message_id,
+        "in_reply_to": [],
+        "references": [],
+        "occurred_on": "2026-08-04",
+        "occurred_at": "2026-08-04T12:00:00+00:00",
+        "top_authored_sha256": "e" * 64,
+        "evidence_sha256": evidence_digest,
+        "attachments": [],
+    }
+    _seal_record(evidence)
+    ticket_key = str(ticket["review_key"])
+    event: dict[str, object] = {
+        "event_key": "event:v1:"
+        + hashlib.sha256(f"{evidence_key}\0{ticket_key}\0PAYMENT_RECORDED".encode()).hexdigest(),
+        "evidence_key": evidence_key,
+        "ticket_review_key": ticket_key,
+        "kind": "PAYMENT_RECORDED",
+        "occurred_on": "2026-08-04",
+        "occurred_at": "2026-08-04T12:00:00+00:00",
+        "evidence_sha256": evidence_digest,
+        "summary": "Synthetic configured-operator payment recorded.",
+        "amount": "10.00",
+        "reference": "EXAMPLE-100",
+        "discrepancy": "",
+    }
+    _seal_record(event)
+    bundle["supplemental"] = {
+        "anchors_sha256": "f" * 64,
+        "evidence": [evidence],
+        "events": [event],
+        "unmatched": [],
+    }
+    path = tmp_path / "payment.json"
+    _write_bundle(path, bundle)
+    reimbursement_report.load_bundle(path)
+
+    wrong_amount = copy.deepcopy(bundle)
+    wrong_event = wrong_amount["supplemental"]["events"][0]
+    wrong_event["amount"] = "1.00"
+    _seal_record(wrong_event)
+    _write_bundle(path, wrong_amount)
+    with pytest.raises(reimbursement_report.ReimbursementReportError, match="total to match"):
+        reimbursement_report.load_bundle(path)
+
+    wrong_parity = copy.deepcopy(bundle)
+    parity_event = wrong_parity["supplemental"]["events"][0]
+    parity_event["discrepancy"] = "Synthetic mismatch text."
+    _seal_record(parity_event)
+    _write_bundle(path, wrong_parity)
+    with pytest.raises(reimbursement_report.ReimbursementReportError, match="cannot carry"):
+        reimbursement_report.load_bundle(path)
+
+    equal_discrepancy = copy.deepcopy(bundle)
+    discrepancy_event = equal_discrepancy["supplemental"]["events"][0]
+    discrepancy_event["kind"] = "PAYMENT_DISCREPANCY"
+    discrepancy_event["event_key"] = (
+        "event:v1:"
+        + hashlib.sha256(f"{evidence_key}\0{ticket_key}\0PAYMENT_DISCREPANCY".encode()).hexdigest()
+    )
+    discrepancy_event["discrepancy"] = "Synthetic mismatch text."
+    _seal_record(discrepancy_event)
+    _write_bundle(path, equal_discrepancy)
+    with pytest.raises(reimbursement_report.ReimbursementReportError, match="must differ"):
+        reimbursement_report.load_bundle(path)
+
+
+def test_operator_review_evidence_rejects_mail_timestamp_metadata() -> None:
+    digest = "a" * 64
+    evidence: dict[str, object] = {
+        "evidence_key": f"operator-review:v1:{digest}",
+        "source_type": "OPERATOR_REVIEW",
+        "message_id": "",
+        "in_reply_to": [],
+        "references": [],
+        "occurred_on": "",
+        "occurred_at": "2026-08-04T12:00:00+00:00",
+        "top_authored_sha256": digest,
+        "evidence_sha256": digest,
+        "attachments": [],
+    }
+    _seal_record(evidence)
+
+    with pytest.raises(reimbursement_report.ReimbursementReportError, match="impersonate mail"):
+        reimbursement_report._parse_supplemental(
+            {
+                "anchors_sha256": "b" * 64,
+                "evidence": [evidence],
+                "events": [],
+                "unmatched": [],
+            }
+        )
 
 
 def test_incomplete_html_is_never_published(tmp_path: Path) -> None:
