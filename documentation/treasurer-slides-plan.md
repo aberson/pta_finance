@@ -839,7 +839,7 @@ them while preserving the project's manual-step sequence.
 - **Problem:** Convert rough request text and private finance sources into one strict, reviewable,
   provenance-bearing run without exposing a write-capable source client.
 - **Type:** code
-- **Issue:**
+- **Issue:** #27
 - **Flags:** `--reviewers deep --isolation worktree`
 - **Files:** `pta_finance/treasurer_deck/{__init__,models,intake,sources}.py`,
   `pta_finance/report_source.py`, `tests/test_treasurer_deck_{models,intake,sources}.py`
@@ -861,7 +861,7 @@ them while preserving the project's manual-step sequence.
 - **Problem:** Turn approved facts into a deterministic, dense but readable slide plan with terse
   main slides and appendix detail without any run-specific Google operation.
 - **Type:** code
-- **Issue:**
+- **Issue:** #28
 - **Flags:** `--reviewers code --isolation worktree`
 - **Files:** `pta_finance/treasurer_deck/{modules,theme,storyboard}.py`,
   `pta_finance/treasurer_deck/templates/{review,storyboard}.html.j2`,
@@ -881,7 +881,7 @@ them while preserving the project's manual-step sequence.
 - **Problem:** Give every current workbook graphic one stable semantic identity and validated input
   shape without relying on live chart IDs, source styling, or last-used selector state.
 - **Type:** code
-- **Issue:**
+- **Issue:** #29
 - **Flags:** `--reviewers deep --isolation worktree`
 - **Files:** `pta_finance/treasurer_deck/graphics_catalog.py`,
   `tests/test_treasurer_deck_graphics_catalog.py`
@@ -901,7 +901,7 @@ them while preserving the project's manual-step sequence.
 - **Problem:** Reproduce all 14 registered graphic semantics from approved immutable datasets through
   deterministic local renders and pure staging plans.
 - **Type:** code
-- **Issue:**
+- **Issue:** #30
 - **Flags:** `--reviewers deep --isolation worktree`
 - **Files:** `pta_finance/treasurer_deck/graphics.py`,
   `tests/test_treasurer_deck_graphics.py`, `tests/fixtures/treasurer_deck/graphics/`
@@ -921,7 +921,7 @@ them while preserving the project's manual-step sequence.
 - **Problem:** Prove local layout density, bounds, fonts, assets, and placeholders before code can
   construct a run-specific Google writer or create a candidate; one-time setup remains separate.
 - **Type:** code
-- **Issue:**
+- **Issue:** #31
 - **Flags:** `--reviewers code --isolation worktree`
 - **Files:** `pta_finance/treasurer_deck/qa.py`,
   `pta_finance/treasurer_deck/assets/fonts/*`, `pyproject.toml`, `uv.lock`,
@@ -943,7 +943,7 @@ them while preserving the project's manual-step sequence.
 - **Problem:** Establish narrow human-owned Google workspace access and private template/binding
   state before candidate rendering.
 - **Type:** code
-- **Issue:**
+- **Issue:** #32
 - **Flags:** `--reviewers deep --isolation worktree`
 - **Files:** `pta_finance/treasurer_deck/google_client.py`, `pta_finance/config.py`,
   `config.example.toml`, `tests/test_treasurer_deck_{auth,bootstrap}.py`
@@ -965,7 +965,7 @@ them while preserving the project's manual-step sequence.
 - **Problem:** Fill a copied template from a story-approved, locally QA-passing run while preserving
   the source/template and leaving no linked or temporary asset behind.
 - **Type:** code
-- **Issue:**
+- **Issue:** #33
 - **Flags:** `--reviewers deep --isolation worktree`
 - **Files:** `pta_finance/treasurer_deck/{google_client,asset_staging}.py`,
   `tests/test_treasurer_deck_candidate.py`
@@ -986,7 +986,7 @@ them while preserving the project's manual-step sequence.
 - **Problem:** Bind automated evidence and mandatory operator-visible Google rendering to one exact
   candidate, then copy only that approved content to a private final.
 - **Type:** code
-- **Issue:**
+- **Issue:** #34
 - **Flags:** `--reviewers deep --isolation worktree`
 - **Files:** `pta_finance/treasurer_deck/{qa,google_client}.py`,
   `tests/test_treasurer_deck_promotion.py`
@@ -1007,7 +1007,7 @@ them while preserving the project's manual-step sequence.
 - **Problem:** Expose the approved subcomponents through one reimbursement-style CLI/resume path
   without weakening immutable corrections, approvals, or privacy boundaries.
 - **Type:** code
-- **Issue:**
+- **Issue:** #35
 - **Flags:** `--reviewers deep --isolation worktree`
 - **Files:** `pta_finance/treasurer_deck/pipeline.py`, `pta_finance/cli.py`,
   `scripts/check_no_identity.py`, `tests/test_treasurer_deck_{cli,smoke}.py`
@@ -1028,7 +1028,7 @@ them while preserving the project's manual-step sequence.
 - **Problem:** Ship the complete workflow and runtime assets from an installable wheel, then document
   exactly how the operator invokes and maintains it.
 - **Type:** code
-- **Issue:**
+- **Issue:** #36
 - **Flags:** `--reviewers code --isolation worktree`
 - **Files:** `pyproject.toml`, `uv.lock`, `.github/workflows/ci.yml`,
   `pta_finance/treasurer_deck/{templates,assets}/**`, `docs/generating-treasurer-updates.md`,
@@ -1122,7 +1122,7 @@ creates a new immutable linked run and never edits or invalidates the predecesso
 - **Problem:** Configure real credentials, storage, template, and bindings before any live candidate
   acceptance run.
 - **Type:** operator
-- **Issue:**
+- **Issue:** #37
 - **Files:** no feature files; only status bookkeeping in this plan/issue plus gitignored private
   config/token/manifests and app-owned Google/Storage resources
 - **Produces:** no tracked feature artifact; only private config/token, workspace/binding manifests,
@@ -1143,7 +1143,7 @@ creates a new immutable linked run and never edits or invalidates the predecesso
 - **Problem:** Exercise one short real producer-to-consumer cycle before spending time on full parity
   review.
 - **Type:** operator
-- **Issue:**
+- **Issue:** #38
 - **Files:** no feature files; only status bookkeeping in this plan/issue plus gitignored request/run/QA
   artifacts and private Google resources
 - **Produces:** one private QA-passing smoke candidate and private evidence; no final deck. A failed
@@ -1163,7 +1163,7 @@ creates a new immutable linked run and never edits or invalidates the predecesso
 - **Problem:** Prove all capabilities, audience policy, negative authorization paths, and immutable
   final promotion against the real services.
 - **Type:** operator
-- **Issue:**
+- **Issue:** #39
 - **Files:** no feature files; only status bookkeeping in this plan/issue plus gitignored
   inputs/runs/galleries and private Google resources
 - **Produces:** private parity/public candidates, one accepted private final, and generic pass/fail
