@@ -32,12 +32,9 @@ from __future__ import annotations
 import calendar
 from collections.abc import Iterable, Mapping
 from datetime import date
-from typing import TYPE_CHECKING
+from typing import Protocol
 
 from pta_finance import ids, schema
-
-if TYPE_CHECKING:
-    from pta_finance.sheets import SheetsClient
 
 __all__ = [
     "BUDGET_TIMESERIES_TAB",
@@ -54,9 +51,26 @@ __all__ = [
     "MEASURE_PROPOSED",
     "MEASURE_ACTUAL",
     "TIMESERIES_COLUMNS",
+    "ValuesReader",
     "read_timeseries",
     "to_inputs",
 ]
+
+
+class ValuesReader(Protocol):
+    """The smallest read surface :func:`read_timeseries` needs from a client.
+
+    :class:`pta_finance.sheets.SheetsClient` satisfies this structurally (its
+    ``read_values`` has exactly this signature), so every existing report/analytics
+    caller keeps working unchanged. The Treasurer-deck path supplies a dedicated
+    read-only adapter instead, so reusing this parser never requires a client that
+    can write to a spreadsheet.
+    """
+
+    def read_values(self, tab: str) -> list[list[str]]:
+        """Return one worksheet's formatted grid, including its header row."""
+        ...
+
 
 # The single operator-maintained worksheet the toolkit now reports/analyzes from.
 BUDGET_TIMESERIES_TAB = "Budget Timeseries"
@@ -98,10 +112,10 @@ TIMESERIES_COLUMNS: tuple[str, ...] = (
 )
 
 
-def read_timeseries(client: SheetsClient) -> list[dict[str, str]]:
+def read_timeseries(client: ValuesReader) -> list[dict[str, str]]:
     """Read the "Budget Timeseries" tab into a list of header-keyed row dicts.
 
-    Reads the raw grid via :meth:`SheetsClient.read_values` (row 0 is the header), coerces
+    Reads the raw grid via :meth:`ValuesReader.read_values` (row 0 is the header), coerces
     every cell to ``str``, and returns one dict per data row keyed by the header. Rows that
     are entirely blank are skipped. The only Google I/O in this module.
     """
