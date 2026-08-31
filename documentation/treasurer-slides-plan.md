@@ -853,7 +853,7 @@ them while preserving the project's manual-step sequence.
   detection, and manifest-last commits; the source test double has no write method and every existing
   `read_timeseries` caller still passes
 - **Depends on:** none
-- **Status:** PENDING
+- **Status:** BLOCKED (2026-08-30)
 
 <!-- autofix-applied: 2026-08-30 -->
 ### Step 15: Add content modules, theme tokens, and the offline storyboard
