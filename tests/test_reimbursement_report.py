@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import html
 import json
 import re
 from decimal import Decimal
@@ -9,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from pta_finance import reimbursement_report
+from pta_finance import reimbursement_events, reimbursement_report
 
 
 def _item(
@@ -301,6 +302,24 @@ def test_load_render_aggregates_emails_and_layout(tmp_path: Path) -> None:
     assert reimbursement_report.render_html(report) == html
 
 
+def test_generated_zelle_email_round_trips_through_payment_parser(tmp_path: Path) -> None:
+    path = tmp_path / "bundle.json"
+    _write_bundle(path, _bundle())
+
+    rendered = reimbursement_report.render_html(reimbursement_report.load_bundle(path))
+    body_match = re.search(r'<pre class="mail-body">(.*?)</pre>', rendered, re.DOTALL)
+    assert body_match is not None
+    sent_body = html.unescape(body_match.group(1)).replace(
+        "[ZELLE CONFIRMATION]", "EXAMPLE-ZELLE-1000"
+    )
+
+    assert reimbursement_events.parse_payment_evidence(sent_body) == (
+        reimbursement_events.PaymentEvidence(
+            amount=Decimal("10.00"), reference="EXAMPLE-ZELLE-1000"
+        )
+    )
+
+
 def test_legacy_review_preserves_informational_and_unknown_amount_lines(
     tmp_path: Path,
 ) -> None:
@@ -560,7 +579,7 @@ def test_supplemental_events_and_unmatched_render_without_changing_totals(
     assert len(report.supplemental.unmatched) == 1
     assert "Supplemental event history" in html
     assert "fictional-receipt.jpg" in html
-    assert "Unmatched supplemental evidence" in html
+    assert "Unmatched or quarantined supplemental evidence" in html
     assert "Evidence-limited recommendation" in html
     assert "schema-v2" in html
 

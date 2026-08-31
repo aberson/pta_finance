@@ -375,16 +375,41 @@ decoded attachment hashes and normalized RFC timestamps. That requires deliberat
 never carries an approval forward by guessing. A late-arriving in-scope email is still detected
 because the bundle persists every accounted source key rather than relying on archive order.
 
-### Private supplemental anchors and operator reviews
+### Private supplemental anchors, payment links, and operator records
 
 By default, `update-reimbursements` looks for
 `reports/output/reimbursement-anchors.json` beside the private bundle. Use `--anchors PATH` to
 select another gitignored file. The file is optional, strict, digestible, and must never be
-committed. It can hold exact outbound-thread anchors, exact non-threaded direct links, configured
-payment/approval actors, and explicit item-complete operator reviews. An anchor alone cannot mark
-payment; payment requires a linked, affirmative, top-authored confirmation from a configured
-payment operator with one unambiguous amount and reference (or the strict Zelle confirmation-block
-shape). Negations, questions, attribution, cancellation language, and ambiguous values fail closed.
+committed. Schema v1 remains accepted with its original digest and behavior. Schema v2 adds two
+separate payment lanes without reusing ordinary direct links: exact `payment_links` for archived
+mail and explicit `operator_payments` for the exceptional case where no payment email exists.
+Under schema v2, ordinary thread anchors and direct links can still account for correspondence but
+cannot authorize payment; schema-v1 replay keeps its historical reducer behavior.
+
+A payment link names one normalized Message-ID and binds each selected ticket to the SHA-256 of its
+exact confirmation reference. The mail must be present, in scope, from a configured payment
+operator, and match one complete strict grammar. The generated-single grammar is the exact report
+sentence `Your $AMOUNT reimbursement has been approved and sent by Zelle.` immediately followed by
+`Zelle confirmation: REFERENCE`. The sent-message grammar accepts only the known one-, two-, or
+three-block Zelle wire layouts; each block has a payee label, `Zelle - ...`, optional `Classroom
+Supplies`, a bare reference, and a bare amount. Comma-formatted currency is accepted. An exact link
+with one binding may also use the existing strict singleton parser so a historical schema-v1
+payment event remains reproducible after a schema-v2 upgrade; links with multiple bindings never
+use that fallback. Binding order does not matter, but the parsed blocks and bindings must be a
+complete one-to-one set and every amount must equal its already-approved ticket total. A malformed,
+partial, duplicated, extra, wrong-sender, out-of-scope, or ancestry-conflicting group is quarantined
+atomically and changes no ticket. Payment links never propagate to replies.
+
+An operator payment requires `record_payment: true`, one exact ticket selector, an ISO date, exact
+two-decimal amount, raw confirmation reference, and a nonblank audit note. It is stored as distinct
+`OPERATOR_PAYMENT` evidence. It settles only a ticket that is already approved and whose total
+matches exactly; an amount discrepancy remains visible and unpaid. Removing or changing an
+accounted mail or operator record fails the existing append-only freshness check. A persisted
+operator-payment outcome also remains fixed if approval state or the report date later changes, so
+operators should add this record only after verifying that the approval and date guards already
+pass.
+
+Negations, questions, attribution, cancellation language, and ambiguous values fail closed.
 A secondary approval remains scoped to an exact
 proposal thread and does not record payment. If the confirmed amount differs from the ticket
 total, the discrepancy and reference remain visible but the ticket is not settled.
@@ -393,7 +418,7 @@ Public fake-shape example (replace every value only in your private file):
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "actors": {
     "payment_operators": ["payments@example.org"],
     "secondary_approvers": ["reviewer@example.org"]
@@ -433,6 +458,21 @@ Public fake-shape example (replace every value only in your private file):
       }
     }
   ],
+  "payment_links": [
+    {
+      "message_id": "<sent-payment@example.org>",
+      "bindings": [
+        {
+          "ticket": {
+            "review_key": "submission:v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "ref": "NEW-01",
+            "form_label": ""
+          },
+          "reference_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      ]
+    }
+  ],
   "operator_reviews": [
     {
       "ticket": {
@@ -462,9 +502,28 @@ Public fake-shape example (replace every value only in your private file):
       "email_questions": ["Which synthetic amount is intended for item 2?"],
       "email_context": ""
     }
+  ],
+  "operator_payments": [
+    {
+      "record_payment": true,
+      "ticket": {
+        "review_key": "submission:v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "ref": "NEW-02",
+        "form_label": ""
+      },
+      "date": "2030-09-09",
+      "amount": "8.25",
+      "reference": "EXAMPLE-OP-825",
+      "audit_note": "Synthetic payment confirmed outside the archived mailbox."
+    }
   ]
 }
 ```
+
+Compute each `reference_sha256` from the exact UTF-8 reference text as it appears in the archived
+mail. The digest is only a private binding key; the parsed raw reference is retained in the private
+payment event. Do not paste real references, ticket selectors, identities, or Message-IDs into a
+tracked file.
 
 Approval proposals use a deliberately small protocol: a line containing only the exact ticket
 reference, followed by `Approve...` or `Clarification...` action lines. The lines may cover every

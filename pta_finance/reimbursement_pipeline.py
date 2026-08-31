@@ -95,6 +95,7 @@ class EvidenceSnapshot:
     excluded_by_cutoff: int
     mail_excluded_by_cutoff: int
     mail_evidence: tuple[receipt_ingest.MailEvidence, ...]
+    out_of_scope_mail_keys: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -182,6 +183,7 @@ def build_evidence_snapshot(
     start_month: int,
     received_since: date | None,
     subject_filter: str | None = None,
+    payment_message_ids: Sequence[str] = (),
 ) -> EvidenceSnapshot:
     """Parse and map the complete local archive once, retaining report-grade item evidence.
 
@@ -203,6 +205,8 @@ def build_evidence_snapshot(
     mail_excluded = 0
     originals: list[receipt_ingest.Submission] = []
     mail_by_key: dict[str, receipt_ingest.MailEvidence] = {}
+    out_of_scope_mail_keys: set[str] = set()
+    exact_payment_ids = set(payment_message_ids)
     for _label, message in receipt_ingest.iter_source(source):
         scanned += 1
         raw_received = str(message.get("Date", ""))
@@ -210,7 +214,8 @@ def build_evidence_snapshot(
         mail_in_scope = received_since is None or (
             mail_received is not None and mail_received >= received_since
         )
-        if mail_in_scope:
+        raw_message_id = receipt_ingest.normalize_message_id(str(message.get("Message-ID", "")))
+        if mail_in_scope or raw_message_id in exact_payment_ids:
             try:
                 mail = receipt_ingest.parse_mail_evidence(message)
             except ValueError as exc:
@@ -221,7 +226,9 @@ def build_evidence_snapshot(
             if prior_mail is not None and prior_mail.evidence_sha256 != mail.evidence_sha256:
                 _fail("the mail archive contains conflicting evidence for one stable message key")
             mail_by_key[mail.message_key] = mail
-        else:
+            if not mail_in_scope:
+                out_of_scope_mail_keys.add(mail.message_key)
+        if not mail_in_scope:
             mail_excluded += 1
         submission = receipt_ingest.parse_submission(message, subject_filter=subject_filter)
         if submission is None:
@@ -381,6 +388,7 @@ def build_evidence_snapshot(
         excluded_by_cutoff=excluded,
         mail_excluded_by_cutoff=mail_excluded,
         mail_evidence=tuple(sorted(mail_by_key.values(), key=lambda mail: mail.message_key)),
+        out_of_scope_mail_keys=frozenset(out_of_scope_mail_keys),
     )
 
 
@@ -643,6 +651,26 @@ def _operator_evidence_record(review: reimbursement_events.OperatorReview) -> di
     return record
 
 
+def _operator_payment_evidence_record(
+    payment: reimbursement_events.OperatorPayment,
+) -> dict[str, Any]:
+    key = f"operator-payment:v1:{payment.evidence_sha256}"
+    record = {
+        "evidence_key": key,
+        "source_type": "OPERATOR_PAYMENT",
+        "message_id": "",
+        "in_reply_to": [],
+        "references": [],
+        "occurred_on": payment.date,
+        "occurred_at": "",
+        "top_authored_sha256": payment.evidence_sha256,
+        "evidence_sha256": payment.evidence_sha256,
+        "attachments": [],
+    }
+    record["record_sha256"] = _sha256_json(record)
+    return record
+
+
 def _event(
     *,
     evidence_key: str,
@@ -693,6 +721,21 @@ def _ticket_total(ticket: Mapping[str, Any]) -> Decimal:
         except InvalidOperation as exc:
             raise ReimbursementPipelineError("a linked ticket has invalid item evidence") from exc
     return total
+
+
+def _ticket_is_approved(ticket: Mapping[str, Any]) -> bool:
+    live = ticket.get("live")
+    review = ticket.get("review")
+    items = ticket.get("items")
+    return (
+        isinstance(live, Mapping)
+        and isinstance(review, Mapping)
+        and isinstance(items, list)
+        and bool(items)
+        and live.get("decision") == "APPROVED"
+        and review.get("status") == "A"
+        and all(isinstance(item, Mapping) and item.get("status") == "A" for item in items)
+    )
 
 
 def _rollup_raw_items(items: Sequence[Mapping[str, Any]]) -> str:
@@ -775,36 +818,31 @@ def _apply_payment(
     if not isinstance(confirmations, list):
         _fail("a linked ticket has invalid payment confirmations")
     confirmation = f"Reference {reference}; amount ${amount}"
-    if (
-        live.get("workflow_state") == "SETTLED"
-        and live.get("decision") == "APPROVED"
-        and live.get("payment_status") == "PAID"
-        and live.get("payment_date") == occurred_on
-        and confirmation in confirmations
-    ):
-        return
+    payment_why = "Payment was confirmed by a configured operator on the exact linked case."
     for item in items:
         if not isinstance(item, dict):
             _fail("a linked ticket has invalid item review")
         prior_why = str(item.get("why", "")).strip()
         item["status"] = "A"
-        payment_why = "Payment was confirmed by a configured operator on the exact linked case."
-        item["why"] = f"{prior_why} {payment_why}".strip()
+        item["why"] = (
+            prior_why if payment_why in prior_why else f"{prior_why} {payment_why}".strip()
+        )
     prior_note = str(review.get("note", "")).strip()
     prior_asks = review.get("asks")
-    prior_context = ""
+    evidence_note = "Payment evidence is recorded in the supplemental event history."
+    if evidence_note not in prior_note:
+        prior_note = f"{prior_note} {evidence_note}".strip()
     if isinstance(prior_asks, list) and prior_asks:
-        prior_context = " Prior clarification asks: " + " | ".join(str(item) for item in prior_asks)
+        prior_context = "Prior clarification asks: " + " | ".join(str(item) for item in prior_asks)
+        if prior_context not in prior_note:
+            prior_note = f"{prior_note} {prior_context}".strip()
     review.update(
         {
             "status": "A",
             "action": "No further action",
             "block": "Configured operator payment confirmation settled this exact ticket.",
             "asks": [],
-            "note": (
-                f"{prior_note} Payment evidence is recorded in the supplemental event history."
-                f"{prior_context}"
-            ).strip(),
+            "note": prior_note,
             "email_questions": [],
             "email_context": "",
         }
@@ -990,6 +1028,7 @@ def _build_supplemental_and_reduce(
     snapshot: EvidenceSnapshot,
     anchors: reimbursement_events.AnchorConfig,
     previous: Mapping[str, Any],
+    as_of: date,
 ) -> dict[str, Any]:
     """Link current mail evidence, reduce safe events, and enforce append-only freshness."""
 
@@ -1011,6 +1050,21 @@ def _build_supplemental_and_reduce(
     direct_by_id: dict[str, tuple[reimbursement_events.DirectLink, dict[str, Any]]] = {}
     for link in anchors.direct_links:
         direct_by_id[link.message_id] = (link, _resolve_selector(tickets, link.ticket))
+    payment_by_id: dict[
+        str,
+        tuple[
+            reimbursement_events.PaymentLink,
+            tuple[tuple[reimbursement_events.PaymentBinding, dict[str, Any]], ...],
+        ],
+    ] = {}
+    for payment_link in anchors.payment_links:
+        payment_by_id[payment_link.message_id] = (
+            payment_link,
+            tuple(
+                (binding, _resolve_selector(tickets, binding.ticket))
+                for binding in payment_link.bindings
+            ),
+        )
 
     mail_by_id = {mail.message_id: mail for mail in snapshot.mail_evidence if mail.message_id}
     previous_events = previous.get("events", [])
@@ -1100,6 +1154,8 @@ def _build_supplemental_and_reduce(
                         message_id,
                     )
                 )
+            if message_id in payment_by_id:
+                continue
             ancestor = mail_by_id.get(message_id)
             if ancestor is not None:
                 queue.extend(ancestor.in_reply_to)
@@ -1110,7 +1166,11 @@ def _build_supplemental_and_reduce(
         snapshot.mail_evidence, key=lambda mail: (_mail_timestamp(mail), mail.message_key)
     )
     for mail in ordered_mail:
-        if mail.message_id in original_anchors or mail.message_id in thread_by_id:
+        if (
+            mail.message_id in original_anchors
+            or mail.message_id in thread_by_id
+            or mail.message_id in payment_by_id
+        ):
             continue
         direct = direct_by_id.get(mail.message_id)
         resolutions = ancestry_resolutions(mail)
@@ -1227,7 +1287,8 @@ def _build_supplemental_and_reduce(
         receipt_hashes = _receipt_attachments(mail)
         payment = reimbursement_events.parse_payment_evidence(mail.top_authored_text)
         authorized_payment = (
-            payment is not None
+            anchors.schema_version == 1
+            and payment is not None
             and bool(occurred_on)
             and mail.sender_address.casefold() in anchors.payment_operators
         )
@@ -1317,6 +1378,170 @@ def _build_supplemental_and_reduce(
         )
         add_event(event_value)
         _apply_operator_review(ticket, review_override)
+
+    for message_id in sorted(payment_by_id):
+        _link, bound = payment_by_id[message_id]
+        payment_mail = mail_by_id.get(message_id)
+        if payment_mail is None:
+            continue
+        account_mail(payment_mail)
+        occurred_on = _mail_date(payment_mail)
+        bound_ticket_keys = frozenset(str(ticket["review_key"]) for _binding, ticket in bound)
+        ancestry = ancestry_resolutions(payment_mail)
+        ancestry_conflict = any(
+            frozenset(ticket_keys) != bound_ticket_keys or purpose == "APPROVAL_PROPOSAL"
+            for purpose, ticket_keys, _anchor_id in ancestry
+        )
+        parsed_blocks = reimbursement_events.parse_payment_evidence_blocks(
+            payment_mail.top_authored_text
+        )
+        if parsed_blocks is None and len(bound) == 1:
+            legacy_payment = reimbursement_events.parse_payment_evidence(
+                payment_mail.top_authored_text
+            )
+            if legacy_payment is not None:
+                parsed_blocks = (legacy_payment,)
+        parsed_by_digest: dict[str, reimbursement_events.PaymentEvidence] = {}
+        if parsed_blocks is not None:
+            for payment in parsed_blocks:
+                reference_digest = hashlib.sha256(payment.reference.encode("utf-8")).hexdigest()
+                if reference_digest in parsed_by_digest:
+                    parsed_blocks = None
+                    break
+                parsed_by_digest[reference_digest] = payment
+        expected_digests = {binding.reference_sha256 for binding, _ticket in bound}
+        valid_date = (
+            bool(occurred_on)
+            and payment_mail.message_key not in snapshot.out_of_scope_mail_keys
+            and date.fromisoformat(occurred_on) <= as_of
+        )
+        group_valid = (
+            payment_mail.sender_address.casefold() in anchors.payment_operators
+            and valid_date
+            and not ancestry_conflict
+            and parsed_blocks is not None
+            and len(parsed_blocks) == len(bound)
+            and set(parsed_by_digest) == expected_digests
+        )
+        quarantine_reason = "PAYMENT_LINK_REJECTED"
+        if group_valid:
+            for binding, ticket in bound:
+                parsed = parsed_by_digest[binding.reference_sha256]
+                payment_method = str(ticket.get("payment_method", ""))
+                if not _ticket_is_approved(ticket) or "zelle" not in payment_method.casefold():
+                    group_valid = False
+                    break
+                if parsed.amount != _ticket_total(ticket):
+                    group_valid = False
+                    quarantine_reason = "PAYMENT_AMOUNT_MISMATCH"
+                    break
+        if not group_valid:
+            unmatched[payment_mail.message_key] = {
+                "evidence_key": payment_mail.message_key,
+                "reason": quarantine_reason,
+            }
+            continue
+        for binding, ticket in bound:
+            parsed = parsed_by_digest[binding.reference_sha256]
+            amount = f"{parsed.amount:.2f}"
+            event_value = _event(
+                evidence_key=payment_mail.message_key,
+                ticket_review_key=str(ticket["review_key"]),
+                kind="PAYMENT_RECORDED",
+                occurred_on=occurred_on,
+                occurred_at=_mail_timestamp(payment_mail),
+                evidence_sha256=payment_mail.evidence_sha256,
+                summary="Configured operator payment confirmation recorded for this ticket.",
+                amount=amount,
+                reference=parsed.reference,
+            )
+            add_event(event_value)
+            _apply_payment(
+                ticket,
+                occurred_on=occurred_on,
+                amount=amount,
+                reference=parsed.reference,
+            )
+
+    for operator_payment in anchors.operator_payments:
+        ticket = _resolve_selector(tickets, operator_payment.ticket)
+        record = _operator_payment_evidence_record(operator_payment)
+        evidence_key = str(record["evidence_key"])
+        ticket_review_key = str(ticket["review_key"])
+        evidence_records[evidence_key] = record
+        prior_operator_events = [
+            event for event in previous_events if event.get("evidence_key") == evidence_key
+        ]
+        if prior_operator_events:
+            if len(prior_operator_events) != 1:
+                _fail("previous operator payment evidence has an invalid event inventory")
+            prior_event = dict(prior_operator_events[0])
+            prior_kind = prior_event.get("kind")
+            if (
+                prior_event.get("ticket_review_key") != ticket_review_key
+                or prior_event.get("evidence_sha256") != operator_payment.evidence_sha256
+                or prior_kind
+                not in {"PAYMENT_RECORDED", "PAYMENT_DISCREPANCY", "PAYMENT_QUARANTINED"}
+            ):
+                _fail("previous operator payment evidence has an invalid scoped event")
+            add_event(prior_event)
+            if prior_kind == "PAYMENT_RECORDED":
+                _apply_payment(
+                    ticket,
+                    occurred_on=operator_payment.date,
+                    amount=operator_payment.amount,
+                    reference=operator_payment.reference,
+                )
+            elif prior_kind == "PAYMENT_DISCREPANCY":
+                _apply_payment_discrepancy(ticket)
+            continue
+        amount_value = Decimal(operator_payment.amount)
+        ticket_total = _ticket_total(ticket)
+        approved = _ticket_is_approved(ticket)
+        in_scope = date.fromisoformat(operator_payment.date) <= as_of
+        discrepancy = ""
+        if not approved:
+            kind = "PAYMENT_QUARANTINED"
+            discrepancy = "The selected ticket was not already approved; no payment was recorded."
+            summary = "Explicit operator payment was quarantined without settling this ticket."
+        elif not in_scope:
+            kind = "PAYMENT_QUARANTINED"
+            discrepancy = "The operator payment date is after the report date."
+            summary = "Explicit operator payment was quarantined without settling this ticket."
+        elif amount_value != ticket_total:
+            kind = "PAYMENT_DISCREPANCY"
+            discrepancy = (
+                f"Payment amount ${operator_payment.amount} differs from ticket total "
+                f"${ticket_total:.2f}."
+            )
+            summary = "Explicit operator payment was held because its amount differs."
+        else:
+            kind = "PAYMENT_RECORDED"
+            summary = (
+                f"Explicit operator payment recorded. Audit note: {operator_payment.audit_note}"
+            )
+        event_value = _event(
+            evidence_key=evidence_key,
+            ticket_review_key=ticket_review_key,
+            kind=kind,
+            occurred_on=operator_payment.date,
+            occurred_at="",
+            evidence_sha256=operator_payment.evidence_sha256,
+            summary=summary,
+            amount=operator_payment.amount,
+            reference=operator_payment.reference,
+            discrepancy=discrepancy,
+        )
+        add_event(event_value)
+        if kind == "PAYMENT_RECORDED":
+            _apply_payment(
+                ticket,
+                occurred_on=operator_payment.date,
+                amount=operator_payment.amount,
+                reference=operator_payment.reference,
+            )
+        elif kind == "PAYMENT_DISCREPANCY":
+            _apply_payment_discrepancy(ticket)
 
     current: dict[str, Any] = {
         "anchors_sha256": anchors.sha256,
@@ -1451,6 +1676,7 @@ def merge_evidence_into_bundle(
         snapshot=snapshot,
         anchors=anchor_config,
         previous=previous_supplemental,
+        as_of=as_of,
     )
 
     report = result.get("report")
@@ -1584,6 +1810,7 @@ def plan_bundle_refresh(
         start_month=start_month,
         received_since=received_since,
         subject_filter=subject_filter,
+        payment_message_ids=tuple(link.message_id for link in anchors.payment_links),
     )
     refreshed, summary = merge_evidence_into_bundle(raw, snapshot, as_of=as_of, anchors=anchors)
     return refreshed, summary

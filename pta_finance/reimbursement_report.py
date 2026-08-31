@@ -35,6 +35,7 @@ _MONEY_RE = re.compile(r"^(?:0|[1-9][0-9]*)\.[0-9]{2}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAIL_KEY_RE = re.compile(r"^mail:v1:[0-9a-f]{64}$")
 _OPERATOR_KEY_RE = re.compile(r"^operator-review:v1:[0-9a-f]{64}$")
+_OPERATOR_PAYMENT_KEY_RE = re.compile(r"^operator-payment:v1:[0-9a-f]{64}$")
 _EVENT_KEY_RE = re.compile(r"^event:v1:[0-9a-f]{64}$")
 _PNG_DATA_PREFIX = "data:image/png;base64,"
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -164,7 +165,7 @@ class SupplementalAttachment:
 
 @dataclass(frozen=True)
 class SupplementalEvidence:
-    """One accounted mail or explicit operator-review evidence record."""
+    """One accounted mail or explicit operator-authored evidence record."""
 
     evidence_key: str
     source_type: str
@@ -847,7 +848,7 @@ def _parse_supplemental(value: Any) -> SupplementalLedger:
         source_type = _choice(
             entry["source_type"],
             label=f"{label}.source_type",
-            choices=frozenset({"MAIL", "OPERATOR_REVIEW"}),
+            choices=frozenset({"MAIL", "OPERATOR_REVIEW", "OPERATOR_PAYMENT"}),
         )
         message_id = _string(entry["message_id"], label=f"{label}.message_id", blank=True)
         in_reply_to = _strings(entry["in_reply_to"], label=f"{label}.in_reply_to")
@@ -875,18 +876,32 @@ def _parse_supplemental(value: Any) -> SupplementalLedger:
             or entry["occurred_at"]
         ):
             _fail(f"{label} operator reviews cannot impersonate mail evidence")
+        if source_type == "OPERATOR_PAYMENT" and (
+            message_id or in_reply_to or references or attachments or entry["occurred_at"]
+        ):
+            _fail(f"{label} operator payments cannot impersonate mail evidence")
+        if source_type == "OPERATOR_PAYMENT" and not entry["occurred_on"]:
+            _fail(f"{label} operator payments require a payment date")
         evidence_key = _string(entry["evidence_key"], label=f"{label}.evidence_key")
-        expected_key_pattern = _MAIL_KEY_RE if source_type == "MAIL" else _OPERATOR_KEY_RE
+        expected_key_pattern = {
+            "MAIL": _MAIL_KEY_RE,
+            "OPERATOR_REVIEW": _OPERATOR_KEY_RE,
+            "OPERATOR_PAYMENT": _OPERATOR_PAYMENT_KEY_RE,
+        }[source_type]
         if expected_key_pattern.fullmatch(evidence_key) is None:
             _fail(f"{label}.evidence_key has the wrong stable-key shape")
         top_authored_sha256 = _sha256(
             entry["top_authored_sha256"], label=f"{label}.top_authored_sha256"
         )
         evidence_sha256 = _sha256(entry["evidence_sha256"], label=f"{label}.evidence_sha256")
-        if source_type == "OPERATOR_REVIEW" and top_authored_sha256 != evidence_sha256:
-            _fail(f"{label} operator-review digests must match")
-        if source_type == "OPERATOR_REVIEW" and not evidence_key.endswith(evidence_sha256):
-            _fail(f"{label} operator-review key must match its digest")
+        if source_type in {"OPERATOR_REVIEW", "OPERATOR_PAYMENT"} and (
+            top_authored_sha256 != evidence_sha256
+        ):
+            _fail(f"{label} operator-authored digests must match")
+        if source_type in {"OPERATOR_REVIEW", "OPERATOR_PAYMENT"} and not evidence_key.endswith(
+            evidence_sha256
+        ):
+            _fail(f"{label} operator-authored key must match its digest")
         if source_type == "MAIL" and message_id:
             expected_mail_key = "mail:v1:" + hashlib.sha256(message_id.encode("utf-8")).hexdigest()
             if evidence_key != expected_mail_key:
@@ -916,6 +931,7 @@ def _parse_supplemental(value: Any) -> SupplementalLedger:
             "CLARIFICATION_RECEIVED",
             "PAYMENT_RECORDED",
             "PAYMENT_DISCREPANCY",
+            "PAYMENT_QUARANTINED",
             "APPROVAL_GRANTED",
             "APPROVAL_DECLINED",
             "APPROVAL_QUARANTINED",
@@ -953,7 +969,7 @@ def _parse_supplemental(value: Any) -> SupplementalLedger:
         amount = _money(entry["amount"], label=f"{label}.amount", blank=True)
         reference = _string(entry["reference"], label=f"{label}.reference", blank=True)
         discrepancy = _string(entry["discrepancy"], label=f"{label}.discrepancy", blank=True)
-        payment_kinds = {"PAYMENT_RECORDED", "PAYMENT_DISCREPANCY"}
+        payment_kinds = {"PAYMENT_RECORDED", "PAYMENT_DISCREPANCY", "PAYMENT_QUARANTINED"}
         if kind in payment_kinds and (
             occurred_on is None or amount is None or not reference.strip()
         ):
@@ -962,6 +978,8 @@ def _parse_supplemental(value: Any) -> SupplementalLedger:
             _fail(f"{label} recorded payments cannot carry a discrepancy")
         if kind == "PAYMENT_DISCREPANCY" and not discrepancy:
             _fail(f"{label} payment discrepancies require discrepancy detail")
+        if kind == "PAYMENT_QUARANTINED" and not discrepancy:
+            _fail(f"{label} quarantined payments require quarantine detail")
         if kind not in payment_kinds and (amount is not None or reference or discrepancy):
             _fail(f"{label} non-payment events cannot carry payment fields")
         event_key = _string(entry["event_key"], label=f"{label}.event_key")
@@ -997,6 +1015,8 @@ def _parse_supplemental(value: Any) -> SupplementalLedger:
             "AUTHORIZATION_REJECTED",
             "PROPOSAL_AMBIGUOUS",
             "NO_ACTIONABLE_CONTENT",
+            "PAYMENT_LINK_REJECTED",
+            "PAYMENT_AMOUNT_MISMATCH",
         }
     )
     for index, item in enumerate(raw_unmatched):
@@ -1350,8 +1370,17 @@ def _load_data(value: Any) -> ReimbursementReport:
             _fail("supplemental event key does not match its scoped event payload")
         if event.kind == "OPERATOR_REVIEW" and evidence.source_type != "OPERATOR_REVIEW":
             _fail("operator review events require operator-review evidence")
-        if event.kind != "OPERATOR_REVIEW" and evidence.source_type != "MAIL":
-            _fail("mail lifecycle events require mail evidence")
+        if evidence.source_type == "OPERATOR_PAYMENT" and event.kind not in {
+            "PAYMENT_RECORDED",
+            "PAYMENT_DISCREPANCY",
+            "PAYMENT_QUARANTINED",
+        }:
+            _fail("operator payment evidence can support only payment lifecycle events")
+        if event.kind != "OPERATOR_REVIEW" and evidence.source_type not in {
+            "MAIL",
+            "OPERATOR_PAYMENT",
+        }:
+            _fail("mail lifecycle events require mail or operator-payment evidence")
         target = next(ticket for ticket in tickets if ticket.review_key == event.ticket_review_key)
         source_total = sum(
             (item.source_amount for item in target.items if item.source_amount is not None),
@@ -1369,12 +1398,25 @@ def _load_data(value: Any) -> ReimbursementReport:
             )
         if event.kind == "PAYMENT_DISCREPANCY" and event.amount == source_total:
             _fail("payment discrepancy events must differ from the linked ticket total")
+        if event.kind == "PAYMENT_QUARANTINED" and target.live.payment_status != "NOT_PAID":
+            _fail("quarantined payment events cannot settle the linked ticket")
         if (
             event.kind == "APPROVAL_GRANTED"
             and target.live.decision == "UNREVIEWED"
             and event.ticket_review_key not in operator_review_targets
         ):
             _fail("granted approval events must update the linked recorded decision")
+    operator_payment_keys = {
+        evidence.evidence_key
+        for evidence in supplemental.evidence
+        if evidence.source_type == "OPERATOR_PAYMENT"
+    }
+    for evidence_key in operator_payment_keys:
+        matching_events = [
+            event for event in supplemental.events if event.evidence_key == evidence_key
+        ]
+        if len(matching_events) != 1:
+            _fail("operator payment evidence must support exactly one scoped payment event")
     for unmatched_item in supplemental.unmatched:
         evidence = evidence_by_key.get(unmatched_item.evidence_key)
         if evidence is None or evidence.source_type != "MAIL":

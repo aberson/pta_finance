@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 from decimal import Decimal
 from pathlib import Path
@@ -57,6 +59,37 @@ def _anchors() -> dict[str, object]:
     }
 
 
+def _reference_sha256(reference: str) -> str:
+    return hashlib.sha256(reference.encode("utf-8")).hexdigest()
+
+
+def _anchors_v2() -> dict[str, object]:
+    value = _anchors()
+    value["schema_version"] = 2
+    value["payment_links"] = [
+        {
+            "message_id": "<payment@example.invalid>",
+            "bindings": [
+                {
+                    "ticket": _selector(),
+                    "reference_sha256": _reference_sha256("EXAMPLE-PAY-1000"),
+                }
+            ],
+        }
+    ]
+    value["operator_payments"] = [
+        {
+            "record_payment": True,
+            "ticket": _selector("NEW-02"),
+            "date": "2030-09-09",
+            "amount": "8.25",
+            "reference": "EXAMPLE-OP-825",
+            "audit_note": "Synthetic payment confirmed outside the archived mailbox.",
+        }
+    ]
+    return value
+
+
 def test_anchor_config_is_strict_normalized_and_digestable(tmp_path: Path) -> None:
     path = tmp_path / "anchors.json"
     path.write_text(json.dumps(_anchors()), encoding="utf-8")
@@ -87,6 +120,123 @@ def test_anchor_config_rejects_unknown_keys_and_duplicate_message_ids(tmp_path: 
     ]
     path.write_text(json.dumps(value), encoding="utf-8")
     with pytest.raises(reimbursement_events.ReimbursementEventError, match="must not contain"):
+        reimbursement_events.load_anchor_config(path)
+
+
+def test_schema_v1_anchor_digests_remain_byte_compatible(tmp_path: Path) -> None:
+    path = tmp_path / "anchors.json"
+    path.write_text(json.dumps(_anchors()), encoding="utf-8")
+
+    assert (
+        reimbursement_events.empty_anchor_config().sha256
+        == "84e476c8841110d7adff41194ee5440c83dd1624b9b13dff97171c126a790d1b"
+    )
+    assert (
+        reimbursement_events.load_anchor_config(path).sha256
+        == "1a50651ee8832849919188fbd1e80850a00e7a9b7d181fca8f4f74358ec32612"
+    )
+
+
+def test_schema_v2_payment_lanes_are_strict_and_normalized(tmp_path: Path) -> None:
+    path = tmp_path / "anchors.json"
+    path.write_text(json.dumps(_anchors_v2()), encoding="utf-8")
+
+    anchors = reimbursement_events.load_anchor_config(path)
+
+    assert anchors.payment_links[0].message_id == "<payment@example.invalid>"
+    assert anchors.payment_links[0].bindings[0].reference_sha256 == _reference_sha256(
+        "EXAMPLE-PAY-1000"
+    )
+    assert anchors.operator_payments[0].amount == "8.25"
+    assert anchors.operator_payments[0].reference == "EXAMPLE-OP-825"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unknown-key",
+        "colliding-message-id",
+        "empty-bindings",
+        "duplicate-ticket",
+        "duplicate-reference",
+        "malformed-reference-digest",
+        "duplicate-operator-ticket",
+        "duplicate-operator-reference",
+        "cross-lane-ticket",
+        "cross-lane-reference",
+    ],
+)
+def test_schema_v2_rejects_unknown_colliding_empty_duplicate_and_malformed_values(
+    tmp_path: Path, mutation: str
+) -> None:
+    value = copy.deepcopy(_anchors_v2())
+    payment_link = value["payment_links"][0]  # type: ignore[index]
+    binding = payment_link["bindings"][0]  # type: ignore[index]
+    if mutation == "unknown-key":
+        value["unknown"] = "synthetic"
+    elif mutation == "colliding-message-id":
+        payment_link["message_id"] = "<case@example.invalid>"  # type: ignore[index]
+    elif mutation == "empty-bindings":
+        payment_link["bindings"] = []  # type: ignore[index]
+    elif mutation == "duplicate-ticket":
+        payment_link["bindings"] = [binding, copy.deepcopy(binding)]  # type: ignore[index]
+        payment_link["bindings"][1]["reference_sha256"] = _reference_sha256(  # type: ignore[index]
+            "EXAMPLE-PAY-1001"
+        )
+    elif mutation == "duplicate-reference":
+        second = copy.deepcopy(binding)
+        second["ticket"] = _selector("NEW-03")
+        payment_link["bindings"] = [binding, second]  # type: ignore[index]
+    elif mutation == "malformed-reference-digest":
+        binding["reference_sha256"] = "not-a-sha256"  # type: ignore[index]
+    elif mutation == "duplicate-operator-ticket":
+        second_payment = copy.deepcopy(value["operator_payments"][0])  # type: ignore[index]
+        second_payment["reference"] = "EXAMPLE-OP-826"
+        value["operator_payments"].append(second_payment)  # type: ignore[union-attr]
+    elif mutation == "duplicate-operator-reference":
+        second_payment = copy.deepcopy(value["operator_payments"][0])  # type: ignore[index]
+        second_payment["ticket"] = _selector("NEW-03")
+        value["operator_payments"].append(second_payment)  # type: ignore[union-attr]
+    elif mutation == "cross-lane-ticket":
+        value["operator_payments"][0]["ticket"] = _selector()  # type: ignore[index]
+    else:
+        value["operator_payments"][0]["reference"] = "EXAMPLE-PAY-1000"  # type: ignore[index]
+    path = tmp_path / "anchors.json"
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(reimbursement_events.ReimbursementEventError):
+        reimbursement_events.load_anchor_config(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("record_payment", None),
+        ("ticket", None),
+        ("date", None),
+        ("amount", None),
+        ("reference", None),
+        ("audit_note", None),
+        ("record_payment", False),
+        ("date", "09/09/2030"),
+        ("amount", "8.2"),
+        ("reference", "invalid"),
+        ("audit_note", "   "),
+    ],
+)
+def test_schema_v2_operator_payment_requires_every_exact_field(
+    tmp_path: Path, field: str, replacement: object
+) -> None:
+    value = copy.deepcopy(_anchors_v2())
+    payment = value["operator_payments"][0]  # type: ignore[index]
+    if replacement is None:
+        del payment[field]  # type: ignore[index]
+    else:
+        payment[field] = replacement  # type: ignore[index]
+    path = tmp_path / "anchors.json"
+    path.write_text(json.dumps(value), encoding="utf-8")
+
+    with pytest.raises(reimbursement_events.ReimbursementEventError):
         reimbursement_events.load_anchor_config(path)
 
 
@@ -263,6 +413,154 @@ ABCD99E9FGH9
     )
     assert reimbursement_events.parse_payment_evidence(text + "\nZXCV12B3NM45\n") is None
     assert reimbursement_events.parse_payment_evidence(text + "\n11.00\n") is None
+
+
+def test_exact_generated_single_and_sent_batch_payment_grammars() -> None:
+    generated = """\
+Hello Morgan,
+
+Your $1,234.56 reimbursement has been approved and sent by Zelle.
+Zelle confirmation: EXAMPLE-ZELLE-123456
+
+Thank you!
+Example Treasurer Team
+"""
+    sent_single = """\
+Hello,
+
+Your $10.00 reimbursement has been approved and sent by Zelle.
+Zelle confirmation:
+
+Morgan Example
+Zelle - synthetic destination
+Classroom Supplies
+ABCD99E9FGH9
+10.00
+
+Thank you,
+Example Treasurer
+Example Association
+"""
+    sent_group = """\
+Your Reimbursements have been approved and sent by Zelle.
+
+Zelle confirmations
+
+Morgan Example
+Zelle - first synthetic destination
+Classroom Supplies
+ZXCV12B3NM45
+1,234.56
+
+Riley Example
+Zelle - second synthetic destination
+QWER98T7YUI6
+8.25
+
+Thank you!
+Example Treasurer
+Example Association
+"""
+    sent_group_three = """\
+Your reimbursements have been approved and sent by Zelle.
+
+Confirmation:
+
+Morgan Example
+Zelle - first synthetic destination
+FIRSTREF1000
+10.00
+
+Riley Example
+Zelle - second synthetic destination
+Classroom Supplies
+SECONDREF2000
+20.00
+
+Taylor Example
+Zelle - third synthetic destination
+THIRDREF3000
+30.00
+
+Thank you,
+Example Treasurer
+Example Association
+"""
+
+    assert reimbursement_events.parse_payment_evidence_blocks(generated) == (
+        reimbursement_events.PaymentEvidence(
+            amount=Decimal("1234.56"), reference="EXAMPLE-ZELLE-123456"
+        ),
+    )
+    assert reimbursement_events.parse_payment_evidence_blocks(sent_single) == (
+        reimbursement_events.PaymentEvidence(amount=Decimal("10.00"), reference="ABCD99E9FGH9"),
+    )
+    assert reimbursement_events.parse_payment_evidence_blocks(sent_group) == (
+        reimbursement_events.PaymentEvidence(amount=Decimal("1234.56"), reference="ZXCV12B3NM45"),
+        reimbursement_events.PaymentEvidence(amount=Decimal("8.25"), reference="QWER98T7YUI6"),
+    )
+    assert reimbursement_events.parse_payment_evidence_blocks(sent_group_three) == (
+        reimbursement_events.PaymentEvidence(amount=Decimal("10.00"), reference="FIRSTREF1000"),
+        reimbursement_events.PaymentEvidence(amount=Decimal("20.00"), reference="SECONDREF2000"),
+        reimbursement_events.PaymentEvidence(amount=Decimal("30.00"), reference="THIRDREF3000"),
+    )
+
+
+def test_sent_batch_accepts_exact_classroom_support_thank_you_envelope() -> None:
+    text = """\
+Your Reimbursements have been approved and sent by Zelle.
+
+Zelle confirmations
+
+Morgan Example
+Zelle - first synthetic destination
+Classroom Supplies
+LONGTHANK1000
+10.00
+
+Riley Example
+Zelle - second synthetic destination
+LONGTHANK2000
+20.00
+
+Thank you for supporting our classrooms!
+Example Treasurer
+Example Association
+"""
+
+    assert reimbursement_events.parse_payment_evidence_blocks(text) == (
+        reimbursement_events.PaymentEvidence(amount=Decimal("10.00"), reference="LONGTHANK1000"),
+        reimbursement_events.PaymentEvidence(amount=Decimal("20.00"), reference="LONGTHANK2000"),
+    )
+    assert (
+        reimbursement_events.parse_payment_evidence_blocks(
+            text.replace("supporting our classrooms", "supporting the classrooms")
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Your $10.00 reimbursement has not been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-ZELLE-1000",
+        "Was your $10.00 reimbursement approved and sent by Zelle?\n"
+        "Zelle confirmation: EXAMPLE-ZELLE-1000",
+        "The requestor wrote: Your $10.00 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-ZELLE-1000",
+        "Your $10.00 reimbursement will be approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-ZELLE-1000",
+        "Your $10.00 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-ZELLE-1000\nReference: EXTRA-2000",
+        "Your $10.00 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-ZELLE-1000\n$1.00",
+    ],
+)
+def test_new_payment_grammars_reject_altered_negative_question_attributed_and_extra_values(
+    text: str,
+) -> None:
+    assert reimbursement_events.parse_payment_evidence_blocks(text) is None
 
 
 def test_proposal_protocol_requires_exact_sections_and_action_counts() -> None:
