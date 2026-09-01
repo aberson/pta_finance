@@ -701,7 +701,7 @@ exception body.
   are pinned; and exceptions/logs leak none of the fixture's canary paths, identifiers, descriptions,
   or values
 - **Depends on:** none
-- **Status:** PENDING
+- **Status:** DONE (2026-09-01)
 
 <!-- autofix-applied: 2026-08-31 -->
 ### Step 15: Parse supported native-text statement pages
