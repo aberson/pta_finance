@@ -135,6 +135,31 @@ class _ExtendedLimitInformation(ctypes.Structure):
     ]
 
 
+def _windows_dll(name: str) -> Any:
+    """Load a Windows DLL while keeping this entry point importable on other hosts."""
+
+    loader: Any = getattr(ctypes, "WinDLL", None)
+    if loader is None:
+        raise RuntimeError
+    return loader(name, use_last_error=True)
+
+
+def _windows_last_error() -> int:
+    getter: Any = getattr(ctypes, "get_last_error", None)
+    if getter is None:
+        raise RuntimeError
+    return int(getter())
+
+
+def _pipe_connection_from_handle(handle: int, *, readable: bool, writable: bool) -> Any:
+    from multiprocessing import connection
+
+    pipe_connection: Any = getattr(connection, "PipeConnection", None)
+    if pipe_connection is None:
+        raise RuntimeError
+    return pipe_connection(handle, readable=readable, writable=writable)
+
+
 def _argument_value(arguments: list[str], flag: str) -> str:
     try:
         index = arguments.index(flag)
@@ -195,7 +220,7 @@ class _WorkerControl:
 def _close_worker_control(control: _WorkerControl | None) -> None:
     if control is None:
         return
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = _windows_dll("kernel32")
     view = control.mapping_view
     if view is not None:
         control.mapping_view = None
@@ -224,7 +249,7 @@ def _open_worker_control(
 ) -> _WorkerControl:
     """Open only public startup control objects before LPAC attestation."""
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = _windows_dll("kernel32")
     control = _WorkerControl(None, None, None, None)
     try:
         mapping_opener = kernel32.OpenFileMappingW
@@ -295,7 +320,7 @@ def _worker_pipe_handles(control: _WorkerControl, nonce: str) -> tuple[int, int]
 def _signal_attested_and_wait_for_handles(control: _WorkerControl) -> None:
     if control.attested_event_handle is None or control.handles_ready_event_handle is None:
         raise RuntimeError
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32 = _windows_dll("kernel32")
     setter = kernel32.SetEvent
     setter.argtypes = (ctypes.c_void_p,)
     setter.restype = ctypes.c_int
@@ -332,7 +357,7 @@ def _has_only_registry_read_capability(
 ) -> bool:
     """Require the one runtime capability and rule out any silently added capability."""
 
-    kernelbase = ctypes.WinDLL("kernelbase", use_last_error=True)
+    kernelbase = _windows_dll("kernelbase")
     local_free = kernel32.LocalFree
     local_free.argtypes = (ctypes.c_void_p,)
     local_free.restype = ctypes.c_void_p
@@ -389,7 +414,7 @@ def _token_capabilities_match_registry_read(
     )
     get_token_information.restype = ctypes.c_int
     if get_token_information(token, _TOKEN_CAPABILITIES, None, 0, ctypes.byref(returned)) or (
-        ctypes.get_last_error() != 122
+        _windows_last_error() != 122
     ):
         return False
     if returned.value < ctypes.sizeof(_TokenGroups):
@@ -474,7 +499,7 @@ def _has_no_all_application_packages_policy(advapi32: Any, token: ctypes.c_void_
     get_token_information.restype = ctypes.c_int
     if get_token_information(
         token, _TOKEN_SECURITY_ATTRIBUTES, None, 0, ctypes.byref(returned)
-    ) or (ctypes.get_last_error() != 122):
+    ) or (_windows_last_error() != 122):
         return False
     if returned.value < ctypes.sizeof(_TokenSecurityAttributesInformation):
         return False
@@ -574,8 +599,8 @@ def _attest_sandboxed_process(limits: bank_statements._NativeExtractionLimits) -
 
     if os.name != "nt":
         return False
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = _windows_dll("kernel32")
+    advapi32 = _windows_dll("advapi32")
     current_process = kernel32.GetCurrentProcess()
     token = ctypes.c_void_p()
     open_token = advapi32.OpenProcessToken
@@ -652,10 +677,8 @@ def main(arguments: list[str] | None = None) -> int:
             raise RuntimeError
         _signal_attested_and_wait_for_handles(control)
         request_handle, response_handle = _worker_pipe_handles(control, nonce)
-        from multiprocessing.connection import PipeConnection
-
-        request = PipeConnection(request_handle, readable=True, writable=False)
-        response = PipeConnection(response_handle, readable=False, writable=True)
+        request = _pipe_connection_from_handle(request_handle, readable=True, writable=False)
+        response = _pipe_connection_from_handle(response_handle, readable=False, writable=True)
         _close_worker_control(control)
         control = None
         response.send_bytes(bank_statements._native_worker_ready_frame(nonce))
