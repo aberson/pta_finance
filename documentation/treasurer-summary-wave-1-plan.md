@@ -175,9 +175,9 @@ The native PDF boundary is supported only on Windows. A developer installs the r
 development and Slides dependencies with `uv sync --extra dev --extra slides`; Step 16 additionally
 requires a local Tesseract major version 5 executable for its OCR smoke. Linux and other hosts may
 run the portable/model/test suite, but the native statement path must fail before a source-file read.
-The one-shot CLI/broker process is the supported host for Step 15; a library embedding that can launch
-unrelated inheritable-handle child processes concurrently is not supported until the named-pipe
-launcher described in the Step 15 release constraint exists.
+The operator workflow remains one-shot, but the Step 15 boundary is not limited by host-native thread
+count: `CreateProcessW` uses `bInheritHandles=False`, and the broker transfers only the two anonymous
+PDF-channel endpoints directly into the independently attested child after startup.
 
 ### 5.2 Private input and rule manifests
 
@@ -260,21 +260,20 @@ Before `pypdfium2` receives PDF bytes, the broker must start a one-shot Windows 
 AppContainer (LPAC) worker through the narrow `native_sandbox.py` launcher. The LPAC has exactly one
 enabled capability, `registryRead`, which CPython needs for runtime initialization on the supported
 host; it has no network capability and opts out of `ALL_APPLICATION_PACKAGES`. It receives a sanitized
-environment and safe working directory, cannot access the caller profile or worktree, and receives
-only two intended anonymous-pipe handles: the broker-to-worker request reader and worker-to-broker
-response writer. A per-run public-only runtime is ACLed only for the LPAC SID; it contains the selected
-interpreter, package code, and native-library dependencies, never a private PDF, manifest, rule, or
-user configuration. The launcher creates the child suspended, assigns it to a kill-on-close Job Object
-with CPU, memory, and one-active-process limits, resumes it, and waits for a versioned `READY`
-attestation before reading or writing any source bytes. Before its first `recv_bytes()`, the worker
-attests that it is in the expected LPAC, has exactly the one enabled `registryRead` capability, and
-proves its LPAC policy through the exact `WIN://NOALLAPPPKG` token security attribute, and is governed
-by the expected Job limits. No sandbox/profile/runtime cleanup failure may fall back to an ordinary
-child. The pipe endpoints are briefly marked inheritable for `CreateProcessW`; the launcher lock
-serializes its own launches, but cannot prevent an unrelated host thread from calling
-`CreateProcess(..., bInheritHandles=True)` during that window. Wave 1 is therefore limited to the
-one-shot CLI/broker process. A future uncooperative multi-threaded embedding must use a dedicated
-launcher with authenticated named pipes before it can rely on this boundary.
+environment and safe working directory, and cannot access the caller profile or worktree. A per-run
+public-only runtime is ACLed only for the LPAC SID; it contains the selected interpreter, package code,
+and native-library dependencies, never a private PDF, manifest, rule, or user configuration. The
+launcher creates the child suspended with `bInheritHandles=False`, assigns it to a kill-on-close Job
+Object with CPU, memory, and one-active-process limits, and resumes it with no PDF-channel endpoint.
+The worker can initially open only generated Low-IL named control objects containing public names and a
+nonce. It self-attests its token/Job state and signals the broker; the broker independently re-queries
+that exact process for its AppContainer SID, sole `registryRead` capability, `WIN://NOALLAPPPKG`
+attribute, and Job membership before directly duplicating the request reader and response writer into
+that child with non-inheritable handles. The control mapping carries only those child-local handle
+numbers and the nonce. The worker then emits the versioned `READY` frame before either side reads or
+writes source bytes. No sandbox/profile/runtime/control cleanup failure may fall back to an ordinary
+child. Because no PDF channel is inherited through `CreateProcessW`, concurrent unrelated host child
+launches cannot receive a PDF-channel handle.
 
 The Step 15 PDF worker's one-active-process Job deliberately prevents it from launching Tesseract.
 Step 16 therefore has the broker launch `tesseract.exe` directly as the one active process in a
@@ -723,11 +722,13 @@ exception body.
 15. **Native parsing is sandboxed before bytes cross the boundary.** Resource limits alone do not
     restrict filesystem, network, or inherited-handle authority. Wave 1 therefore launches the
     native PDF parser only in a Windows LPAC worker with exactly the CPython-required `registryRead`
-    capability, no network capability, an intended two-handle allowlist, public-only staged runtime,
-    Job Object containment, and a `READY` attestation. The boundary is only supported in the
-    one-shot CLI/broker: an arbitrary foreign `CreateProcess(..., bInheritHandles=True)` call during
-    the brief inheritable-handle window is out of scope until a dedicated named-pipe launcher exists.
-    If the boundary cannot be created and verified, parsing fails before the statement is read or sent.
+    capability, no network capability, public-only staged runtime, Job Object containment, and a
+    `READY` attestation. The child begins with no PDF-channel handle: public control objects carry
+    only generated names, a nonce, and child-local handle numbers; after independent token/Job
+    verification, the broker uses non-inheritable direct handle duplication into that exact process.
+    No `CreateProcess` inheritance window exists, so an unrelated host child launch cannot receive a
+    PDF-channel handle. If the boundary cannot be created and verified, parsing fails before the
+    statement is read or sent.
 16. **Each native executable earns its own boundary.** The PDF worker's one-active-process Job
     intentionally prevents a child Tesseract process. Step 16 must therefore have the broker launch
     staged `tesseract.exe` directly as the one process in a separate LPAC Job and verify its token and
@@ -777,8 +778,9 @@ exception body.
   `tests/test_treasurer_slides_native_sandbox.py`, and fictional native PDF fixtures
 - **Produces:** `pta_finance/treasurer_slides/bank_statements.py`, a narrow Windows LPAC/AppContainer
   launcher and one-shot PDF-worker entry point, public-only staged runtime/profile lifecycle,
-  brokered request/response pipes with a `READY` attestation, the `pypdfium2` Slides extra in
-  `pyproject.toml`/`uv.lock`, Windows CI coverage, and fictional native-text/parser-boundary tests
+  public control-object attestation plus directly broker-duplicated request/response pipes with a
+  `READY` frame, the `pypdfium2` Slides extra in `pyproject.toml`/`uv.lock`, Windows CI coverage, and
+  fictional native-text/parser-boundary tests
 - **Done when:** every supported monthly/current page kind and known boilerplate is recognized by
   dimensions/markers/headers; char positions reconstruct non-overlapping debit/credit bands;
   balance bases and boundaries remain individually dated; transaction-table rows alone become
@@ -791,27 +793,33 @@ exception body.
   `WIN://NOALLAPPPKG` LPAC-policy token attribute, and the required one-active-process, CPU, and
   memory limits. The child uses an explicit AppContainer SID ACL only for its public staged runtime,
   has a sanitized environment/safe working directory, cannot access caller profile/worktree paths or
-  the network, and receives only the intended request-reader and response-writer handles. Malformed
-  frames, output floods, timeout, crash, cleanup failure, and sandbox-start failure block without a
-  normal-process fallback or source-byte read/write. Per-run profile/runtime cleanup retains
+  the network, and begins without PDF-channel handles. It can reach only public control objects until
+  both worker and broker token/Job attestations pass; then the broker directly duplicates only the
+  intended request-reader and response-writer handles into that PID with inheritance disabled.
+  Malformed frames, output floods, timeout, crash, cleanup failure, and sandbox-start failure block
+  without a normal-process fallback or source-byte read/write. Per-run profile/runtime cleanup retains
   ownership until the child is known to have exited; non-Windows hosts fail closed before source-file
   reads. Windows CI proves real-parser regression, the true-LPAC positive/negative attestation,
   pre-read ordering, and cleanup with fictional fixtures; Linux proves portable logic and pre-read
   fail-closed behavior.
 - **Release constraint:** native parsing and its LPAC enforcement ship as one atomic Step 15 diff;
-  no direct-parser-only commit or private-source run is permitted. This boundary is limited to the
-  one-shot CLI/broker process because the short inheritable-handle window cannot prevent an
-  unrelated foreign `CreateProcess(..., bInheritHandles=True)` call; a future multi-threaded host
-  requires a dedicated launcher with authenticated named pipes.
+  no direct-parser-only commit or private-source run is permitted. `CreateProcessW` must retain
+  `bInheritHandles=False`; no temporary-inherit, handle-list, or foreign-process launch exception is
+  permitted. The only control-plane contents may be generated names, nonce, and child-local handle
+  numbers; private bytes cross only the two direct-duplicated anonymous endpoints after both
+  attestations.
 - **Depends on:** Step 14
 - **Status:** PENDING
 
 #### 15a: LPAC pre-read security gate (part of Step 15)
 
-The parent starts and validates the child before opening the source PDF. The child receives no
-private path or bytes in its command/configuration; it emits `READY` only after token/Job attestation.
-The broker then reads bounded bytes and passes them through the request pipe. This is an acceptance
-subsection of Step 15, not an independently dispatchable or issue-bearing build step.
+The parent starts and validates the child before opening the source PDF. The child receives no private
+path, bytes, or PDF-channel handle at `CreateProcessW`; it can initially open only public control
+objects. It self-attests, the broker independently validates its exact token/Job, then the broker
+directly duplicates the two anonymous endpoints into that PID. The child emits `READY` only after
+wrapping those endpoints. The broker then reads bounded bytes and passes them through the request pipe.
+This is an acceptance subsection of Step 15, not an independently dispatchable or issue-bearing build
+step.
 
 <!-- autofix-applied: 2026-08-31 -->
 ### Step 16: Add bounded positional Tesseract fallback
@@ -1095,7 +1103,7 @@ the only real-service visual acceptance.
 
 | Item | Risk | Mitigation / decided handling |
 |---|---|---|
-| Native PDF/OCR engine compromise or ambient access | A malformed document or native dependency could read user data, use the network, or inherit a privileged handle | Step 15's LPAC with only CPython's `registryRead` capability, no network capability, intended two-handle list, public-only staged runtime, one-process Job limits, `READY`/token/Job attestation, cleanup ownership, and fail-closed behavior is mandatory before PDF bytes cross the boundary. The temporary inheritable-handle window is scoped to the one-shot CLI/broker; a future uncooperative multi-threaded host needs a dedicated named-pipe launcher. Step 16 has the broker launch Tesseract directly in a distinct LPAC Job; the PDF worker may not spawn it. |
+| Native PDF/OCR engine compromise or ambient access | A malformed document or native dependency could read user data, use the network, or inherit a privileged handle | Step 15's LPAC with only CPython's `registryRead` capability, no network capability, public-only staged runtime, one-process Job limits, worker and broker token/Job attestation, direct non-inheritable duplication of only two anonymous PDF-channel endpoints, cleanup ownership, and fail-closed behavior is mandatory before PDF bytes cross the boundary. Public control objects contain no PDF path or bytes and cannot route a PDF endpoint to a foreign launch. Residual host-trust assumption: a separate same-user full-trust process that discovers a per-run public control-object name may interfere with startup ordering or cause denial of service, but cannot obtain, redirect, or read a PDF channel without access to the broker or child process; the broker duplicates those endpoints only into the independently verified child PID. Step 16 has the broker launch Tesseract directly in a distinct LPAC Job; the PDF worker may not spawn it. |
 | Image-only or low-quality statements | OCR can drop punctuation, dates, digits, or debit/credit column position and create a plausible wrong transaction | Positioned TSV tokens, column bands, confidence gates, typed parsing, account/combined reconciliation, transaction-level private review, and real Step 25 comparison; any ambiguity or unexplained cent blocks |
 | Wells Fargo layout changes | A future statement may parse with wrong column association | Versioned format fingerprints and explicit unsupported-layout failure; later adapter update with a new fictional regression fixture |
 | Overlapping reports | Monthly plus current activity can double-count most of the window or let OCR replace stronger closed evidence | Closed monthly statements own posted closed dates; current activity supplements later/pending/latest facts; semantic disagreement requires an exact resolution |
@@ -1135,10 +1143,12 @@ approval states, scheduling, sharing, and the rest of the old graphic catalog.
 - Native-boundary contract and Windows integration coverage: `READY` precedes every source-byte
   transfer; true LPAC state, exactly one enabled `registryRead` capability, exact
   `WIN://NOALLAPPPKG` LPAC-policy token attribute, expected Job limits, sanitized environment/current
-  directory, intended two-handle inheritance, malformed-frame/output/timeout/crash handling, and
-  per-run profile/runtime cleanup are proved with fictional canaries. The test suite records the
-  CLI-only concurrent-process limitation rather than claiming a live proof against an arbitrary
-  foreign `CreateProcess` race. Step 16 has a separate direct-Tesseract boundary suite, including
+  directory, public-control-object-only pre-attestation handshake, non-inheritable direct duplication
+  of the two intended handles into the independently verified PID, malformed-frame/output/timeout/
+  crash handling, and per-run profile/runtime cleanup are proved with fictional canaries. The test
+  suite proves that a missing LPAC policy blocks before either endpoint is duplicated and that no
+  foreign `CreateProcess` inheritance window exists. Step 16 has a separate direct-Tesseract boundary
+  suite, including
   broker-side token/Job verification before raster input, and cannot be spawned by the PDF worker.
   Linux and other non-Windows runs prove fail-closed behavior before a statement file is read.
 - Closed-statement overlap authority, exact disagreement resolution, source versus semantic identity,
