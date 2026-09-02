@@ -19,7 +19,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev --extra slides
 
       - name: Ruff lint
         run: uv run ruff check .
@@ -31,7 +31,31 @@ jobs:
         run: uv run mypy --strict pta_finance
 
       - name: Pytest
-        run: uv run pytest -q
+        run: |
+          uv run pytest -q --ignore=tests/test_treasurer_slides_bank_statements_native.py
+          uv run pytest -q tests/test_treasurer_slides_bank_statements_native.py -k "extractor_never_reads_a_pdf_if_the_sandbox_cannot_start"
 
       - name: Identity / secret guard
         run: uv run python scripts/check_no_identity.py
+
+  windows-native-sandbox:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --locked --extra dev --extra slides
+
+      - name: Native sandbox and statement parser tests
+        run: >-
+          uv run pytest -q
+          tests/test_treasurer_slides_native_sandbox.py
+          tests/test_treasurer_slides_bank_statements_native.py
