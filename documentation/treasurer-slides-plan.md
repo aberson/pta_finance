@@ -38,7 +38,7 @@ The project completed Steps 1-13 before Treasurer Slides. Global numbering remai
 
 | Wave | Reserved steps | Outcome | Status |
 |---|---:|---|---|
-| 1 - Summary slide | 14-25 | Repeat the approved one-slide cash snapshot from private bank statements and budget goals, then create one editable private Google Slide | Prepared in `treasurer-summary-wave-1-plan.md`; umbrella #40, steps #41-#52 |
+| 1 - Summary slide | 14-25 | Repeat the approved one-slide cash snapshot from private bank statements and budget goals, then create one editable private Google Slide | Prepared in `treasurer-summary-wave-1-plan.md`; existing umbrella #40 and steps #41-#52 require resynchronization, with the Step 15a sandbox gate folded into Step 15 / issue #42 |
 | 2 - Core financial story | 26-30 | Expand to a small deck with a few high-value graphics | Outline only; plan after Wave 1 acceptance |
 | 3 - Operational rigor | 31-35 | Harden provenance, revisions, Google behavior, visual QA, and audience policy | Outline only; plan after Wave 2 acceptance |
 | 4+ - Capability slices | 36 onward | Add one bounded topic or operating capability per plan | Backlog only |
@@ -50,6 +50,9 @@ Reserved ranges are planning boundaries, not authorization to build an unplanned
 Wave 1 is intentionally narrow:
 
 - Wells Fargo PDF inputs, including local optical character recognition (OCR) fallback;
+- Windows-only native document parsing behind an LPAC gate before any statement bytes are read;
+  non-Windows hosts fail closed, and the boundary is scoped to the one-shot CLI/broker until a
+  future dedicated named-pipe launcher can eliminate the foreign concurrent-process limitation;
 - Checking, Savings, and Time Account (Buffer) roles;
 - overlap selection, transfer/reversal handling, pending activity, and exact operator exclusions;
 - annual fundraising and expense goals read from `Budget Timeseries`;
@@ -57,9 +60,9 @@ Wave 1 is intentionally narrow:
 - the approved one-slide visual and narrative contract; and
 - one private, editable Google Slide created from an app-owned private template.
 
-Minimum correctness and privacy controls ship now. A failed extraction, ambiguous classification,
-unmatched exclusion, broken reconciliation, missing template role, wrong approval digest, or wider
-OAuth grant blocks output.
+Minimum correctness and privacy controls ship now. A failed extraction, absent Windows LPAC parser
+boundary before source-file read, ambiguous classification, unmatched exclusion, broken
+reconciliation, missing template role, wrong approval digest, or wider OAuth grant blocks output.
 
 See the detailed Wave 1 plan for exact contracts, affected files, Steps 14-25, and acceptance.
 
@@ -141,9 +144,11 @@ No item is implicitly part of Wave 1-3.
 ## Plan and issue transition
 
 The previous umbrella #26 and step issues #27-#39 were created from the superseded monolithic plan
-and are closed with a generic supersession note. The reviewed and fresh-context-wrapped Wave 1 plan
-is synchronized as umbrella #40 and steps #41-#52; its `Phase 5.1` namespace keeps those issue bodies
-distinct from the stopped `Phase 5` set.
+and are closed with a generic supersession note. The existing Wave 1 umbrella #40 and step issues
+#41-#52 must be resynchronized after refreshed plan review and fresh-context wrap. The native-parser
+security gate is the non-dispatchable Step 15a acceptance subsection of executable Step 15, so its
+issue body is updated through #42 rather than creating a fractional-step issue. Its `Phase 5.1`
+namespace keeps the revised issue bodies distinct from the stopped `Phase 5` set.
 
 Next command:
 

@@ -51,8 +51,9 @@ Drive permissions, publishes, or sends anything.
   separately stored desktop OAuth token. Slides must use a distinct token and must not import or
   widen Gmail authorization.
 - Read-only inspection found four statement PDFs with embedded text and two image-only PDFs that
-  require rasterization plus local optical character recognition (OCR). The repository currently
-  has no tracked bank-statement parser, OCR adapter, Slides client, or slide-specific tests.
+  require rasterization plus local optical character recognition (OCR). Step 14 established the
+  tracked `treasurer_slides` package and strict models; this plan adds the bank-statement parser,
+  OCR adapter, Slides client, and slide-specific tests.
 - The approved v0 is a private, read-only, checksum-pinned reference under the gitignored prototype
   output tree. Its code hardcodes real reconciled values and uses `python-pptx`; it is a visual and
   calculation oracle, not production source code or a committed fixture.
@@ -88,8 +89,8 @@ Drive permissions, publishes, or sends anything.
   populated as editable native text and shapes.
 - A dedicated desktop OAuth token requesting exactly `drive.file`, private workspace/run manifests,
   minimal duplicate prevention, and no permissions API calls.
-- Fictional unit/integration fixtures, an OCR-enabled real-component local smoke gate, packaging,
-  operator documentation, and one attended real-data/real-Google acceptance run.
+- Fictional unit/integration fixtures, an OCR-enabled Windows real-component local smoke gate,
+  packaging, operator documentation, and one attended real-data/real-Google acceptance run.
 
 ### Out of scope
 
@@ -114,10 +115,10 @@ Drive permissions, publishes, or sends anything.
 
 | File | Change Type | Reason | Verified |
 |---|---|---|---|
-| `pta_finance/treasurer_slides/__init__.py` | add | Package boundary and public Wave 1 exports | `rg --files pta_finance` confirms no `treasurer_slides` package exists |
-| `pta_finance/treasurer_slides/{models,bank_statements}.py` | add | Strict private input, positioned token/page, statement, account, balance, transaction, and OCR contracts | Repository and test globs confirm no bank/PDF/OCR producer exists; private inspection confirmed four text PDFs and two image-only PDFs |
+| `pta_finance/treasurer_slides/{__init__,models}.py` | extend | Keep Step 14's package boundary and strict private models compatible with the parser contracts | Step 14 added both tracked files; their public types are the Wave 1 producer/consumer boundary |
+| `pta_finance/treasurer_slides/{bank_statements,native_sandbox,native_worker}.py` | add | Strict positioned token/page, statement, account, balance, transaction, OCR, and Windows-native-parser sandbox contracts | Step 14 intentionally did not add a bank/PDF/OCR producer; private inspection confirmed four text PDFs and two image-only PDFs |
 | `pta_finance/treasurer_slides/{rules,reconciliation,facts,budget_goals}.py` | add | Source authority, dated intervals, classification, exact adjustments, transfer/reversal handling, strict raw-grid budget-goal read, signed reconciliation, pace, and narrative | Current approved prototype hardcodes these results; `report_source.py:62,88-119` identifies the live tab and proves dictionary projection loses duplicate-header evidence |
-| `pta_finance/treasurer_slides/{summary,template}.py` | add | Approved layout roles, text formatting, category folding, bar geometry, template inspection, and pure Slides request plan | Package absent; current production report renderers are HTML-specific and must remain unchanged |
+| `pta_finance/treasurer_slides/{summary,template}.py` | add | Approved layout roles, text formatting, category folding, bar geometry, template inspection, and pure Slides request plan | The target render modules are absent; the existing package currently contains only contracts and must remain compatible |
 | `pta_finance/treasurer_slides/google_client.py` | add | Dedicated exact-scope OAuth, template import/copy, Slides merge, app-owned candidate lookup, and redacted API boundary | `gmail_source.py:118,402,586,621,661` confirms the separate OAuth precedent; no Slides/Drive presentation client exists |
 | `pta_finance/treasurer_slides/pipeline.py` | add | Atomic private run creation, fact review, digest approval, CLI orchestration, and minimal duplicate-safe resume | `reimbursement_report.py:1385,1474,1506` confirms strict-load/render/atomic-write precedent; no Treasurer run pipeline exists |
 | `pta_finance/treasurer_slides/templates/fact_review.html.j2` | add | Autoescaped private financial review before Google creation | Existing Jinja templates are under `pta_finance/reports/templates/`; no Treasurer template exists |
@@ -125,9 +126,10 @@ Drive permissions, publishes, or sends anything.
 | `config.example.toml` | extend | Add fictional optional Treasurer Slides/OCR path examples | File read in full; optional `[gmail]` and `[receipt_mapping]` blocks are the existing compatibility pattern |
 | `pta_finance/cli.py` | extend | Register init, prepare, and create commands without changing existing flags | `build_parser` is at `cli.py:1320`; all 13 current `set_defaults(func=...)` registrations are local to that function and remain intact |
 | `pyproject.toml`, `uv.lock` | extend | Add a `slides` extra with permissively licensed `pypdfium2`; document Tesseract 5 as a system dependency | Dependency table read in full; no PDF-input/OCR package or Slides extra is present; Google API/auth clients already exist; PyMuPDF was rejected because its official distribution is AGPL/commercial |
-| `.github/workflows/ci.yml` | extend | Install Tesseract, sync the Slides extra, and run OCR/smoke coverage on Linux | Workflow currently runs `uv sync --extra dev` and has no system-package step |
+| `.github/workflows/ci.yml` | extend | Keep portable/static and fail-closed coverage on Linux; on Windows, install the Slides extra and Tesseract, then exercise the LPAC native-parser/OCR boundaries and real-component smoke | Workflow currently runs `uv sync --extra dev` and has no system-package step |
 | `scripts/check_no_identity.py` | extend | Reject tracked Treasurer statements, templates, run artifacts, tokens, and real-resource manifests while preserving fictional tests | Script currently checks service-account markers plus the optional identity denylist only; its sole CI invocation is `.github/workflows/ci.yml` |
-| `tests/test_treasurer_slides_*.py`, `tests/fixtures/treasurer_slides/**` | add | Fictional contracts, positioned PDF/OCR, source authority, reconciliation, budget, review, template, Google fake, CLI, privacy, packaging, and smoke coverage | `rg --files tests` confirms no Treasurer Slides tests or fixtures exist |
+| `tests/test_treasurer_slides_models.py` | extend | Keep Step 14 manifest/model contracts compatible with parser facts | Step 14 added the tracked fictional model suite |
+| `tests/test_treasurer_slides_{bank_statements_native,native_sandbox,bank_statements_ocr,source_authority,rules,reconciliation,budget_goals,facts,summary,template,pipeline,auth,workspace,google_candidate,cli,smoke}.py`, `tests/fixtures/treasurer_slides/**` | add | Fictional positioned PDF/OCR, parser-boundary, source authority, reconciliation, budget, review, template, Google fake, CLI, privacy, packaging, and smoke coverage | Step 14 deliberately added only model tests; no parser/OCR/Slides test or fixture exists yet |
 | `tests/test_config.py` | extend | Prove the optional Treasurer Slides block preserves legacy configs and validates every supplied path | Existing optional-section coverage is at `tests/test_config.py:113-175`; no Treasurer Slides block exists |
 | `docs/generating-treasurer-summary.md` | add | Exact operator setup, inputs, review, OAuth, creation, and recovery procedure | Docs glob confirms no Treasurer summary guide exists |
 | `README.md`, `SETUP.md`, `CLAUDE.md`, `plan.md` | extend | Document the new optional command surface, dependency, privacy boundary, status, and staged roadmap | Each file exists and was read during discovery; current project status does not mention the staged Wave 1 workflow |
@@ -166,6 +168,16 @@ containment/type checks. Git is invoked with an argument array and no shell. The
 secret/token, workspace/bootstrap, runs/diagnostics, input manifest, rules, every PDF, and the private
 PPTX. Omitting the config block preserves every current command and test. The module reads paths but
 never prints secret contents, tokens, statement text, or Google IDs.
+
+### 5.1.1 Development and supported-host setup
+
+The native PDF boundary is supported only on Windows. A developer installs the repository's locked
+development and Slides dependencies with `uv sync --extra dev --extra slides`; Step 16 additionally
+requires a local Tesseract major version 5 executable for its OCR smoke. Linux and other hosts may
+run the portable/model/test suite, but the native statement path must fail before a source-file read.
+The one-shot CLI/broker process is the supported host for Step 15; a library embedding that can launch
+unrelated inheritable-handle child processes concurrently is not supported until the named-pipe
+launcher described in the Step 15 release constraint exists.
 
 ### 5.2 Private input and rule manifests
 
@@ -228,19 +240,51 @@ discarded and never become model or log fields.
 Both native and OCR paths emit the same `PositionedToken` records: page number, normalized
 page-relative bounding box, text, extraction method, and confidence (`100` for native text).
 Native characters are grouped into words by line and x-gap. A page with fewer than 80 non-whitespace
-native characters or without a known page fingerprint is rasterized at 300 DPI and sent to
-Tesseract major version 5 as `eng`, OEM 1, PSM 6, TSV output, with a 45-second per-page timeout.
-Tesseract is invoked with an argument array and no shell. Any token used for a date, money,
-direction, status, balance, or table header with confidence below 75 blocks parsing; low-confidence
+native characters or without a known page fingerprint is rasterized at 300 DPI and streamed through
+the Step 16 LPAC Tesseract boundary to Tesseract major version 5 as `eng`, OEM 1, PSM 6, TSV output,
+with a 45-second per-page timeout. Tesseract is invoked with an argument array and no shell. Any
+token used for a date, money, direction, status, balance, or table header with confidence below 75
+blocks parsing; low-confidence
 description-only tokens remain visible as review evidence.
 
 The hard v1 limits are 25 MiB per PDF, 25 pages, 2,000,000 extracted characters, 20,000,000 rendered
-pixels per page, and 2,500 transaction rows per document. Unique OCR directories use a fixed
-application prefix beneath the operating-system temporary root; `finally` removes the current one,
-and startup may remove only path-contained matching directories older than 24 hours. Raw OCR text
-and images are never copied into a run. Errors identify only a safe document ordinal and page
-number, not its path or text. The full PDF backend, parser-contract, and Tesseract versions and the
-pinned OCR arguments are recorded in private lineage.
+pixels per page, and 2,500 transaction rows per document. Raster input and TSV output cross the
+separate OCR boundary only through bounded pipes and are never copied into a run or an ambient
+temporary directory. If a future OCR dependency cannot stream, it must use a per-run directory inside
+its AppContainer local data that is ACLed only for that worker, and cleanup must retain ownership until
+the worker has exited; otherwise the operation fails closed. Errors identify only a safe document
+ordinal and page number, not its path or text. The full PDF backend, parser-contract, and Tesseract
+versions and the pinned OCR arguments are recorded in private lineage.
+
+Before `pypdfium2` receives PDF bytes, the broker must start a one-shot Windows Low Privilege
+AppContainer (LPAC) worker through the narrow `native_sandbox.py` launcher. The LPAC has exactly one
+enabled capability, `registryRead`, which CPython needs for runtime initialization on the supported
+host; it has no network capability and opts out of `ALL_APPLICATION_PACKAGES`. It receives a sanitized
+environment and safe working directory, cannot access the caller profile or worktree, and receives
+only two intended anonymous-pipe handles: the broker-to-worker request reader and worker-to-broker
+response writer. A per-run public-only runtime is ACLed only for the LPAC SID; it contains the selected
+interpreter, package code, and native-library dependencies, never a private PDF, manifest, rule, or
+user configuration. The launcher creates the child suspended, assigns it to a kill-on-close Job Object
+with CPU, memory, and one-active-process limits, resumes it, and waits for a versioned `READY`
+attestation before reading or writing any source bytes. Before its first `recv_bytes()`, the worker
+attests that it is in the expected LPAC, has exactly the one enabled `registryRead` capability, and
+proves its LPAC policy through the exact `WIN://NOALLAPPPKG` token security attribute, and is governed
+by the expected Job limits. No sandbox/profile/runtime cleanup failure may fall back to an ordinary
+child. The pipe endpoints are briefly marked inheritable for `CreateProcessW`; the launcher lock
+serializes its own launches, but cannot prevent an unrelated host thread from calling
+`CreateProcess(..., bInheritHandles=True)` during that window. Wave 1 is therefore limited to the
+one-shot CLI/broker process. A future uncooperative multi-threaded embedding must use a dedicated
+launcher with authenticated named pipes before it can rely on this boundary.
+
+The Step 15 PDF worker's one-active-process Job deliberately prevents it from launching Tesseract.
+Step 16 therefore has the broker launch `tesseract.exe` directly as the one active process in a
+separate LPAC Job. Before streaming rendered raster bytes, the broker verifies that Tesseract's token,
+capability policy, staged public program/data access, and Job limits match the OCR contract. It is not
+an ambient subprocess, a helper-wrapper child, or a child of the PDF worker. Non-Windows hosts fail
+closed before reading a statement. Windows CI proves the true-LPAC positive/negative attestation,
+pre-read startup ordering, cleanup behavior, and real-parser regression with fictional fixtures;
+Linux runs only portable logic and the pre-read fail-closed assertion. The dedicated AppContainer
+profile is isolated application state, not access to the caller's ordinary user profile.
 
 Page parsing is versioned. A `wf-v1` format fingerprint combines normalized page dimensions,
 required marker sets, and ordered table headers; it never uses a filename or account identifier.
@@ -676,6 +720,20 @@ exception body.
      autonomous, scheduled, background, or always-on behavior is added, so the autonomous-observation
      trigger does not fire. The explicit local smoke and attended Step 25 are sufficient for this
      one-shot data pipeline.
+15. **Native parsing is sandboxed before bytes cross the boundary.** Resource limits alone do not
+    restrict filesystem, network, or inherited-handle authority. Wave 1 therefore launches the
+    native PDF parser only in a Windows LPAC worker with exactly the CPython-required `registryRead`
+    capability, no network capability, an intended two-handle allowlist, public-only staged runtime,
+    Job Object containment, and a `READY` attestation. The boundary is only supported in the
+    one-shot CLI/broker: an arbitrary foreign `CreateProcess(..., bInheritHandles=True)` call during
+    the brief inheritable-handle window is out of scope until a dedicated named-pipe launcher exists.
+    If the boundary cannot be created and verified, parsing fails before the statement is read or sent.
+16. **Each native executable earns its own boundary.** The PDF worker's one-active-process Job
+    intentionally prevents a child Tesseract process. Step 16 must therefore have the broker launch
+    staged `tesseract.exe` directly as the one process in a separate LPAC Job and verify its token and
+    Job before streaming raster bytes. A need for network access, caller-profile/worktree access, an
+    ambient private-data directory, a helper wrapper, or an unenumerated capability blocks OCR rather
+    than widening the Step 15 PDF worker.
 
 ## 7. Build Steps
 
@@ -704,45 +762,85 @@ exception body.
 - **Status:** DONE (2026-09-01)
 
 <!-- autofix-applied: 2026-08-31 -->
-### Step 15: Parse supported native-text statement pages
+### Step 15: Parse supported native-text statement pages inside the pre-read LPAC boundary
 
 - **Problem:** Turn known Wells Fargo embedded-text pages into positioned tokens, dated balance
-  observations, and transaction rows using a versioned fail-closed document contract.
+  observations, and transaction rows using a versioned fail-closed document contract, without ever
+  letting a normal-process native engine receive private statement bytes.
 - **Type:** code
 - **Issue:** #42
 - **Flags:** `--reviewers deep --isolation worktree`
-- **Files:** `pta_finance/treasurer_slides/bank_statements.py`, `pyproject.toml`, `uv.lock`,
-  `.github/workflows/ci.yml`, `tests/test_treasurer_slides_bank_statements_native.py`, and fictional
-  native PDF fixtures
-- **Produces:** `pta_finance/treasurer_slides/bank_statements.py`, the `pypdfium2` Slides extra in
-  `pyproject.toml`/`uv.lock`, CI sync of both dev and Slides extras, fictional native-text PDF fixtures, and
-  `tests/test_treasurer_slides_bank_statements_native.py`
+- **Files:** `pta_finance/treasurer_slides/bank_statements.py`,
+  `pta_finance/treasurer_slides/native_sandbox.py`,
+  `pta_finance/treasurer_slides/native_worker.py`, `pyproject.toml`, `uv.lock`,
+  `.github/workflows/ci.yml`, `tests/test_treasurer_slides_bank_statements_native.py`,
+  `tests/test_treasurer_slides_native_sandbox.py`, and fictional native PDF fixtures
+- **Produces:** `pta_finance/treasurer_slides/bank_statements.py`, a narrow Windows LPAC/AppContainer
+  launcher and one-shot PDF-worker entry point, public-only staged runtime/profile lifecycle,
+  brokered request/response pipes with a `READY` attestation, the `pypdfium2` Slides extra in
+  `pyproject.toml`/`uv.lock`, Windows CI coverage, and fictional native-text/parser-boundary tests
 - **Done when:** every supported monthly/current page kind and known boilerplate is recognized by
   dimensions/markers/headers; char positions reconstruct non-overlapping debit/credit bands;
   balance bases and boundaries remain individually dated; transaction-table rows alone become
   activity; account identifiers are discarded; hard file/page/row/character/pixel limits and
   unknown/contradictory pages fail closed; and a base install without the optional extra still loads
-  every existing command while CI installs the extra and runs the native parser tests
+  every existing command. A native parser cannot read or receive source bytes unless its LPAC child
+  was created suspended, assigned to a kill-on-close Job Object, resumed, and returned a versioned
+  `READY` frame after self-attesting token and Job state. Before its first `recv_bytes()`, the worker
+  proves it is an AppContainer with exactly one enabled `registryRead` capability, the exact
+  `WIN://NOALLAPPPKG` LPAC-policy token attribute, and the required one-active-process, CPU, and
+  memory limits. The child uses an explicit AppContainer SID ACL only for its public staged runtime,
+  has a sanitized environment/safe working directory, cannot access caller profile/worktree paths or
+  the network, and receives only the intended request-reader and response-writer handles. Malformed
+  frames, output floods, timeout, crash, cleanup failure, and sandbox-start failure block without a
+  normal-process fallback or source-byte read/write. Per-run profile/runtime cleanup retains
+  ownership until the child is known to have exited; non-Windows hosts fail closed before source-file
+  reads. Windows CI proves real-parser regression, the true-LPAC positive/negative attestation,
+  pre-read ordering, and cleanup with fictional fixtures; Linux proves portable logic and pre-read
+  fail-closed behavior.
+- **Release constraint:** native parsing and its LPAC enforcement ship as one atomic Step 15 diff;
+  no direct-parser-only commit or private-source run is permitted. This boundary is limited to the
+  one-shot CLI/broker process because the short inheritable-handle window cannot prevent an
+  unrelated foreign `CreateProcess(..., bInheritHandles=True)` call; a future multi-threaded host
+  requires a dedicated launcher with authenticated named pipes.
 - **Depends on:** Step 14
 - **Status:** PENDING
+
+#### 15a: LPAC pre-read security gate (part of Step 15)
+
+The parent starts and validates the child before opening the source PDF. The child receives no
+private path or bytes in its command/configuration; it emits `READY` only after token/Job attestation.
+The broker then reads bounded bytes and passes them through the request pipe. This is an acceptance
+subsection of Step 15, not an independently dispatchable or issue-bearing build step.
 
 <!-- autofix-applied: 2026-08-31 -->
 ### Step 16: Add bounded positional Tesseract fallback
 
 - **Problem:** Parse image-only supported pages without using plain OCR reading order, persisting raw
-  OCR material, or weakening the native statement contract.
+  OCR material, weakening the native statement contract, or letting the one-process PDF worker spawn
+  Tesseract.
 - **Type:** code
 - **Issue:** #43
 - **Flags:** `--reviewers deep --isolation worktree`
-- **Files:** `pta_finance/treasurer_slides/bank_statements.py`, `.github/workflows/ci.yml`,
-  `tests/test_treasurer_slides_bank_statements_ocr.py`, and fictional raster PDF fixtures
-- **Produces:** the OCR adapter in `bank_statements.py`, Linux Tesseract 5 CI setup, fictional
-  image-only/low-confidence/timeout fixtures, and `tests/test_treasurer_slides_bank_statements_ocr.py`
+- **Files:** `pta_finance/treasurer_slides/bank_statements.py`,
+  `pta_finance/treasurer_slides/{native_sandbox,native_worker}.py`, `.github/workflows/ci.yml`,
+  `tests/test_treasurer_slides_bank_statements_ocr.py`,
+  `tests/test_treasurer_slides_native_sandbox.py`, and fictional raster PDF fixtures
+- **Produces:** the OCR adapter plus a separately broker-launched `tesseract.exe` one-process LPAC
+  Job; staged public Tesseract program/data assets and an explicitly tested minimum capability policy;
+  Windows Tesseract 5 CI setup; fictional image-only/low-confidence/timeout fixtures; and OCR/
+  sandbox regression tests
 - **Done when:** real Tesseract 5 TSV at 300 DPI emits the same semantic observation as the paired
   native fixture; x-position—not token order—sets debit/credit direction; financial tokens below the
   threshold, timeouts, process failures, row ambiguity, or unsupported fingerprints block with safe
-  errors; parser/OCR versions and evidence persist; current and stale path-contained temp artifacts
-  are removed under the declared rules; and CI executes the real OCR fixture
+  errors; parser/OCR versions and evidence persist; raster input and TSV output use bounded pipes,
+  while any allowed AppContainer-local fallback directory is removed only after Tesseract exits. The
+  PDF worker never launches Tesseract because its Job is limited to one active process. Instead, the
+  broker launches staged `tesseract.exe` directly as the one active process in a distinct LPAC Job and
+  verifies its token, Job limits, and explicitly enumerated minimum capabilities before it writes
+  raster bytes to the input pipe. The OCR process has no network or caller-profile/worktree access and
+  never writes private raster/OCR data to ambient disk. Windows CI installs Tesseract and executes the
+  real OCR fixture; Linux runs only portable OCR-contract and fail-closed coverage.
 - **Depends on:** Step 15
 - **Status:** PENDING
 
@@ -927,10 +1025,12 @@ exception body.
   CLI/privacy/packaging/smoke tests; `docs/generating-treasurer-summary.md`; and status/setup updates
   in `README.md`, `SETUP.md`, `CLAUDE.md`, and `plan.md`
 - **Done when:** dispatch resolves all three commands and old commands are unchanged; missing
-  extra/config/Tesseract/workspace/approval and stale locks fail actionably; a 60-second smoke uses
-  real pypdfium2, real Tesseract, real statement/rule/reconciliation/budget/fact/review/summary/
-  template-request components, and a fictional in-memory read-only grid to complete PDF-to-Slides-
-  request without mocks inside the data pipeline; tracked-file guard rejects canary private artifacts;
+  extra/config/Tesseract/workspace/approval and stale locks fail actionably; a Windows-only
+  60-second smoke uses real pypdfium2 in the Step 15 PDF worker, real Tesseract in Step 16's
+  directly broker-launched LPAC Job, real statement/rule/reconciliation/budget/fact/review/
+  summary/template-request components, and a fictional in-memory read-only grid to complete
+  PDF-to-Slides-request without mocks inside the data pipeline; Linux proves portable/static and
+  pre-read fail-closed coverage; tracked-file guard rejects canary private artifacts;
   runtime path-gate tests reject tracked/non-ignored private locations before read/write/network;
   wheel build/isolated install loads package/templates/entry point; full pytest, strict mypy, Ruff,
   existing report/reimbursement/CLI regressions, and identity guard pass; and docs cover diagnostic
@@ -966,6 +1066,8 @@ exception body.
   | Repository check | Source workbook/template/permissions are unchanged and no private artifact is tracked |
 - **Type:** operator
 - **Issue:** #52
+- **Files:** no tracked files; only configured gitignored private inputs/outputs and private Google
+  artifacts are inspected or created
 - **Produces:** only gitignored private input/rules/run/workspace artifacts, one app-owned private
   template, one private Google Slides candidate, and generic pass/fail plan/issue bookkeeping; no
   tracked code or detailed evidence
@@ -982,16 +1084,18 @@ exception body.
 - **Depends on:** Step 24
 - **Status:** PENDING
 
-Steps are deliberately sequential producer/consumer slices. Steps 14-16 establish normalized source
-facts, Steps 17-18 establish bank truth, Step 19 builds summary facts, Step 20 fixes the presentation
-plan, Step 21 binds both into the reviewed approval, Steps 22-23 cross the Google boundary in two
-recoverable stages, Step 24 proves the installed local workflow, and Step 25 is the only real-service
-visual acceptance.
+Steps are deliberately sequential producer/consumer slices. Step 14 establishes normalized source
+contracts; Step 15 adds native parsing and the enforceable pre-read LPAC boundary as one atomic slice;
+Step 16 adds bounded OCR; Steps 17-18 establish bank truth; Step 19 builds summary facts; Step 20
+fixes the presentation plan; Step 21 binds both into the reviewed approval; Steps 22-23 cross the
+Google boundary in two recoverable stages; Step 24 proves the installed local workflow; and Step 25 is
+the only real-service visual acceptance.
 
 ## 8. Risks and Open Questions
 
 | Item | Risk | Mitigation / decided handling |
 |---|---|---|
+| Native PDF/OCR engine compromise or ambient access | A malformed document or native dependency could read user data, use the network, or inherit a privileged handle | Step 15's LPAC with only CPython's `registryRead` capability, no network capability, intended two-handle list, public-only staged runtime, one-process Job limits, `READY`/token/Job attestation, cleanup ownership, and fail-closed behavior is mandatory before PDF bytes cross the boundary. The temporary inheritable-handle window is scoped to the one-shot CLI/broker; a future uncooperative multi-threaded host needs a dedicated named-pipe launcher. Step 16 has the broker launch Tesseract directly in a distinct LPAC Job; the PDF worker may not spawn it. |
 | Image-only or low-quality statements | OCR can drop punctuation, dates, digits, or debit/credit column position and create a plausible wrong transaction | Positioned TSV tokens, column bands, confidence gates, typed parsing, account/combined reconciliation, transaction-level private review, and real Step 25 comparison; any ambiguity or unexplained cent blocks |
 | Wells Fargo layout changes | A future statement may parse with wrong column association | Versioned format fingerprints and explicit unsupported-layout failure; later adapter update with a new fictional regression fixture |
 | Overlapping reports | Monthly plus current activity can double-count most of the window or let OCR replace stronger closed evidence | Closed monthly statements own posted closed dates; current activity supplements later/pending/latest facts; semantic disagreement requires an exact resolution |
@@ -1024,9 +1128,19 @@ approval states, scheduling, sharing, and the rest of the old graphic catalog.
   malformed digests, and temporary Git worktrees proving ignored/outside paths pass while tracked or
   non-ignored private paths block before access.
 - Embedded-text and raster-only fictional Wells Fargo pages; positioned-token/column reconstruction,
-  page fingerprints and boilerplate, fallback threshold, actual Tesseract TSV invocation,
+  page fingerprints and boilerplate, fallback threshold, actual Tesseract TSV invocation on Windows,
   date/amount/status/balance parsing, repeated transactions, low-confidence/malformed OCR, limits,
-  timeout, and current/stale temporary-file cleanup.
+  timeout, bounded pipe transfer, and streamed OCR data never reaching an ambient temporary
+  directory. Linux retains only portable OCR-contract tests and cannot execute the statement parser.
+- Native-boundary contract and Windows integration coverage: `READY` precedes every source-byte
+  transfer; true LPAC state, exactly one enabled `registryRead` capability, exact
+  `WIN://NOALLAPPPKG` LPAC-policy token attribute, expected Job limits, sanitized environment/current
+  directory, intended two-handle inheritance, malformed-frame/output/timeout/crash handling, and
+  per-run profile/runtime cleanup are proved with fictional canaries. The test suite records the
+  CLI-only concurrent-process limitation rather than claiming a live proof against an arbitrary
+  foreign `CreateProcess` race. Step 16 has a separate direct-Tesseract boundary suite, including
+  broker-side token/Job verification before raster input, and cannot be spawned by the PDF worker.
+  Linux and other non-Windows runs prove fail-closed behavior before a statement file is read.
 - Closed-statement overlap authority, exact disagreement resolution, source versus semantic identity,
   explicit/back-solved balances, anchor validation, transfer/reversal key/uniqueness/ambiguity,
   refunds/chargebacks/boundary returns, mixed-cutoff transfers, pending basis, classification
@@ -1058,12 +1172,14 @@ approval states, scheduling, sharing, and the rest of the old graphic catalog.
 
 ### Real-component smoke gate
 
-Step 24 adds a sub-60-second smoke before the live operator step. It installs/uses real pypdfium2 and
-Tesseract, extracts one text and one raster fictional statement, passes the rows through the real
+Step 24 adds a sub-60-second Windows smoke before the live operator step. It uses real pypdfium2 in
+the Step 15 PDF worker and real Tesseract in Step 16's directly broker-launched LPAC Job, extracts
+one text and one raster fictional statement, passes the rows through the real
 rules/reconciliation/budget/fact/review/summary/template-request pipeline, and asserts one complete
 Google request plan with exact reconciliation and no unresolved role. Only the external Sheet and
-Google network boundaries use controlled fictional adapters; no producer/consumer boundary inside
-the feature is mocked.
+Google network boundaries use controlled fictional adapters; no producer/consumer boundary inside the
+feature is mocked. Linux keeps portable/static coverage and verifies that native parsing fails closed
+before a statement read.
 
 ### Regression, packaging, and privacy gates
 
@@ -1086,9 +1202,10 @@ paths, and detailed evidence remain private.
 
 ## Next Step
 
-Plan review and fresh-context wrap are `READY`. Repository synchronization created Wave 1 umbrella
-#40 and step issues #41-#52, backfilled every `Issue:` field, and closed the superseded Phase 5 issue
-set #26-#39 with a generic note. Run:
+The Step 15a security gate is part of executable Step 15, so it updates the existing Wave 1 issue
+#42 rather than creating an unexecutable fractional-step issue. Before further phase orchestration,
+refresh plan review and fresh-context wrap, then synchronize the existing Wave 1 umbrella/step issues
+#40-#52. The superseded Phase 5 set #26-#39 remains closed with a generic note. Then run:
 
 ```text
 /build-phase --plan documentation/treasurer-summary-wave-1-plan.md
