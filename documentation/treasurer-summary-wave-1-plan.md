@@ -809,7 +809,7 @@ exception body.
   numbers; private bytes cross only the two direct-duplicated anonymous endpoints after both
   attestations.
 - **Depends on:** Step 14
-- **Status:** PENDING
+- **Status:** DONE (2026-09-02; atomic implementation merged and Linux/Windows CI passed)
 
 #### 15a: LPAC pre-read security gate (part of Step 15)
 
