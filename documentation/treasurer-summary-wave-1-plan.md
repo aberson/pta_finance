@@ -116,7 +116,7 @@ Drive permissions, publishes, or sends anything.
 | File | Change Type | Reason | Verified |
 |---|---|---|---|
 | `pta_finance/treasurer_slides/{__init__,models}.py` | extend | Keep Step 14's package boundary and strict private models compatible with the parser contracts | Step 14 added both tracked files; their public types are the Wave 1 producer/consumer boundary |
-| `pta_finance/treasurer_slides/{bank_statements,native_sandbox,native_worker}.py` | add | Strict positioned token/page, statement, account, balance, transaction, OCR, and Windows-native-parser sandbox contracts | Step 14 intentionally did not add a bank/PDF/OCR producer; private inspection confirmed four text PDFs and two image-only PDFs |
+| `pta_finance/treasurer_slides/{bank_statements,native_sandbox,native_worker}.py` | add | Strict positioned token/page, statement, account, balance, transaction, OCR, and Windows-native-parser sandbox contracts | Step 15 added the fictional-native-text parser and pre-read LPAC boundary; image-only OCR remains Step 16 |
 | `pta_finance/treasurer_slides/{rules,reconciliation,facts,budget_goals}.py` | add | Source authority, dated intervals, classification, exact adjustments, transfer/reversal handling, strict raw-grid budget-goal read, signed reconciliation, pace, and narrative | Current approved prototype hardcodes these results; `report_source.py:62,88-119` identifies the live tab and proves dictionary projection loses duplicate-header evidence |
 | `pta_finance/treasurer_slides/{summary,template}.py` | add | Approved layout roles, text formatting, category folding, bar geometry, template inspection, and pure Slides request plan | The target render modules are absent; the existing package currently contains only contracts and must remain compatible |
 | `pta_finance/treasurer_slides/google_client.py` | add | Dedicated exact-scope OAuth, template import/copy, Slides merge, app-owned candidate lookup, and redacted API boundary | `gmail_source.py:118,402,586,621,661` confirms the separate OAuth precedent; no Slides/Drive presentation client exists |
@@ -125,14 +125,14 @@ Drive permissions, publishes, or sends anything.
 | `pta_finance/config.py` | extend | Add optional `TreasurerSlides` paths/settings with `None` preserving existing configs | `rg '\bConfig\('` finds the sole constructor at `config.py:242`; no caller directly constructs `Config` elsewhere |
 | `config.example.toml` | extend | Add fictional optional Treasurer Slides/OCR path examples | File read in full; optional `[gmail]` and `[receipt_mapping]` blocks are the existing compatibility pattern |
 | `pta_finance/cli.py` | extend | Register init, prepare, and create commands without changing existing flags | `build_parser` is at `cli.py:1320`; all 13 current `set_defaults(func=...)` registrations are local to that function and remain intact |
-| `pyproject.toml`, `uv.lock` | extend | Add a `slides` extra with permissively licensed `pypdfium2`; document Tesseract 5 as a system dependency | Dependency table read in full; no PDF-input/OCR package or Slides extra is present; Google API/auth clients already exist; PyMuPDF was rejected because its official distribution is AGPL/commercial |
-| `.github/workflows/ci.yml` | extend | Keep portable/static and fail-closed coverage on Linux; on Windows, install the Slides extra and Tesseract, then exercise the LPAC native-parser/OCR boundaries and real-component smoke | Workflow currently runs `uv sync --extra dev` and has no system-package step |
+| `pyproject.toml`, `uv.lock` | extend | Add a `slides` extra with permissively licensed `pypdfium2`; document Tesseract 5 as a system dependency | Step 15 added the `slides` extra and locked `pypdfium2`; Tesseract 5 remains a Step 16 system dependency; Google API/auth clients already exist; PyMuPDF was rejected because its official distribution is AGPL/commercial |
+| `.github/workflows/ci.yml` | extend | Keep portable/static and fail-closed coverage on Linux; on Windows, install the Slides extra and Tesseract, then exercise the Low Privilege AppContainer (LPAC) native-parser/OCR boundaries and real-component smoke | Step 15 added the Slides extra plus Linux fail-closed and Windows native-parser jobs; Tesseract setup and the real-component smoke remain Steps 16 and 24 |
 | `scripts/check_no_identity.py` | extend | Reject tracked Treasurer statements, templates, run artifacts, tokens, and real-resource manifests while preserving fictional tests | Script currently checks service-account markers plus the optional identity denylist only; its sole CI invocation is `.github/workflows/ci.yml` |
 | `tests/test_treasurer_slides_models.py` | extend | Keep Step 14 manifest/model contracts compatible with parser facts | Step 14 added the tracked fictional model suite |
-| `tests/test_treasurer_slides_{bank_statements_native,native_sandbox,bank_statements_ocr,source_authority,rules,reconciliation,budget_goals,facts,summary,template,pipeline,auth,workspace,google_candidate,cli,smoke}.py`, `tests/fixtures/treasurer_slides/**` | add | Fictional positioned PDF/OCR, parser-boundary, source authority, reconciliation, budget, review, template, Google fake, CLI, privacy, packaging, and smoke coverage | Step 14 deliberately added only model tests; no parser/OCR/Slides test or fixture exists yet |
+| `tests/test_treasurer_slides_{bank_statements_native,native_sandbox,bank_statements_ocr,source_authority,rules,reconciliation,budget_goals,facts,summary,template,pipeline,auth,workspace,google_candidate,cli,smoke}.py`, `tests/fixtures/treasurer_slides/**` | add | Fictional positioned PDF/OCR, parser-boundary, source authority, reconciliation, budget, review, template, Google fake, CLI, privacy, packaging, and smoke coverage | Step 15 added fictional native-text/parser-boundary suites; OCR, source authority, reconciliation, presentation, Google, CLI, and smoke coverage remain later steps |
 | `tests/test_config.py` | extend | Prove the optional Treasurer Slides block preserves legacy configs and validates every supplied path | Existing optional-section coverage is at `tests/test_config.py:113-175`; no Treasurer Slides block exists |
 | `docs/generating-treasurer-summary.md` | add | Exact operator setup, inputs, review, OAuth, creation, and recovery procedure | Docs glob confirms no Treasurer summary guide exists |
-| `README.md`, `SETUP.md`, `CLAUDE.md`, `plan.md` | extend | Document the new optional command surface, dependency, privacy boundary, status, and staged roadmap | Each file exists and was read during discovery; current project status does not mention the staged Wave 1 workflow |
+| `README.md`, `SETUP.md`, `CLAUDE.md`, `plan.md` | extend | Document the new optional command surface, dependency, privacy boundary, status, and staged roadmap | README and CLAUDE now record the Step 15 foundation; operator command/setup documentation remains Step 24 |
 
 No existing function signature, schema field, or shared constant changes in Wave 1.
 `report_source.read_timeseries()` and its five existing callers remain unchanged. The new
@@ -237,15 +237,34 @@ using permissively licensed `pypdfium2` for both embedded text and rasterization
 comes only from the input manifest. Masked/full account identifiers encountered in a document are
 discarded and never become model or log fields.
 
+`StatementExtractor` is the narrow producer boundary:
+
+```text
+extract(
+  source_path: Path,
+  *,
+  document_ordinal: positive int,
+  document: DocumentSpec,
+) -> StatementObservation
+```
+
+`source_path` is the prevalidated local file for exactly the manifest-declared `document`; the
+extractor must reject a mismatched role/kind or an unsafe/missing path before producing facts.
+`StatementObservation` carries the safe ordinal, `DocumentSpec`, source SHA-256, parser version,
+coverage/capture dates, page evidence, normalized transactions, and balance observations. The only
+allowed failures are safe `PrivateInputError`, `SlidesDependencyError`, or
+`StatementExtractionError` outcomes: unsupported layout, limit, sandbox, parser, or confidence
+failure blocks and reveals neither source text nor a private path.
+
 Both native and OCR paths emit the same `PositionedToken` records: page number, normalized
 page-relative bounding box, text, extraction method, and confidence (`100` for native text).
 Native characters are grouped into words by line and x-gap. A page with fewer than 80 non-whitespace
 native characters or without a known page fingerprint is rasterized at 300 DPI and streamed through
-the Step 16 LPAC Tesseract boundary to Tesseract major version 5 as `eng`, OEM 1, PSM 6, TSV output,
-with a 45-second per-page timeout. Tesseract is invoked with an argument array and no shell. Any
-token used for a date, money, direction, status, balance, or table header with confidence below 75
-blocks parsing; low-confidence
-description-only tokens remain visible as review evidence.
+the Step 16 LPAC Tesseract boundary to Tesseract major version 5 using `eng` (English), OCR Engine
+Mode (OEM) 1, Page Segmentation Mode (PSM) 6, and tab-separated-values (TSV) output, with a
+45-second per-page timeout. Tesseract is invoked with an argument array and no shell. Any token used
+for a date, money, direction, status, balance, or table header with confidence below 75 blocks
+parsing; low-confidence description-only tokens remain visible as review evidence.
 
 The hard v1 limits are 25 MiB per PDF, 25 pages, 2,000,000 extracted characters, 20,000,000 rendered
 pixels per page, and 2,500 transaction rows per document. Raster input and TSV output cross the
@@ -278,12 +297,16 @@ launches cannot receive a PDF-channel handle.
 The Step 15 PDF worker's one-active-process Job deliberately prevents it from launching Tesseract.
 Step 16 therefore has the broker launch `tesseract.exe` directly as the one active process in a
 separate LPAC Job. Before streaming rendered raster bytes, the broker verifies that Tesseract's token,
-capability policy, staged public program/data access, and Job limits match the OCR contract. It is not
-an ambient subprocess, a helper-wrapper child, or a child of the PDF worker. Non-Windows hosts fail
-closed before reading a statement. Windows CI proves the true-LPAC positive/negative attestation,
-pre-read startup ordering, cleanup behavior, and real-parser regression with fictional fixtures;
-Linux runs only portable logic and the pre-read fail-closed assertion. The dedicated AppContainer
-profile is isolated application state, not access to the caller's ordinary user profile.
+capability policy, staged public program/data access, and Job limits match the OCR contract. The OCR
+LPAC has exactly one enabled capability, `registryRead`; it has no network capability and opts out of
+`ALL_APPLICATION_PACKAGES`. Its SID receives read/execute access only to an enumerated staged
+Tesseract executable, its required DLLs, and the required `tessdata`/locale assets; a missing asset,
+ACL mismatch, or extra capability blocks rather than widening the sandbox. It is not an ambient
+subprocess, a helper-wrapper child, or a child of the PDF worker. Non-Windows hosts fail closed before
+reading a statement. Windows CI proves the true-LPAC positive/negative attestation, pre-read startup
+ordering, cleanup behavior, and real-parser regression with fictional fixtures; Linux runs only
+portable logic and the pre-read fail-closed assertion. The dedicated AppContainer profile is isolated
+application state, not access to the caller's ordinary user profile.
 
 Page parsing is versioned. A `wf-v1` format fingerprint combines normalized page dimensions,
 required marker sets, and ordered table headers; it never uses a filename or account identifier.
@@ -532,6 +555,21 @@ preparing a new run.
 `summary.py` is a pure builder from `SummaryFacts` to a `SummarySlidePlan`. It contains generic
 theme tokens, formatting rules, role names, text, and dynamic geometry derived from the approved
 private v0. It contains no real organization identity, logo, value, source path, or screenshot.
+
+`SummarySlidePlan` is a canonical private value with this serialized shape:
+
+| Field | Type | Constraint |
+|---|---|---|
+| `facts_sha256` | 64-character lowercase SHA-256 | Binds the plan to one immutable `SummaryFacts` payload |
+| `page_size` | `{width, height}` | Exact 16:9 canvas dimensions used by every geometry value |
+| `text_by_role` | ordered mapping `role -> formatted text` | Contains each declared dynamic role exactly once; values are the complete rendered strings |
+| `stacked_bars` | ordered spending/fundraising slot plans | Each entry names its group/slot/roles and carries exact amount, share, and absolute x/y/width/height geometry |
+| `progress_rows` | ordered fundraising/spending progress plans | Each entry carries actual, goal, elapsed benchmark, pace label, clamped ratio, and absolute bar geometry |
+| `operations` | ordered semantic text/transform operations addressed by role | `replace_text` or `set_transform` only; no Google object IDs appear until the template projection joins a role to a discovered object |
+
+Canonical serialization preserves field and array order, renders money and ratios deterministically,
+and rejects an unknown/duplicate role, non-finite value, invalid ratio, or overlapping/out-of-bounds
+geometry before a review artifact or Google client exists.
 
 The private template is one exact 16:9 slide. Its organization name/header, logo, and branding are
 static private template content and never enter `SummaryFacts` or a replacement request. The

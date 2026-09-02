@@ -26,6 +26,7 @@ analytics engine (spend by category/grade, budget-vs-actual, multi-year trends),
 | Analytics | `pandas` |
 | Charts | `matplotlib` (Agg backend) |
 | Templating | `Jinja2`; optional `[pdf]` → `WeasyPrint` |
+| Native statement parsing (foundation) | optional `[slides]` → `pypdfium2`, Windows LPAC worker |
 | CLI / config | stdlib `argparse` / `tomllib` |
 | Scheduler | GitHub Actions cron (`0 9 1 * *`) + `workflow_dispatch` |
 | Lint / type / test | `ruff`, `mypy --strict`, `pytest` |
@@ -33,7 +34,7 @@ analytics engine (spend by category/grade, budget-vs-actual, multi-year trends),
 ## 3. Key commands
 
 ```bash
-uv sync --extra dev                 # install (add [pdf] for WeasyPrint)
+uv sync --extra dev                 # install (add [pdf] for WeasyPrint; [slides] for the Windows-only native-parser foundation)
 uv run pytest -q                    # test
 uv run ruff check .                 # lint
 uv run ruff format --check .        # format check
@@ -91,6 +92,8 @@ pta_finance/        package (flat layout): config, ids, schema, models, sheets,
                     HTML/email rendering),
                     budget_sync (editable-budget-tab → Budget Timeseries reconcile),
                     report_source (Budget Timeseries → report/analyze inputs),
+                    treasurer_slides (strict private models + a Windows LPAC-isolated native-text
+                    parser foundation; later Wave 1 steps add OCR, facts, review, and Slides),
                     analytics/, reports/(templates/)
 tests/              fake-org fixtures + mocked gspread; test_smoke_pipeline.py is the wiring gate
 .github/            last-run.txt (scheduler keepalive) + workflows/ci.yml (PR gate)
@@ -137,6 +140,11 @@ documentation/      committed feature plans (e.g. gmail-ingest-plan.md)
   reviewed evidence fails closed if it changes or disappears. Secondary approval applies only to
   an exact parsed proposal and trailing prose is not interpreted. `report-reimbursements` is
   offline; `update-reimbursements` may acquire Gmail first but never sends mail or writes Sheets.
+- **Treasurer-summary foundation** (`treasurer_slides/`): strict private models plus an optional
+  Windows-only native-text parser in a pre-read LPAC boundary. It accepts private PDF bytes only
+  after attestation, tests with fictional fixtures, and fails closed before a statement read on
+  non-Windows hosts. It is not yet an operator command or Google Slides workflow; later Wave 1
+  steps add OCR, finance facts, review, and presentation creation.
 - **Access:** Sheet/Drive access uses a Google **service account** (the Sheet + Drive folder are
   shared with its email); its JSON key is gitignored locally and supplied as a base64 GitHub
   Actions secret in CI. Optional Gmail fetching uses a separate OAuth Desktop-app client plus a
@@ -147,7 +155,12 @@ documentation/      committed feature plans (e.g. gmail-ingest-plan.md)
 **v1 automated build COMPLETE (Steps 1–8, issues #1–#8 closed).** The full pipeline works end-to-end
 under test: Sheets client, ETL/normalize, analytics, internal/external reports (runtime PII guard),
 smoke gate, and the monthly GitHub Actions workflow. The full test suite, `mypy --strict`, and Ruff
-gates pass. **Phase-4 receipt ingestion has shipped end-to-end:** `receipt_ingest.py` (`.eml`/`.mbox`
+gates pass. **Treasurer-summary Wave 1 Step 15 is complete, but it is only a foundation:** the
+optional `[slides]` extra runs native-text PDF parsing inside an attested Windows LPAC worker, with
+fictional fixtures proving the boundary and non-Windows hosts failing closed before a statement
+file is read. It is not yet an operator-facing slide command; OCR, reconciliation, facts, review,
+Google creation, and private acceptance remain Steps 16–25. **Phase-4 receipt ingestion has shipped
+end-to-end:** `receipt_ingest.py` (`.eml`/`.mbox`
 parser + PII-free batch `Profile` + `Re:`/`Fwd:` dedup) + `receipt_map.py` (`Submission` → flat ledger
 rows) drive the `ingest-receipts` (preview / `--profile`) and `map-receipts` (`--write-tab`) CLIs,
 which land receipts in a flat **Reimbursements** Sheet tab (via `SheetsClient.replace_tab_grid`) that a
@@ -171,9 +184,9 @@ refreshes stable-keyed original submissions plus supplemental email events, appe
 new submissions as unreviewed, supplies non-authoritative item-level recommendations, and renders.
 Exact RFC/private-anchor linkage supports follow-up receipts, clarification, payment, and scoped
 secondary approval while quarantining ambiguity; existing reviewed evidence fails closed if it
-changes or disappears. Neither command sends mail or writes Sheets. The current repository gate is
-**535 tests passing** (plus one optional skip), zero strict-mypy errors, and zero Ruff lint/format
-violations.
+changes or disappears. Neither command sends mail or writes Sheets. The current repository gate
+has **849 collected tests**; the final Linux and Windows CI run passed, with zero strict-mypy
+errors and zero Ruff lint/format violations.
 **The Gmail read-only ingest connector has also shipped** (`documentation/gmail-ingest-plan.md`,
 tracking span #15–#22; deferred #18 and its umbrella #22 remain open): `gmail_source.py` + the
 `fetch-mail` CLI replace the manual Google Takeout export —
@@ -206,6 +219,9 @@ setup + M2 real-sheet smoke are DONE). **Next = operator-gated observation:** M3
 ## 7. Environment requirements
 
 - Windows 11 + Python `>=3.12`; `uv` on PATH. No `pip` (uv-managed).
+- **For the optional Treasurer Slides native-text foundation only:** a Windows host and
+  `uv sync --extra dev --extra slides`. `pypdfium2` runs only in the LPAC worker; there is no
+  supported operator command until the remaining Wave 1 steps ship.
 - A Google account with a Cloud project (Sheets API + Drive API enabled) and a service account
   whose JSON key sits at `secrets/service-account.json`.
 - The target spreadsheet + Drive folders shared with the service-account email (Editor).

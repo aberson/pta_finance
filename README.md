@@ -47,6 +47,7 @@ sheet you already edited — is in **[docs/using-the-spreadsheet.md](docs/using-
 | Analytics | `pandas` | By-category / grade / month aggregation, trends |
 | Charts | `matplotlib` (Agg backend) | Deterministic, headless, zero-browser in CI |
 | Templating | `Jinja2` (+ optional `WeasyPrint` for PDF) | Two report variants; HTML output, PDF optional |
+| Native statement parsing (foundation) | optional `pypdfium2` `slides` extra in a Windows LPAC worker | Parse private PDF bytes only after a fail-closed sandbox attestation |
 | CLI / config | stdlib `argparse` / `tomllib` | No extra dependency |
 | Scheduler | GitHub Actions cron | Free, cloud-hosted monthly run |
 | Lint / type / test | `ruff`, `mypy --strict`, `pytest` | — |
@@ -160,8 +161,15 @@ responses, and scoped secondary approvals; ambiguous mail remains visible but ca
 ticket. New submissions receive non-authoritative item-level recommendations while their recorded
 decision remains **unreviewed**. Neither command sends mail or writes Sheets. Existing reviewed
 records fail closed if their source evidence changes or disappears, so a refresh cannot silently
-attach an old decision to different evidence. The current repository gate is **535 tests passing**
-(plus one optional skip), zero strict-mypy errors, and zero Ruff lint/format violations.
+attach an old decision to different evidence. The current repository gate has **849 collected
+tests**; the final Linux and Windows CI run passed, with zero strict-mypy errors and zero Ruff
+lint/format violations.
+
+**Treasurer-summary Wave 1 foundation (Step 15) complete** — the optional `slides` extra now
+contains a Windows-only, LPAC-isolated native-text PDF parser tested only with fictional fixtures.
+Non-Windows hosts fail closed before a statement file is read. This is deliberately not yet an
+operator-facing slide workflow: OCR, reconciliation, budget facts, review, Google Slides creation,
+and private acceptance remain in the later Wave 1 steps.
 
 The live `map-receipts --write-tab` path was revalidated on 2026-08-20 with a pre-write snapshot
 and a semantic read-back reconciliation. Private mailbox counts, financial totals, and generated
