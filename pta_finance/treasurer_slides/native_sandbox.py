@@ -255,19 +255,42 @@ class _ProcessInformation(ctypes.Structure):
     ]
 
 
+def _raise_sandbox_unavailable() -> NoReturn:
+    raise NativeSandboxUnavailable("native statement sandbox is unavailable") from None
+
+
+def _windows_dll(name: str) -> Any:
+    """Load a Windows DLL without exposing platform-only ctypes members to Linux mypy."""
+
+    loader: Any = getattr(ctypes, "WinDLL", None)
+    if loader is None:
+        _raise_sandbox_unavailable()
+    return loader(name, use_last_error=True)
+
+
+def _windows_last_error() -> int:
+    getter: Any = getattr(ctypes, "get_last_error", None)
+    if getter is None:
+        _raise_sandbox_unavailable()
+    return int(getter())
+
+
+def _windows_handle_is_inheritable(handle: int) -> bool:
+    getter: Any = getattr(os, "get_handle_inheritable", None)
+    if getter is None:
+        _raise_sandbox_unavailable()
+    return bool(getter(handle))
+
+
 def _windows_apis() -> tuple[Any, Any, Any, Any]:
     if os.name != "nt":
         raise NativeSandboxUnavailable("native statement parsing requires the Windows sandbox")
     return (
-        ctypes.WinDLL("kernel32", use_last_error=True),
-        ctypes.WinDLL("advapi32", use_last_error=True),
-        ctypes.WinDLL("userenv", use_last_error=True),
-        ctypes.WinDLL("ole32", use_last_error=True),
+        _windows_dll("kernel32"),
+        _windows_dll("advapi32"),
+        _windows_dll("userenv"),
+        _windows_dll("ole32"),
     )
-
-
-def _raise_sandbox_unavailable() -> NoReturn:
-    raise NativeSandboxUnavailable("native statement sandbox is unavailable") from None
 
 
 def _close_handle(kernel32: Any, handle: int | None) -> None:
@@ -307,8 +330,8 @@ def _local_free(local_free: Any, value: int | None) -> None:
 def _registry_read_capability() -> _CapabilitySet:
     """Derive the one non-network LPAC capability required by the staged CPython runtime."""
 
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernelbase = ctypes.WinDLL("kernelbase", use_last_error=True)
+    kernel32 = _windows_dll("kernel32")
+    kernelbase = _windows_dll("kernelbase")
     local_free = kernel32.LocalFree
     local_free.argtypes = (ctypes.c_void_p,)
     local_free.restype = ctypes.c_void_p
@@ -764,7 +787,7 @@ def _make_attribute_list(kernel32: Any, count: int) -> tuple[Any, int]:
     initializer.restype = ctypes.c_int
     size = ctypes.c_size_t()
     if initializer(None, count, 0, ctypes.byref(size)) or (
-        ctypes.get_last_error() != _WINDOWS_ERROR_INSUFFICIENT_BUFFER
+        _windows_last_error() != _WINDOWS_ERROR_INSUFFICIENT_BUFFER
     ):
         _raise_sandbox_unavailable()
     if size.value < 1:
@@ -880,7 +903,7 @@ def _current_process_user_sid_text() -> str:
                 0,
                 ctypes.byref(returned),
             )
-            or ctypes.get_last_error() != _WINDOWS_ERROR_INSUFFICIENT_BUFFER
+            or _windows_last_error() != _WINDOWS_ERROR_INSUFFICIENT_BUFFER
         ):
             _raise_sandbox_unavailable()
         if returned.value < ctypes.sizeof(_SidAndAttributes):
@@ -1325,7 +1348,7 @@ def _token_app_container_sid_matches(
             0,
             ctypes.byref(returned),
         )
-        or ctypes.get_last_error() != _WINDOWS_ERROR_INSUFFICIENT_BUFFER
+        or _windows_last_error() != _WINDOWS_ERROR_INSUFFICIENT_BUFFER
     ):
         return False
     if returned.value < ctypes.sizeof(_TokenAppContainerInformation):
@@ -1821,7 +1844,9 @@ def start_native_pdf_worker(
         response_receiver, response_sender = context.Pipe(duplex=False)
         request_handle = int(request_receiver.fileno())
         response_handle = int(response_sender.fileno())
-        if os.get_handle_inheritable(request_handle) or os.get_handle_inheritable(response_handle):
+        if _windows_handle_is_inheritable(request_handle) or _windows_handle_is_inheritable(
+            response_handle
+        ):
             _raise_sandbox_unavailable()
         request_child_handle = _duplicate_handle_into_worker(request_handle, process)
         response_child_handle = _duplicate_handle_into_worker(response_handle, process)
