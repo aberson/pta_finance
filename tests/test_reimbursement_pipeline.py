@@ -55,6 +55,7 @@ def _write_eml(
     amount: str = "12.50",
     stated_total: str | None = None,
     receipt_label: str | None = None,
+    payment_type: str = "Check",
 ) -> None:
     """Write one obviously fictional reimbursement submission as RFC-822 bytes."""
     message = EmailMessage()
@@ -81,7 +82,7 @@ Supplies
 Total Amount $:
 {stated_total if stated_total is not None else amount}
 Choose Payment Type:
-Check
+{payment_type}
 {f"{receipt_label}:\nhttps://receipts.example.invalid/fake-receipt" if receipt_label else ""}
 """
     )
@@ -174,20 +175,25 @@ def _write_anchors(
     thread_anchors: list[dict[str, object]] | None = None,
     direct_links: list[dict[str, object]] | None = None,
     operator_reviews: list[dict[str, object]] | None = None,
+    payment_links: list[dict[str, object]] | None = None,
+    operator_payments: list[dict[str, object]] | None = None,
+    schema_version: int = 1,
 ) -> None:
+    payload: dict[str, object] = {
+        "schema_version": schema_version,
+        "actors": {
+            "payment_operators": list(payment_operators),
+            "secondary_approvers": list(secondary_approvers),
+        },
+        "thread_anchors": thread_anchors or [],
+        "direct_links": direct_links or [],
+        "operator_reviews": operator_reviews or [],
+    }
+    if schema_version == 2:
+        payload["payment_links"] = payment_links or []
+        payload["operator_payments"] = operator_payments or []
     path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "actors": {
-                    "payment_operators": list(payment_operators),
-                    "secondary_approvers": list(secondary_approvers),
-                },
-                "thread_anchors": thread_anchors or [],
-                "direct_links": direct_links or [],
-                "operator_reviews": operator_reviews or [],
-            }
-        ),
+        json.dumps(payload),
         encoding="utf-8",
     )
 
@@ -324,6 +330,83 @@ def _expected_review_key(message_id: str) -> str:
 def _expected_line_key(review_key: str, source_index: int) -> str:
     payload = f"{review_key}\0{source_index}".encode()
     return "line:v1:" + hashlib.sha256(payload).hexdigest()
+
+
+def _reference_sha256(reference: str) -> str:
+    return hashlib.sha256(reference.encode("utf-8")).hexdigest()
+
+
+def _approve_review(
+    message_id: str,
+    ref: str,
+    *,
+    reviewed_amount: str = "",
+    email_context: str = "",
+) -> dict[str, object]:
+    return {
+        "ticket": _selector(message_id, ref),
+        "record_decision": True,
+        "items": [
+            {
+                "source_index": 1,
+                "status": "A",
+                "why": "Synthetic source evidence was explicitly approved.",
+                "reviewed_amount": reviewed_amount,
+            }
+        ],
+        "action": "No further review action",
+        "block": "Synthetic ticket is approved and awaiting exact payment evidence.",
+        "asks": [],
+        "note": "Synthetic explicit operator approval.",
+        "email_questions": [],
+        "email_context": email_context,
+    }
+
+
+def _generated_payment_body(
+    amount: str,
+    reference: str,
+    *,
+    signoff: tuple[str, ...] = ("Thank you!", "Example Treasurer Team"),
+    context: str = "",
+) -> str:
+    body = f"""\
+Hello Morgan,
+
+Your ${amount} reimbursement has been approved and sent by Zelle.
+Zelle confirmation: {reference}"""
+    if context:
+        body += f"\n\n{context}"
+    return body + "\n\n" + "\n".join(signoff) + "\n"
+
+
+def _grouped_payment_body(
+    first_reference: str,
+    first_amount: str,
+    second_reference: str,
+    second_amount: str,
+) -> str:
+    return f"""\
+Hello,
+
+Your Reimbursements have been approved and sent by Zelle.
+
+Zelle confirmations
+
+Morgan Example
+Zelle - first synthetic destination
+Classroom Supplies
+{first_reference}
+{first_amount}
+
+Riley Example
+Zelle - second synthetic destination
+{second_reference}
+{second_amount}
+
+Thank you!
+Example Treasurer Team
+"""
 
 
 def test_cutoff_is_applied_before_content_dedup_for_real_eml(tmp_path: Path) -> None:
@@ -1112,6 +1195,98 @@ def test_operator_payment_settles_only_exact_link_and_keeps_discrepancy(tmp_path
     assert bundle_path.read_bytes() == persisted
 
 
+def test_schema_v1_payment_discrepancy_preserves_source_total_semantics(tmp_path: Path) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    original_id = "<v1-source-total-ticket@example.invalid>"
+    outbound_id = "<v1-source-total-outbound@example.invalid>"
+    payment_id = "<v1-source-total-payment@example.invalid>"
+    reference = "V1SOURCETOTAL900"
+    _write_eml(
+        source / "original.eml",
+        message_id=original_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        amount="12.50",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_mail(
+        source / "outbound.eml",
+        message_id=outbound_id,
+        received="Fri, 06 Sep 2030 08:00:00 +0000",
+        sender="treasurer@example.invalid",
+        body="Synthetic source-total follow-up.",
+    )
+    review = _approve_review(original_id, "NEW-01", reviewed_amount="10.00")
+    _write_anchors(
+        anchors_path,
+        schema_version=1,
+        payment_operators=("payments@example.invalid",),
+        thread_anchors=[
+            {
+                "message_id": outbound_id,
+                "purpose": "CASE",
+                "tickets": [_selector(original_id, "NEW-01")],
+            }
+        ],
+        operator_reviews=[review],
+    )
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    reviewed = json.loads(bundle_path.read_text(encoding="utf-8"))
+    ticket = next(item for item in reviewed["tickets"] if item["ref"] == "NEW-01")
+    assert ticket["items"][0]["source_amount"] == "12.50"
+    assert ticket["items"][0]["reviewed_amount"] == "10.00"
+
+    _write_mail(
+        source / "payment.eml",
+        message_id=payment_id,
+        received="Sat, 07 Sep 2030 08:00:00 +0000",
+        sender="payments@example.invalid",
+        body=f"Payment sent: $9.00. Reference {reference}.",
+        in_reply_to=outbound_id,
+        references=(outbound_id,),
+    )
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+
+    refreshed = json.loads(bundle_path.read_text(encoding="utf-8"))
+    discrepancy = next(
+        event
+        for event in refreshed["supplemental"]["events"]
+        if event["kind"] == "PAYMENT_DISCREPANCY"
+    )
+    assert discrepancy["amount"] == "9.00"
+    assert discrepancy["reference"] == reference
+    assert discrepancy["discrepancy"] == ("Payment amount $9.00 differs from ticket total $12.50.")
+    stable_bytes = bundle_path.read_bytes()
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    assert bundle_path.read_bytes() == stable_bytes
+
+
 def test_direct_mail_requires_explicit_anchor_and_unknown_candidate_is_visible(
     tmp_path: Path,
 ) -> None:
@@ -1670,3 +1845,1329 @@ def test_held_only_approval_grant_replays_idempotently(tmp_path: Path) -> None:
         anchors_path=anchors_path,
     )
     assert bundle_path.read_bytes() == first_bytes
+
+
+def test_production_refresh_reaches_payment_link_and_operator_payment_lanes(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    mail_ticket_id = "<lane-mail-ticket@example.invalid>"
+    operator_ticket_id = "<lane-operator-ticket@example.invalid>"
+    payment_message_id = "<lane-payment@example.invalid>"
+    mail_reference = "EXAMPLEMAIL1250"
+    operator_reference = "EXAMPLE-OP-825"
+    _write_eml(
+        source / "mail-ticket.eml",
+        message_id=mail_ticket_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_eml(
+        source / "operator-ticket.eml",
+        message_id=operator_ticket_id,
+        received="Fri, 06 Sep 2030 08:00:00 +0000",
+        requestor_name="Riley Example",
+        requestor_email="riley@example.invalid",
+        item_date="2030-09-06",
+        amount="8.25",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_mail(
+        source / "payment.eml",
+        message_id=payment_message_id,
+        received="Sun, 08 Sep 2030 08:00:00 +0000",
+        sender="payments@example.invalid",
+        body=_generated_payment_body("12.50", mail_reference),
+    )
+    _write_anchors(
+        anchors_path,
+        schema_version=2,
+        payment_operators=("payments@example.invalid",),
+        operator_reviews=[
+            _approve_review(mail_ticket_id, "NEW-01"),
+            _approve_review(operator_ticket_id, "NEW-02"),
+        ],
+        payment_links=[
+            {
+                "message_id": payment_message_id,
+                "bindings": [
+                    {
+                        "ticket": _selector(mail_ticket_id, "NEW-01"),
+                        "reference_sha256": _reference_sha256(mail_reference),
+                    }
+                ],
+            }
+        ],
+        operator_payments=[
+            {
+                "record_payment": True,
+                "ticket": _selector(operator_ticket_id, "NEW-02"),
+                "date": "2030-09-09",
+                "amount": "8.25",
+                "reference": operator_reference,
+                "audit_note": "Synthetic payment confirmed outside the archived mailbox.",
+            }
+        ],
+    )
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    first_bytes = bundle_path.read_bytes()
+    bundle = json.loads(first_bytes)
+    by_ref = {ticket["ref"]: ticket for ticket in bundle["tickets"]}
+    assert by_ref["NEW-01"]["live"]["payment_status"] == "PAID"
+    assert by_ref["NEW-02"]["live"]["payment_status"] == "PAID"
+    assert {
+        event["reference"]
+        for event in bundle["supplemental"]["events"]
+        if event["kind"] == "PAYMENT_RECORDED"
+    } == {
+        mail_reference,
+        operator_reference,
+    }
+    payment_mail_key = "mail:v1:" + hashlib.sha256(payment_message_id.encode()).hexdigest()
+    assert [
+        event["kind"]
+        for event in bundle["supplemental"]["events"]
+        if event["evidence_key"] == payment_mail_key
+    ] == ["PAYMENT_RECORDED"]
+    assert {evidence["source_type"] for evidence in bundle["supplemental"]["evidence"]} >= {
+        "MAIL",
+        "OPERATOR_PAYMENT",
+    }
+    rendered = reimbursement_report.render_html(reimbursement_report.load_bundle(bundle_path))
+    assert "Operator Payment" in rendered
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    assert bundle_path.read_bytes() == first_bytes
+
+    changed_anchors = json.loads(anchors_path.read_text(encoding="utf-8"))
+    changed_anchors["operator_payments"][0]["audit_note"] = (  # type: ignore[index]
+        "Changed synthetic audit note."
+    )
+    anchors_path.write_text(json.dumps(changed_anchors), encoding="utf-8")
+    with pytest.raises(
+        reimbursement_pipeline.ReimbursementPipelineError,
+        match="previously accounted supplemental evidence",
+    ):
+        reimbursement_pipeline.refresh_bundle(
+            **_refresh_kwargs(
+                bundle_path=bundle_path,
+                source=source,
+                category_map_path=category_map_path,
+            ),
+            anchors_path=anchors_path,
+        )
+    assert bundle_path.read_bytes() == first_bytes
+
+
+@pytest.mark.parametrize("lane", ["payment-link", "operator-payment"])
+def test_new_payment_attempt_against_already_paid_ticket_is_rejected(
+    tmp_path: Path, lane: str
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    original_id = f"<already-paid-{lane}@example.invalid>"
+    payment_id = f"<already-paid-attempt-{lane}@example.invalid>"
+    reference = "ALREADYPAID1250"
+    review = _approve_review(original_id, "NEW-01")
+    _write_eml(
+        source / "original.eml",
+        message_id=original_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_anchors(anchors_path, schema_version=2, operator_reviews=[review])
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+
+    paid_bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    paid_ticket = next(ticket for ticket in paid_bundle["tickets"] if ticket["ref"] == "NEW-01")
+    paid_ticket["live"] = {
+        "workflow_state": "SETTLED",
+        "decision": "APPROVED",
+        "payment_status": "PAID_PRIOR",
+        "payment_date": "2030-09-07",
+        "confirmations": ["Synthetic prior payment confirmation."],
+    }
+    paid_ticket["messages"] = []
+    paid_ticket["archive_note"] = "Synthetic prior settlement fixture."
+    bundle_path.write_text(
+        json.dumps(paid_bundle, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    reimbursement_report.load_bundle(bundle_path)
+    before_ticket = copy.deepcopy(paid_ticket)
+
+    payment_links: list[dict[str, object]] = []
+    operator_payments: list[dict[str, object]] = []
+    if lane == "payment-link":
+        _write_mail(
+            source / "payment.eml",
+            message_id=payment_id,
+            received="Sun, 08 Sep 2030 08:00:00 +0000",
+            sender="payments@example.invalid",
+            body=_generated_payment_body("12.50", reference),
+        )
+        payment_links = [
+            {
+                "message_id": payment_id,
+                "bindings": [
+                    {
+                        "ticket": _selector(original_id, "NEW-01"),
+                        "reference_sha256": _reference_sha256(reference),
+                    }
+                ],
+            }
+        ]
+    else:
+        operator_payments = [
+            {
+                "record_payment": True,
+                "ticket": _selector(original_id, "NEW-01"),
+                "date": "2030-09-08",
+                "amount": "12.50",
+                "reference": reference,
+                "audit_note": "Synthetic duplicate payment attempt fixture.",
+            }
+        ]
+    _write_anchors(
+        anchors_path,
+        schema_version=2,
+        payment_operators=("payments@example.invalid",),
+        operator_reviews=[review],
+        payment_links=payment_links,
+        operator_payments=operator_payments,
+    )
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    rejected = json.loads(bundle_path.read_text(encoding="utf-8"))
+    rejected_ticket = next(ticket for ticket in rejected["tickets"] if ticket["ref"] == "NEW-01")
+    assert rejected_ticket == before_ticket
+    assert not any(
+        event["kind"] == "PAYMENT_RECORDED" for event in rejected["supplemental"]["events"]
+    )
+    if lane == "payment-link":
+        assert rejected["supplemental"]["unmatched"] == [
+            {
+                "evidence_key": "mail:v1:" + hashlib.sha256(payment_id.encode()).hexdigest(),
+                "reason": "PAYMENT_LINK_REJECTED",
+            }
+        ]
+    else:
+        event = next(
+            event
+            for event in rejected["supplemental"]["events"]
+            if event["kind"] == "PAYMENT_QUARANTINED"
+        )
+        assert "already settled or paid" in event["discrepancy"]
+
+    stable_bytes = bundle_path.read_bytes()
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    assert bundle_path.read_bytes() == stable_bytes
+
+
+def test_payment_link_uses_operator_reviewed_ticket_total(tmp_path: Path) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    original_id = "<corrected-total@example.invalid>"
+    payment_id = "<corrected-total-payment@example.invalid>"
+    reference = "CORRECTEDTOTAL1000"
+    _write_eml(
+        source / "original.eml",
+        message_id=original_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        amount="12.50",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_mail(
+        source / "payment.eml",
+        message_id=payment_id,
+        received="Sun, 08 Sep 2030 08:00:00 +0000",
+        sender="payments@example.invalid",
+        body=_generated_payment_body("10.00", reference),
+    )
+    _write_anchors(
+        anchors_path,
+        schema_version=2,
+        payment_operators=("payments@example.invalid",),
+        operator_reviews=[_approve_review(original_id, "NEW-01", reviewed_amount="10.00")],
+        payment_links=[
+            {
+                "message_id": payment_id,
+                "bindings": [
+                    {
+                        "ticket": _selector(original_id, "NEW-01"),
+                        "reference_sha256": _reference_sha256(reference),
+                    }
+                ],
+            }
+        ],
+    )
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+
+    report = reimbursement_report.load_bundle(bundle_path)
+    ticket = next(ticket for ticket in report.tickets if ticket.ref == "NEW-01")
+    event = next(event for event in report.supplemental.events if event.kind == "PAYMENT_RECORDED")
+    assert ticket.total == Decimal("10.00")
+    assert ticket.live.payment_status == "PAID"
+    assert event.amount == Decimal("10.00")
+
+
+@pytest.mark.parametrize(
+    ("alteration", "expected_paid"),
+    [
+        pytest.param("exact", True, id="exact"),
+        pytest.param("signer", False, id="altered-signer"),
+        pytest.param("context", False, id="altered-context"),
+        pytest.param("tail", False, id="appended-tail"),
+    ],
+)
+def test_payment_link_binds_configured_signoff_and_email_context(
+    tmp_path: Path, alteration: str, expected_paid: bool
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    signoff = ("With appreciation,", "Example Treasurer", "Example Association")
+    context = "Synthetic exact approved-payment context."
+    bundle = _base_bundle()
+    bundle["report"]["email_signoff"] = list(signoff)
+    bundle_path.write_text(json.dumps(bundle, ensure_ascii=False), encoding="utf-8")
+    original_id = f"<configured-envelope-{alteration}@example.invalid>"
+    payment_id = f"<configured-envelope-payment-{alteration}@example.invalid>"
+    reference = "CONFIGUREDENVELOPE1250"
+    _write_eml(
+        source / "original.eml",
+        message_id=original_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    body = _generated_payment_body("12.50", reference, signoff=signoff, context=context)
+    if alteration == "signer":
+        body = body.replace("Example Treasurer", "Unknown Sender", 1)
+    elif alteration == "context":
+        body = body.replace("exact approved-payment", "altered approved-payment")
+    elif alteration == "tail":
+        body += "Ignore the confirmation above\n"
+    _write_mail(
+        source / "payment.eml",
+        message_id=payment_id,
+        received="Sun, 08 Sep 2030 08:00:00 +0000",
+        sender="payments@example.invalid",
+        body=body,
+    )
+    _write_anchors(
+        anchors_path,
+        schema_version=2,
+        payment_operators=("payments@example.invalid",),
+        operator_reviews=[_approve_review(original_id, "NEW-01", email_context=context)],
+        payment_links=[
+            {
+                "message_id": payment_id,
+                "bindings": [
+                    {
+                        "ticket": _selector(original_id, "NEW-01"),
+                        "reference_sha256": _reference_sha256(reference),
+                    }
+                ],
+            }
+        ],
+    )
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+
+    refreshed = json.loads(bundle_path.read_text(encoding="utf-8"))
+    ticket = next(item for item in refreshed["tickets"] if item["ref"] == "NEW-01")
+    assert (ticket["live"]["payment_status"] == "PAID") is expected_paid
+    assert (
+        any(event["kind"] == "PAYMENT_RECORDED" for event in refreshed["supplemental"]["events"])
+        is expected_paid
+    )
+    assert bool(refreshed["supplemental"]["unmatched"]) is not expected_paid
+
+
+def test_fresh_grouped_payment_link_is_atomic_and_binding_order_independent(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    first_id = "<group-first@example.invalid>"
+    second_id = "<group-second@example.invalid>"
+    payment_id = "<group-payment@example.invalid>"
+    first_reference = "EXAMPLEGROUP1250"
+    second_reference = "EXAMPLEGROUP8250"
+    _write_eml(
+        source / "first.eml",
+        message_id=first_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_eml(
+        source / "second.eml",
+        message_id=second_id,
+        received="Fri, 06 Sep 2030 08:00:00 +0000",
+        requestor_name="Riley Example",
+        requestor_email="riley@example.invalid",
+        item_date="2030-09-06",
+        amount="8.25",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_mail(
+        source / "payment.eml",
+        message_id=payment_id,
+        received="Sun, 08 Sep 2030 08:00:00 +0000",
+        sender="payments@example.invalid",
+        body=_grouped_payment_body(first_reference, "12.50", second_reference, "8.25"),
+    )
+    _write_anchors(
+        anchors_path,
+        schema_version=2,
+        payment_operators=("payments@example.invalid",),
+        operator_reviews=[
+            _approve_review(first_id, "NEW-01"),
+            _approve_review(second_id, "NEW-02"),
+        ],
+        payment_links=[
+            {
+                "message_id": payment_id,
+                "bindings": [
+                    {
+                        "ticket": _selector(second_id, "NEW-02"),
+                        "reference_sha256": _reference_sha256(second_reference),
+                    },
+                    {
+                        "ticket": _selector(first_id, "NEW-01"),
+                        "reference_sha256": _reference_sha256(first_reference),
+                    },
+                ],
+            }
+        ],
+    )
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    by_ref = {ticket["ref"]: ticket for ticket in bundle["tickets"]}
+    assert by_ref["NEW-01"]["live"]["confirmations"] == [
+        f"Reference {first_reference}; amount $12.50"
+    ]
+    assert by_ref["NEW-02"]["live"]["confirmations"] == [
+        f"Reference {second_reference}; amount $8.25"
+    ]
+
+
+def test_payment_link_anchor_without_exact_mail_is_a_no_op(tmp_path: Path) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    original_id = "<anchor-only-ticket@example.invalid>"
+    _write_eml(
+        source / "original.eml",
+        message_id=original_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_anchors(
+        anchors_path,
+        schema_version=2,
+        payment_operators=("payments@example.invalid",),
+        operator_reviews=[_approve_review(original_id, "NEW-01")],
+        payment_links=[
+            {
+                "message_id": "<missing-payment@example.invalid>",
+                "bindings": [
+                    {
+                        "ticket": _selector(original_id, "NEW-01"),
+                        "reference_sha256": _reference_sha256("EXAMPLEMISSING100"),
+                    }
+                ],
+            }
+        ],
+    )
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    ticket = next(item for item in bundle["tickets"] if item["ref"] == "NEW-01")
+    assert ticket["live"]["payment_status"] == "NOT_PAID"
+    assert not any(
+        event["kind"].startswith("PAYMENT_") for event in bundle["supplemental"]["events"]
+    )
+    assert bundle["supplemental"]["unmatched"] == []
+
+
+def test_schema_v2_ordinary_direct_link_cannot_authorize_payment(tmp_path: Path) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    original_id = "<v2-direct-ticket@example.invalid>"
+    payment_id = "<v2-direct-payment@example.invalid>"
+    _write_eml(
+        source / "original.eml",
+        message_id=original_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_mail(
+        source / "payment.eml",
+        message_id=payment_id,
+        received="Sun, 08 Sep 2030 08:00:00 +0000",
+        sender="payments@example.invalid",
+        body=_generated_payment_body("12.50", "EXAMPLEDIRECT1250"),
+    )
+    _write_anchors(
+        anchors_path,
+        schema_version=2,
+        payment_operators=("payments@example.invalid",),
+        direct_links=[
+            {
+                "message_id": payment_id,
+                "purpose": "CASE",
+                "ticket": _selector(original_id, "NEW-01"),
+            }
+        ],
+    )
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    ticket = next(item for item in bundle["tickets"] if item["ref"] == "NEW-01")
+    assert ticket["live"]["payment_status"] == "NOT_PAID"
+    assert not any(
+        event["kind"].startswith("PAYMENT_") for event in bundle["supplemental"]["events"]
+    )
+
+
+def test_schema_v1_direct_link_does_not_gain_generated_v2_payment_grammar(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    original_id = "<v1-generated-ticket@example.invalid>"
+    payment_id = "<v1-generated-payment@example.invalid>"
+    _write_eml(
+        source / "original.eml",
+        message_id=original_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_mail(
+        source / "payment.eml",
+        message_id=payment_id,
+        received="Sun, 08 Sep 2030 08:00:00 +0000",
+        sender="payments@example.invalid",
+        body=_generated_payment_body("12.50", "V1GENERATED1250"),
+    )
+    _write_anchors(
+        anchors_path,
+        schema_version=1,
+        payment_operators=("payments@example.invalid",),
+        direct_links=[
+            {
+                "message_id": payment_id,
+                "purpose": "CASE",
+                "ticket": _selector(original_id, "NEW-01"),
+            }
+        ],
+        operator_reviews=[_approve_review(original_id, "NEW-01")],
+    )
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    ticket = next(item for item in bundle["tickets"] if item["ref"] == "NEW-01")
+    assert ticket["live"]["payment_status"] == "NOT_PAID"
+    assert not any(
+        event["kind"].startswith("PAYMENT_") for event in bundle["supplemental"]["events"]
+    )
+
+
+def test_fresh_schema_v2_payment_link_rejects_legacy_singleton_text(tmp_path: Path) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    original_id = "<fresh-v2-legacy-ticket@example.invalid>"
+    payment_id = "<fresh-v2-legacy-payment@example.invalid>"
+    reference = "FRESHV2LEGACY1250"
+    legacy_body = f"Payment sent: $12.50. Reference {reference}."
+    _write_eml(
+        source / "original.eml",
+        message_id=original_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_mail(
+        source / "payment.eml",
+        message_id=payment_id,
+        received="Sun, 08 Sep 2030 08:00:00 +0000",
+        sender="payments@example.invalid",
+        body=legacy_body,
+    )
+    _write_anchors(
+        anchors_path,
+        schema_version=2,
+        payment_operators=("payments@example.invalid",),
+        operator_reviews=[_approve_review(original_id, "NEW-01")],
+        payment_links=[
+            {
+                "message_id": payment_id,
+                "bindings": [
+                    {
+                        "ticket": _selector(original_id, "NEW-01"),
+                        "reference_sha256": _reference_sha256(reference),
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert reimbursement_events.parse_payment_evidence_blocks(legacy_body) is None
+    assert reimbursement_events.parse_payment_evidence(legacy_body) == (
+        reimbursement_events.PaymentEvidence(amount=Decimal("12.50"), reference=reference)
+    )
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    ticket = next(item for item in bundle["tickets"] if item["ref"] == "NEW-01")
+    assert ticket["live"]["payment_status"] == "NOT_PAID"
+    assert not any(
+        event["kind"].startswith("PAYMENT_") for event in bundle["supplemental"]["events"]
+    )
+    assert bundle["supplemental"]["unmatched"] == [
+        {
+            "evidence_key": "mail:v1:" + hashlib.sha256(payment_id.encode()).hexdigest(),
+            "reason": "PAYMENT_LINK_REJECTED",
+        }
+    ]
+
+
+@pytest.mark.parametrize("payment_method", ["Not Zelle", "Non-Zelle"])
+def test_payment_link_rejects_negative_zelle_payment_methods(
+    tmp_path: Path, payment_method: str
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    method_slug = payment_method.casefold().replace(" ", "-")
+    original_id = f"<negative-zelle-{method_slug}@example.invalid>"
+    payment_id = f"<negative-zelle-payment-{method_slug}@example.invalid>"
+    reference = "NEGATIVEZELLE1250"
+    _write_eml(
+        source / "original.eml",
+        message_id=original_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        payment_type=payment_method,
+        receipt_label="PDF",
+    )
+    _write_mail(
+        source / "payment.eml",
+        message_id=payment_id,
+        received="Sun, 08 Sep 2030 08:00:00 +0000",
+        sender="payments@example.invalid",
+        body=_generated_payment_body("12.50", reference),
+    )
+    _write_anchors(
+        anchors_path,
+        schema_version=2,
+        payment_operators=("payments@example.invalid",),
+        operator_reviews=[_approve_review(original_id, "NEW-01")],
+        payment_links=[
+            {
+                "message_id": payment_id,
+                "bindings": [
+                    {
+                        "ticket": _selector(original_id, "NEW-01"),
+                        "reference_sha256": _reference_sha256(reference),
+                    }
+                ],
+            }
+        ],
+    )
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    ticket = next(item for item in bundle["tickets"] if item["ref"] == "NEW-01")
+    assert ticket["live"]["payment_status"] == "NOT_PAID"
+    assert not any(
+        event["kind"] == "PAYMENT_RECORDED" for event in bundle["supplemental"]["events"]
+    )
+    assert bundle["supplemental"]["unmatched"][0]["reason"] == "PAYMENT_LINK_REJECTED"
+
+
+@pytest.mark.parametrize(
+    ("link_mode", "receipt_attached"),
+    [
+        pytest.param("exact", False, id="exact"),
+        pytest.param("omitted", False, id="omitted"),
+        pytest.param("mismatch", False, id="mismatch"),
+        pytest.param("exact", True, id="exact-with-receipt"),
+    ],
+)
+def test_v1_singleton_payment_event_requires_exact_v2_payment_link_for_replay(
+    tmp_path: Path, link_mode: str, receipt_attached: bool
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    original_id = "<legacy-payment-ticket@example.invalid>"
+    outbound_id = "<legacy-payment-outbound@example.invalid>"
+    payment_id = "<legacy-payment-reply@example.invalid>"
+    reference = "LEGACYPAY1250"
+    legacy_body = f"Payment sent: $12.50. Reference {reference}."
+    _write_eml(
+        source / "original.eml",
+        message_id=original_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_mail(
+        source / "outbound.eml",
+        message_id=outbound_id,
+        received="Fri, 06 Sep 2030 08:00:00 +0000",
+        sender="treasurer@example.invalid",
+        body="Synthetic payment follow-up.",
+    )
+    _write_mail(
+        source / "payment.eml",
+        message_id=payment_id,
+        received="Sat, 07 Sep 2030 08:00:00 +0000",
+        sender="payments@example.invalid",
+        body=legacy_body,
+        in_reply_to=outbound_id,
+        references=(outbound_id,),
+        attachments=(
+            (("synthetic-receipt.pdf", "application/pdf", b"synthetic receipt bytes"),)
+            if receipt_attached
+            else ()
+        ),
+    )
+    thread_anchors = [
+        {
+            "message_id": outbound_id,
+            "purpose": "CASE",
+            "tickets": [_selector(original_id, "NEW-01")],
+        }
+    ]
+    _write_anchors(
+        anchors_path,
+        schema_version=1,
+        payment_operators=("payments@example.invalid",),
+        thread_anchors=thread_anchors,
+    )
+
+    assert reimbursement_events.parse_payment_evidence_blocks(legacy_body) is None
+    assert reimbursement_events.parse_payment_evidence(legacy_body) == (
+        reimbursement_events.PaymentEvidence(amount=Decimal("12.50"), reference=reference)
+    )
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    v1_bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    mail_key = "mail:v1:" + hashlib.sha256(payment_id.encode()).hexdigest()
+    generated_mail_events = [
+        event for event in v1_bundle["supplemental"]["events"] if event["evidence_key"] == mail_key
+    ]
+    expected_prior_kinds = {
+        "CLARIFICATION_RECEIVED",
+        "PAYMENT_RECORDED",
+    }
+    if receipt_attached:
+        expected_prior_kinds.add("RECEIPT_RECEIVED")
+    assert {event["kind"] for event in generated_mail_events} == expected_prior_kinds
+    prior_mail_event_bytes = json.dumps(
+        generated_mail_events, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode()
+    v1_bytes = bundle_path.read_bytes()
+    prior_mail_events = generated_mail_events
+
+    payment_links: list[dict[str, object]] = []
+    if link_mode != "omitted":
+        digest_reference = reference if link_mode == "exact" else "MISMATCHPAY1250"
+        payment_links = [
+            {
+                "message_id": payment_id,
+                "bindings": [
+                    {
+                        "ticket": _selector(original_id, "NEW-01"),
+                        "reference_sha256": _reference_sha256(digest_reference),
+                    }
+                ],
+            }
+        ]
+    _write_anchors(
+        anchors_path,
+        schema_version=2,
+        payment_operators=("payments@example.invalid",),
+        thread_anchors=thread_anchors,
+        payment_links=payment_links,
+    )
+
+    if link_mode != "exact":
+        with pytest.raises(
+            reimbursement_pipeline.ReimbursementPipelineError,
+            match="previously recorded supplemental event no longer resolves exactly",
+        ):
+            reimbursement_pipeline.refresh_bundle(
+                **_refresh_kwargs(
+                    bundle_path=bundle_path,
+                    source=source,
+                    category_map_path=category_map_path,
+                ),
+                anchors_path=anchors_path,
+            )
+        assert bundle_path.read_bytes() == v1_bytes
+        return
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    upgraded = json.loads(bundle_path.read_text(encoding="utf-8"))
+    upgraded_mail_events = [
+        event for event in upgraded["supplemental"]["events"] if event["evidence_key"] == mail_key
+    ]
+    assert upgraded_mail_events == prior_mail_events
+    assert (
+        json.dumps(
+            upgraded_mail_events, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()
+        == prior_mail_event_bytes
+    )
+
+    upgraded_bytes = bundle_path.read_bytes()
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    assert bundle_path.read_bytes() == upgraded_bytes
+
+    fabricated_kind = "APPROVAL_DECLINED" if receipt_attached else "RECEIPT_RECEIVED"
+    fabricated_summary = (
+        "Synthetic unrelated prior lifecycle event."
+        if receipt_attached
+        else "1 supplemental receipt asset(s) received."
+    )
+    fabricated_event = dict(
+        next(event for event in upgraded_mail_events if event["kind"] == "CLARIFICATION_RECEIVED")
+    )
+    fabricated_event["kind"] = fabricated_kind
+    fabricated_event["summary"] = fabricated_summary
+    fabricated_event["event_key"] = (
+        "event:v1:"
+        + hashlib.sha256(
+            f"{mail_key}\0{fabricated_event['ticket_review_key']}\0{fabricated_kind}".encode()
+        ).hexdigest()
+    )
+    fabricated_payload = {
+        key: value for key, value in fabricated_event.items() if key != "record_sha256"
+    }
+    fabricated_event["record_sha256"] = hashlib.sha256(
+        json.dumps(
+            fabricated_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    upgraded["supplemental"]["events"].append(fabricated_event)
+    upgraded["supplemental"]["events"].sort(
+        key=lambda event: (event["occurred_at"], event["event_key"])
+    )
+    bundle_path.write_text(
+        json.dumps(upgraded, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    reimbursement_report.load_bundle(bundle_path)
+    fabricated_bytes = bundle_path.read_bytes()
+
+    with pytest.raises(
+        reimbursement_pipeline.ReimbursementPipelineError,
+        match="previously recorded supplemental event no longer resolves exactly",
+    ):
+        reimbursement_pipeline.refresh_bundle(
+            **_refresh_kwargs(
+                bundle_path=bundle_path,
+                source=source,
+                category_map_path=category_map_path,
+            ),
+            anchors_path=anchors_path,
+        )
+    assert bundle_path.read_bytes() == fabricated_bytes
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "wrong-sender",
+        "wrong-date",
+        "unknown-reference",
+        "missing-reference",
+        "duplicate-reference",
+        "extra-reference",
+        "amount-mismatch",
+        "ancestry-conflict",
+        "malformed-wording",
+        "legacy-single-for-group",
+    ],
+)
+def test_grouped_payment_link_failures_quarantine_without_mutating_any_ticket(
+    tmp_path: Path, failure: str
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    first_id = "<reject-first@example.invalid>"
+    second_id = "<reject-second@example.invalid>"
+    payment_id = "<reject-payment@example.invalid>"
+    first_reference = "REJECTGROUP1250"
+    second_reference = "REJECTGROUP8250"
+    _write_eml(
+        source / "first.eml",
+        message_id=first_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_eml(
+        source / "second.eml",
+        message_id=second_id,
+        received="Fri, 06 Sep 2030 08:00:00 +0000",
+        requestor_name="Riley Example",
+        requestor_email="riley@example.invalid",
+        item_date="2030-09-06",
+        amount="8.25",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_anchors(
+        anchors_path,
+        schema_version=2,
+        payment_operators=("payments@example.invalid",),
+        operator_reviews=[
+            _approve_review(first_id, "NEW-01"),
+            _approve_review(second_id, "NEW-02"),
+        ],
+        payment_links=[
+            {
+                "message_id": payment_id,
+                "bindings": [
+                    {
+                        "ticket": _selector(first_id, "NEW-01"),
+                        "reference_sha256": _reference_sha256(first_reference),
+                    },
+                    {
+                        "ticket": _selector(second_id, "NEW-02"),
+                        "reference_sha256": _reference_sha256(second_reference),
+                    },
+                ],
+            }
+        ],
+    )
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    approved = json.loads(bundle_path.read_text(encoding="utf-8"))
+    approved_tickets = copy.deepcopy(approved["tickets"])
+
+    sender = "payments@example.invalid"
+    received = "Sun, 08 Sep 2030 08:00:00 +0000"
+    body = _grouped_payment_body(first_reference, "12.50", second_reference, "8.25")
+    in_reply_to: str | None = None
+    if failure == "wrong-sender":
+        sender = "spoofed@example.invalid"
+    elif failure == "wrong-date":
+        received = "Sat, 31 Aug 2030 08:00:00 +0000"
+    elif failure == "unknown-reference":
+        body = body.replace(first_reference, "UNKNOWNGROUP125")
+    elif failure == "missing-reference":
+        body = body.replace(first_reference, "")
+    elif failure == "duplicate-reference":
+        body = body.replace(second_reference, first_reference)
+    elif failure == "extra-reference":
+        body = body.replace(
+            "\nThank you!\nExample Treasurer Team",
+            "\nEXTRAREF12345\n\nThank you!\nExample Treasurer Team",
+        )
+    elif failure == "amount-mismatch":
+        body = body.replace("\n8.25\n", "\n8.26\n")
+    elif failure == "ancestry-conflict":
+        in_reply_to = first_id
+    elif failure == "legacy-single-for-group":
+        body = f"Payment sent: $12.50. Reference {first_reference}."
+    else:
+        body = body.replace("have been approved", "will be approved")
+    _write_mail(
+        source / "payment.eml",
+        message_id=payment_id,
+        received=received,
+        sender=sender,
+        body=body,
+        in_reply_to=in_reply_to,
+        references=(in_reply_to,) if in_reply_to is not None else (),
+    )
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    rejected = json.loads(bundle_path.read_text(encoding="utf-8"))
+    assert rejected["tickets"] == approved_tickets
+    if failure == "amount-mismatch":
+        assert rejected["supplemental"]["unmatched"] == []
+        payment_events = [
+            event
+            for event in rejected["supplemental"]["events"]
+            if event["kind"].startswith("PAYMENT_")
+        ]
+        assert len(payment_events) == 2
+        discrepancy = next(
+            event for event in payment_events if event["kind"] == "PAYMENT_DISCREPANCY"
+        )
+        assert discrepancy["kind"] == "PAYMENT_DISCREPANCY"
+        assert discrepancy["amount"] == "8.26"
+        assert discrepancy["reference"] == second_reference
+        assert "$8.26" in discrepancy["discrepancy"]
+        assert "$8.25" in discrepancy["discrepancy"]
+        quarantined = next(
+            event for event in payment_events if event["kind"] == "PAYMENT_QUARANTINED"
+        )
+        assert quarantined["amount"] == "12.50"
+        assert quarantined["reference"] == first_reference
+        assert "atomicity" in quarantined["discrepancy"]
+        rejected_bytes = bundle_path.read_bytes()
+        reimbursement_pipeline.refresh_bundle(
+            **_refresh_kwargs(
+                bundle_path=bundle_path,
+                source=source,
+                category_map_path=category_map_path,
+            ),
+            anchors_path=anchors_path,
+        )
+        assert bundle_path.read_bytes() == rejected_bytes
+        replayed = json.loads(bundle_path.read_text(encoding="utf-8"))
+        assert replayed["tickets"] == approved_tickets
+    else:
+        assert rejected["supplemental"]["unmatched"] == [
+            {
+                "evidence_key": "mail:v1:" + hashlib.sha256(payment_id.encode()).hexdigest(),
+                "reason": "PAYMENT_LINK_REJECTED",
+            }
+        ]
+        assert not any(
+            event["kind"].startswith("PAYMENT_") for event in rejected["supplemental"]["events"]
+        )
+
+
+@pytest.mark.parametrize(
+    ("approved", "amount", "expected_kind"),
+    [
+        (False, "12.50", "PAYMENT_QUARANTINED"),
+        (True, "12.51", "PAYMENT_DISCREPANCY"),
+    ],
+)
+def test_operator_payment_approval_and_amount_guards_do_not_settle(
+    tmp_path: Path, approved: bool, amount: str, expected_kind: str
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    original_id = "<operator-guard@example.invalid>"
+    _write_eml(
+        source / "original.eml",
+        message_id=original_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    _write_anchors(
+        anchors_path,
+        schema_version=2,
+        operator_reviews=[_approve_review(original_id, "NEW-01")] if approved else [],
+        operator_payments=[
+            {
+                "record_payment": True,
+                "ticket": _selector(original_id, "NEW-01"),
+                "date": "2030-09-09",
+                "amount": amount,
+                "reference": "EXAMPLE-OP-GUARD-1250",
+                "audit_note": "Synthetic operator-payment guard fixture.",
+            }
+        ],
+    )
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+        ),
+        anchors_path=anchors_path,
+    )
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    ticket = next(item for item in bundle["tickets"] if item["ref"] == "NEW-01")
+    assert ticket["live"]["payment_status"] == "NOT_PAID"
+    event = next(item for item in bundle["supplemental"]["events"] if item["kind"] == expected_kind)
+    evidence = next(
+        item
+        for item in bundle["supplemental"]["evidence"]
+        if item["evidence_key"] == event["evidence_key"]
+    )
+    assert evidence["source_type"] == "OPERATOR_PAYMENT"
+    if expected_kind == "PAYMENT_DISCREPANCY":
+        assert "$12.51" in event["discrepancy"]
+        assert "$12.50" in event["discrepancy"]
+
+
+@pytest.mark.parametrize("later_change", ["approval", "as-of"])
+def test_operator_payment_quarantine_replays_exactly_after_later_state_change(
+    tmp_path: Path, later_change: str
+) -> None:
+    source = tmp_path / "mail"
+    source.mkdir()
+    category_map_path = _write_category_map(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    anchors_path = tmp_path / "anchors.json"
+    _write_bundle(bundle_path)
+    original_id = "<operator-replay@example.invalid>"
+    _write_eml(
+        source / "original.eml",
+        message_id=original_id,
+        received="Thu, 05 Sep 2030 08:00:00 +0000",
+        payment_type="Zelle",
+        receipt_label="PDF",
+    )
+    payment_date = "2030-09-09" if later_change == "approval" else "2030-09-11"
+    initial_reviews = [] if later_change == "approval" else [_approve_review(original_id, "NEW-01")]
+    payment = {
+        "record_payment": True,
+        "ticket": _selector(original_id, "NEW-01"),
+        "date": payment_date,
+        "amount": "12.50",
+        "reference": "EXAMPLE-OP-REPLAY-1250",
+        "audit_note": "Synthetic stable quarantine replay fixture.",
+    }
+    _write_anchors(
+        anchors_path,
+        schema_version=2,
+        operator_reviews=initial_reviews,
+        operator_payments=[payment],
+    )
+
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+            as_of=date(2030, 9, 10),
+        ),
+        anchors_path=anchors_path,
+    )
+    initial = json.loads(bundle_path.read_text(encoding="utf-8"))
+    quarantined = next(
+        event
+        for event in initial["supplemental"]["events"]
+        if event["kind"] == "PAYMENT_QUARANTINED"
+    )
+
+    if later_change == "approval":
+        _write_anchors(
+            anchors_path,
+            schema_version=2,
+            operator_reviews=[_approve_review(original_id, "NEW-01")],
+            operator_payments=[payment],
+        )
+    later_as_of = date(2030, 9, 10) if later_change == "approval" else date(2030, 9, 12)
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+            as_of=later_as_of,
+        ),
+        anchors_path=anchors_path,
+    )
+    replayed = json.loads(bundle_path.read_text(encoding="utf-8"))
+    replayed_quarantine = next(
+        event
+        for event in replayed["supplemental"]["events"]
+        if event["evidence_key"] == quarantined["evidence_key"]
+    )
+    ticket = next(item for item in replayed["tickets"] if item["ref"] == "NEW-01")
+    assert replayed_quarantine == quarantined
+    assert ticket["live"]["payment_status"] == "NOT_PAID"
+
+    stable_bytes = bundle_path.read_bytes()
+    reimbursement_pipeline.refresh_bundle(
+        **_refresh_kwargs(
+            bundle_path=bundle_path,
+            source=source,
+            category_map_path=category_map_path,
+            as_of=later_as_of,
+        ),
+        anchors_path=anchors_path,
+    )
+    assert bundle_path.read_bytes() == stable_bytes

@@ -13,6 +13,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, NoReturn
@@ -24,15 +25,20 @@ __all__ = [
     "DirectLink",
     "OperatorReview",
     "OperatorReviewItem",
+    "OperatorPayment",
+    "PaymentBinding",
     "PaymentEvidence",
+    "PaymentLink",
     "ProposalRecommendation",
     "ReimbursementEventError",
     "ThreadAnchor",
     "TicketSelector",
     "classify_approval_reply",
     "empty_anchor_config",
+    "is_zelle_payment_method",
     "load_anchor_config",
     "parse_payment_evidence",
+    "parse_payment_evidence_blocks",
     "parse_proposal_recommendations",
 ]
 
@@ -69,6 +75,22 @@ class DirectLink:
 
 
 @dataclass(frozen=True)
+class PaymentBinding:
+    """One private reference-digest binding from a payment block to a ticket."""
+
+    ticket: TicketSelector
+    reference_sha256: str
+
+
+@dataclass(frozen=True)
+class PaymentLink:
+    """An exact, non-propagating Message-ID link for one atomic payment message."""
+
+    message_id: str
+    bindings: tuple[PaymentBinding, ...]
+
+
+@dataclass(frozen=True)
 class OperatorReviewItem:
     """One explicit operator-authored item override; never payment authorization."""
 
@@ -95,14 +117,30 @@ class OperatorReview:
 
 
 @dataclass(frozen=True)
+class OperatorPayment:
+    """An explicit audited payment record for which no archived mail exists."""
+
+    ticket: TicketSelector
+    record_payment: bool
+    date: str
+    amount: str
+    reference: str
+    audit_note: str
+    evidence_sha256: str
+
+
+@dataclass(frozen=True)
 class AnchorConfig:
     """Normalized, digestable private supplemental-evidence configuration."""
 
+    schema_version: int
     payment_operators: tuple[str, ...]
     secondary_approvers: tuple[str, ...]
     thread_anchors: tuple[ThreadAnchor, ...]
     direct_links: tuple[DirectLink, ...]
     operator_reviews: tuple[OperatorReview, ...]
+    payment_links: tuple[PaymentLink, ...]
+    operator_payments: tuple[OperatorPayment, ...]
     sha256: str
 
 
@@ -139,9 +177,19 @@ _CHECK_SENT_SIGNAL_RE = re.compile(
     r"\bcheck\s+(?:number|no\.?|#)\s*[A-Za-z0-9-]{3,64}\b[^\r\n.]*\b(?:sent|mailed|issued)\b",
     re.IGNORECASE,
 )
-_PAYMENT_NEGATIVE_RE = re.compile(
+_LEGACY_PAYMENT_NEGATIVE_RE = re.compile(
     r"\b(?:not|never|cancelled|canceled|voided?|disput(?:e|ed)|reversed?|failed|pending)\b"
     r"|\b(?:wrote|said|reported)\s*:|\bplease\s+confirm\b|\bwhether\b|\?",
+    re.IGNORECASE,
+)
+_PAYMENT_NEGATIVE_RE = re.compile(
+    r"\b(?:not|never|cancelled|canceled|void(?:ed)?|disput(?:e|ed)|reversed?|failed|pending)\b"
+    r"|\b(?:unpaid|non[-\s]?payment|held|withheld|on\s+hold|refund(?:ed)?)\b"
+    r"|\b(?:isn|wasn|hasn|haven|hadn|didn|doesn|won|wouldn|couldn|shouldn|can)['’]t\b"
+    r"|\bno[-\s]+payment\b|\breturned\b|\bignore\b"
+    r"|\bonly[-\s]+(?:a[-\s]+)?notice\b"
+    r"|\b(?:wrote|said|reported)\s*:|\bplease\s+confirm\b|\bwhether\b|\?"
+    r"|\b(?:for\s+context|fyi|according\s+to)\b|(?:^|\n)\s*>",
     re.IGNORECASE,
 )
 _ZELLE_CONTEXT_RE = re.compile(r"\bconfirmation\s+info\s+is\s+below\b", re.IGNORECASE)
@@ -150,6 +198,25 @@ _BARE_CONFIRMATION_RE = re.compile(
     r"(?=[A-Z0-9]{10,20}$)(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*[0-9])[A-Z0-9]+"
 )
 _BARE_MONEY_RE = re.compile(r"^\$?\s*([0-9]+(?:,[0-9]{3})*\.[0-9]{2})$")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_REFERENCE_VALUE_RE = re.compile(
+    r"(?=[A-Za-z0-9-]{3,64}$)(?=[A-Za-z0-9-]*[0-9])"
+    r"[A-Za-z0-9][A-Za-z0-9-]{2,63}"
+)
+_GENERATED_SINGLE_INTRO_RE = re.compile(
+    r"^Your \$([0-9]+(?:,[0-9]{3})*\.[0-9]{2}) reimbursement has been approved "
+    r"and sent by Zelle\.$"
+)
+_GENERATED_CONFIRMATION_RE = re.compile(
+    r"^Zelle confirmation: "
+    r"((?=[A-Za-z0-9-]{3,64}$)(?=[A-Za-z0-9-]*[0-9])"
+    r"[A-Za-z0-9][A-Za-z0-9-]{2,63})$"
+)
+_PAYMENT_GREETING_RE = re.compile(
+    r"^(?:(?:Hello|Hi|Dear)(?: [^\r\n]{1,80})?|Good (?:morning|afternoon|evening)"
+    r"(?: [^\r\n]{1,80})?)[,!]$"
+)
+_SENT_DESTINATION_RE = re.compile(r"^Zelle - \S(?:.*\S)?$")
 _PROPOSAL_REF_RE = re.compile(
     r"^\s*(?:\[|#{1,6}\s*)?"
     r"(?P<refs>[A-Z][A-Z0-9-]*\d(?:\s*,\s*[A-Z][A-Z0-9-]*\d)*)"
@@ -248,6 +315,42 @@ def _actor_addresses(value: Any, *, label: str) -> tuple[str, ...]:
     return normalized
 
 
+def _sha256(value: Any, *, label: str) -> str:
+    raw = _string(value, label=label)
+    if _SHA256_RE.fullmatch(raw) is None:
+        _fail(f"{label} must be a lowercase SHA-256 digest")
+    return raw
+
+
+def _payment_reference(value: Any, *, label: str) -> str:
+    raw = _string(value, label=label)
+    if _REFERENCE_VALUE_RE.fullmatch(raw) is None:
+        _fail(f"{label} must be one exact confirmation reference")
+    return raw
+
+
+def _payment_amount(value: Any, *, label: str) -> str:
+    raw = _string(value, label=label)
+    try:
+        amount = Decimal(raw)
+    except InvalidOperation as exc:
+        raise ReimbursementEventError(f"{label} must be exact positive money") from exc
+    if not amount.is_finite() or amount <= 0 or f"{amount:.2f}" != raw:
+        _fail(f"{label} must be exact positive money")
+    return raw
+
+
+def _payment_date(value: Any, *, label: str) -> str:
+    raw = _string(value, label=label)
+    try:
+        parsed = date.fromisoformat(raw)
+    except ValueError as exc:
+        raise ReimbursementEventError(f"{label} must be an ISO calendar date") from exc
+    if parsed.isoformat() != raw:
+        _fail(f"{label} must be an ISO calendar date")
+    return raw
+
+
 def empty_anchor_config() -> AnchorConfig:
     """Return the canonical no-anchor configuration used when the private file is absent."""
 
@@ -258,7 +361,17 @@ def empty_anchor_config() -> AnchorConfig:
         "direct_links": [],
         "operator_reviews": [],
     }
-    return AnchorConfig((), (), (), (), (), _digest(payload))
+    return AnchorConfig(
+        schema_version=1,
+        payment_operators=(),
+        secondary_approvers=(),
+        thread_anchors=(),
+        direct_links=(),
+        operator_reviews=(),
+        payment_links=(),
+        operator_payments=(),
+        sha256=_digest(payload),
+    )
 
 
 def load_anchor_config(path: Path | None) -> AnchorConfig:
@@ -274,15 +387,21 @@ def load_anchor_config(path: Path | None) -> AnchorConfig:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise ReimbursementEventError("private reimbursement anchors are not valid JSON") from exc
-    root = _object(
-        value,
-        label="anchor root",
-        keys=frozenset(
-            {"schema_version", "actors", "thread_anchors", "direct_links", "operator_reviews"}
-        ),
-    )
-    if root["schema_version"] != 1 or isinstance(root["schema_version"], bool):
-        _fail("anchor schema_version must equal 1")
+    if not isinstance(value, dict):
+        _fail("anchor root must contain exactly the documented keys")
+    version = value.get("schema_version")
+    if isinstance(version, bool) or version not in {1, 2}:
+        _fail("anchor schema_version must equal 1 or 2")
+    root_keys = {
+        "schema_version",
+        "actors",
+        "thread_anchors",
+        "direct_links",
+        "operator_reviews",
+    }
+    if version == 2:
+        root_keys.update({"payment_links", "operator_payments"})
+    root = _object(value, label="anchor root", keys=frozenset(root_keys))
     actors = _object(
         root["actors"],
         label="anchor actors",
@@ -348,6 +467,55 @@ def load_anchor_config(path: Path | None) -> AnchorConfig:
                 ),
                 purpose=purpose,
                 ticket=_selector(raw["ticket"], label=f"direct_links[{index}].ticket"),
+            )
+        )
+
+    raw_payment_links = root.get("payment_links", [])
+    if not isinstance(raw_payment_links, list):
+        _fail("anchor payment_links must be an array")
+    payment_links: list[PaymentLink] = []
+    for index, value_item in enumerate(raw_payment_links):
+        raw = _object(
+            value_item,
+            label=f"payment_links[{index}]",
+            keys=frozenset({"message_id", "bindings"}),
+        )
+        raw_bindings = raw["bindings"]
+        if not isinstance(raw_bindings, list) or not raw_bindings:
+            _fail("payment link bindings must be a nonempty array")
+        bindings: list[PaymentBinding] = []
+        for binding_index, value_binding in enumerate(raw_bindings):
+            binding = _object(
+                value_binding,
+                label=f"payment_links[{index}].bindings[{binding_index}]",
+                keys=frozenset({"ticket", "reference_sha256"}),
+            )
+            bindings.append(
+                PaymentBinding(
+                    ticket=_selector(
+                        binding["ticket"],
+                        label=f"payment_links[{index}].bindings[{binding_index}].ticket",
+                    ),
+                    reference_sha256=_sha256(
+                        binding["reference_sha256"],
+                        label=(
+                            f"payment_links[{index}].bindings[{binding_index}].reference_sha256"
+                        ),
+                    ),
+                )
+            )
+        binding_tickets = [binding.ticket for binding in bindings]
+        binding_references = [binding.reference_sha256 for binding in bindings]
+        if len(binding_tickets) != len(set(binding_tickets)):
+            _fail("payment link bindings must select unique tickets")
+        if len(binding_references) != len(set(binding_references)):
+            _fail("payment link bindings must contain unique reference digests")
+        payment_links.append(
+            PaymentLink(
+                message_id=_message_id(
+                    raw["message_id"], label=f"payment_links[{index}].message_id"
+                ),
+                bindings=tuple(sorted(bindings, key=lambda item: item.reference_sha256)),
             )
         )
 
@@ -448,20 +616,88 @@ def load_anchor_config(path: Path | None) -> AnchorConfig:
             )
         )
 
+    raw_operator_payments = root.get("operator_payments", [])
+    if not isinstance(raw_operator_payments, list):
+        _fail("anchor operator_payments must be an array")
+    operator_payments: list[OperatorPayment] = []
+    for index, value_item in enumerate(raw_operator_payments):
+        raw = _object(
+            value_item,
+            label=f"operator_payments[{index}]",
+            keys=frozenset(
+                {"record_payment", "ticket", "date", "amount", "reference", "audit_note"}
+            ),
+        )
+        if raw["record_payment"] is not True:
+            _fail("operator payment record_payment must be true")
+        ticket = _selector(raw["ticket"], label=f"operator_payments[{index}].ticket")
+        payment_on = _payment_date(raw["date"], label=f"operator_payments[{index}].date")
+        payment_amount = _payment_amount(raw["amount"], label=f"operator_payments[{index}].amount")
+        reference = _payment_reference(
+            raw["reference"], label=f"operator_payments[{index}].reference"
+        )
+        audit_note = _string(raw["audit_note"], label=f"operator_payments[{index}].audit_note")
+        normalized_for_digest = {
+            "record_payment": True,
+            "ticket": ticket.__dict__,
+            "date": payment_on,
+            "amount": payment_amount,
+            "reference": reference,
+            "audit_note": audit_note,
+        }
+        operator_payments.append(
+            OperatorPayment(
+                ticket=ticket,
+                record_payment=True,
+                date=payment_on,
+                amount=payment_amount,
+                reference=reference,
+                audit_note=audit_note,
+                evidence_sha256=_digest(normalized_for_digest),
+            )
+        )
+
     thread_ids = [anchor.message_id for anchor in threads]
     direct_ids = [link.message_id for link in direct]
+    payment_ids = [link.message_id for link in payment_links]
     if len(thread_ids) != len(set(thread_ids)):
         _fail("thread anchor Message-IDs must not contain duplicates")
     if len(direct_ids) != len(set(direct_ids)):
         _fail("direct link Message-IDs must not contain duplicates")
-    if set(thread_ids) & set(direct_ids):
-        _fail("a Message-ID cannot be both a thread anchor and a direct link")
+    if len(payment_ids) != len(set(payment_ids)):
+        _fail("payment link Message-IDs must not contain duplicates")
+    all_link_ids = thread_ids + direct_ids + payment_ids
+    if len(all_link_ids) != len(set(all_link_ids)):
+        _fail("a Message-ID cannot occur in more than one private link lane")
     review_selectors = [review.ticket for review in reviews]
     if len(review_selectors) != len(set(review_selectors)):
         _fail("operator reviews must select unique tickets")
+    linked_payment_selectors = [
+        binding.ticket for link in payment_links for binding in link.bindings
+    ]
+    linked_reference_digests = [
+        binding.reference_sha256 for link in payment_links for binding in link.bindings
+    ]
+    operator_payment_selectors = [payment.ticket for payment in operator_payments]
+    operator_payment_references = [payment.reference for payment in operator_payments]
+    if len(linked_payment_selectors) != len(set(linked_payment_selectors)):
+        _fail("payment links must select unique tickets")
+    if len(linked_reference_digests) != len(set(linked_reference_digests)):
+        _fail("payment links must contain unique reference digests")
+    if len(operator_payment_selectors) != len(set(operator_payment_selectors)):
+        _fail("operator payments must select unique tickets")
+    if len(operator_payment_references) != len(set(operator_payment_references)):
+        _fail("operator payments must contain unique references")
+    if set(linked_payment_selectors) & set(operator_payment_selectors):
+        _fail("a ticket cannot occur in both private payment lanes")
+    if set(linked_reference_digests) & {
+        hashlib.sha256(reference.encode("utf-8")).hexdigest()
+        for reference in operator_payment_references
+    }:
+        _fail("a payment reference cannot occur in both private payment lanes")
 
-    normalized_payload = {
-        "schema_version": 1,
+    normalized_payload: dict[str, Any] = {
+        "schema_version": version,
         "actors": {
             "payment_operators": list(payment_operators),
             "secondary_approvers": list(secondary_approvers),
@@ -484,21 +720,257 @@ def load_anchor_config(path: Path | None) -> AnchorConfig:
         ],
         "operator_reviews": [review.evidence_sha256 for review in reviews],
     }
+    if version == 2:
+        normalized_payload["payment_links"] = [
+            {
+                "message_id": link.message_id,
+                "bindings": [
+                    {
+                        "ticket": binding.ticket.__dict__,
+                        "reference_sha256": binding.reference_sha256,
+                    }
+                    for binding in link.bindings
+                ],
+            }
+            for link in sorted(payment_links, key=lambda item: item.message_id)
+        ]
+        normalized_payload["operator_payments"] = [
+            payment.evidence_sha256
+            for payment in sorted(
+                operator_payments,
+                key=lambda item: (
+                    item.ticket.review_key,
+                    item.ticket.ref,
+                    item.ticket.form_label,
+                ),
+            )
+        ]
     return AnchorConfig(
+        schema_version=version,
         payment_operators=payment_operators,
         secondary_approvers=secondary_approvers,
         thread_anchors=tuple(threads),
         direct_links=tuple(direct),
         operator_reviews=tuple(reviews),
+        payment_links=tuple(sorted(payment_links, key=lambda item: item.message_id)),
+        operator_payments=tuple(
+            sorted(
+                operator_payments,
+                key=lambda item: (
+                    item.ticket.review_key,
+                    item.ticket.ref,
+                    item.ticket.form_label,
+                ),
+            )
+        ),
         sha256=_digest(normalized_payload),
     )
 
 
+def _payment_lines(text: str) -> list[str] | None:
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+    if not normalized:
+        return None
+    lines = [line.rstrip() for line in normalized.split("\n")]
+    return lines if all("\x00" not in line for line in lines) else None
+
+
+def is_zelle_payment_method(value: str) -> bool:
+    """Return whether a canonical payment method is exactly the recognized Zelle value."""
+
+    return value.strip().casefold() == "zelle"
+
+
+def _configured_lines(value: str | Sequence[str]) -> list[str]:
+    text = value if isinstance(value, str) else "\n".join(value)
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return [line.rstrip() for line in normalized.split("\n")]
+
+
+def _parse_generated_single(
+    text: str,
+    *,
+    expected_signoff: Sequence[str],
+    expected_context: str,
+) -> tuple[PaymentEvidence, ...] | None:
+    lines = _payment_lines(text)
+    if lines is None:
+        return None
+    matches: list[tuple[int, re.Match[str], re.Match[str]]] = []
+    for index in range(len(lines) - 1):
+        intro = _GENERATED_SINGLE_INTRO_RE.fullmatch(lines[index])
+        confirmation = _GENERATED_CONFIRMATION_RE.fullmatch(lines[index + 1])
+        if intro is not None and confirmation is not None:
+            matches.append((index, intro, confirmation))
+    if len(matches) != 1:
+        return None
+    index, intro, confirmation = matches[0]
+    prefix = lines[:index]
+    suffix = lines[index + 2 :]
+    if prefix and not (
+        len(prefix) == 2
+        and _PAYMENT_GREETING_RE.fullmatch(prefix[0]) is not None
+        and prefix[1] == ""
+    ):
+        return None
+    if suffix:
+        expected_suffix: list[str] = []
+        if expected_context:
+            expected_suffix.extend(("", *_configured_lines(expected_context)))
+        if expected_signoff:
+            expected_suffix.extend(("", *_configured_lines(expected_signoff)))
+        if suffix != expected_suffix:
+            return None
+    payment_text = "\n".join(lines[index : index + 2])
+    amount_matches = [match.group(1) for match in _MONEY_RE.finditer(payment_text)]
+    reference_matches = [match.group(1) for match in _REFERENCE_RE.finditer(payment_text)]
+    if amount_matches != [intro.group(1)] or reference_matches != [confirmation.group(1)]:
+        return None
+    for line in prefix:
+        if _BARE_MONEY_RE.fullmatch(line) is not None or _BARE_CONFIRMATION_RE.fullmatch(line):
+            return None
+    amount = Decimal(intro.group(1).replace(",", ""))
+    if not amount.is_finite() or amount <= 0:
+        return None
+    return (PaymentEvidence(amount=amount, reference=confirmation.group(1)),)
+
+
+def _split_payment_blocks(lines: Sequence[str]) -> list[list[str]] | None:
+    if not lines or not lines[0] or not lines[-1]:
+        return None
+    blocks: list[list[str]] = [[]]
+    for line in lines:
+        if line:
+            blocks[-1].append(line)
+        elif not blocks[-1]:
+            return None
+        else:
+            blocks.append([])
+    if not blocks[-1]:
+        return None
+    return blocks
+
+
+def _parse_sent_batch(
+    text: str, *, expected_signoff: Sequence[str]
+) -> tuple[PaymentEvidence, ...] | None:
+    lines = _payment_lines(text)
+    if lines is None:
+        return None
+    cursor = 0
+    if _PAYMENT_GREETING_RE.fullmatch(lines[0]) is not None:
+        if len(lines) < 2 or lines[1] != "":
+            return None
+        cursor = 2
+    if cursor + 3 >= len(lines):
+        return None
+    intro = lines[cursor]
+    single_intro = _GENERATED_SINGLE_INTRO_RE.fullmatch(intro)
+    if single_intro is not None:
+        expected_header = "Zelle confirmation:"
+        expected_blocks = 1
+        header = lines[cursor + 1]
+        if lines[cursor + 2] != "":
+            return None
+        tail = lines[cursor + 3 :]
+    elif intro == "Your Reimbursements have been approved and sent by Zelle.":
+        expected_header = "Zelle confirmations"
+        expected_blocks = 2
+        header = lines[cursor + 2]
+        if lines[cursor + 1] != "" or lines[cursor + 3] != "":
+            return None
+        tail = lines[cursor + 4 :]
+    elif intro == "Your reimbursements have been approved and sent by Zelle.":
+        expected_header = "Confirmation:"
+        expected_blocks = 3
+        header = lines[cursor + 2]
+        if lines[cursor + 1] != "" or lines[cursor + 3] != "":
+            return None
+        tail = lines[cursor + 4 :]
+    else:
+        return None
+    if header != expected_header:
+        return None
+    footer = _configured_lines(expected_signoff) if expected_signoff else []
+    if not footer or len(tail) <= len(footer) or tail[-len(footer) - 1] != "":
+        return None
+    if tail[-len(footer) :] != footer:
+        return None
+    blocks = _split_payment_blocks(tail[: -len(footer) - 1])
+    if blocks is None or len(blocks) != expected_blocks:
+        return None
+
+    parsed: list[PaymentEvidence] = []
+    for block in blocks:
+        if len(block) not in {4, 5}:
+            return None
+        if not block[0] or _SENT_DESTINATION_RE.fullmatch(block[1]) is None:
+            return None
+        reference_index = 3 if len(block) == 5 else 2
+        if len(block) == 5 and block[2] != "Classroom Supplies":
+            return None
+        reference = block[reference_index]
+        amount_match = _BARE_MONEY_RE.fullmatch(block[reference_index + 1])
+        if _BARE_CONFIRMATION_RE.fullmatch(reference) is None or amount_match is None:
+            return None
+        if any(
+            _MONEY_RE.search(label) is not None
+            or _REFERENCE_RE.search(label) is not None
+            or _BARE_CONFIRMATION_RE.fullmatch(label) is not None
+            for label in block[:reference_index]
+        ):
+            return None
+        amount = Decimal(amount_match.group(1).replace(",", ""))
+        if not amount.is_finite() or amount <= 0:
+            return None
+        parsed.append(PaymentEvidence(amount=amount, reference=reference))
+    references = [item.reference for item in parsed]
+    if len(references) != len(set(references)):
+        return None
+    payment_lines = lines[: -len(footer) - 1]
+    bare_tokens = [
+        line for line in payment_lines if _BARE_CONFIRMATION_RE.fullmatch(line) is not None
+    ]
+    if bare_tokens != references:
+        return None
+    expected_amount_occurrences = len(parsed) + (1 if single_intro is not None else 0)
+    payment_text = "\n".join(payment_lines)
+    if len(list(_MONEY_RE.finditer(payment_text))) != expected_amount_occurrences:
+        return None
+    if _REFERENCE_RE.search(payment_text) is not None:
+        return None
+    if single_intro is not None:
+        intro_amount = Decimal(single_intro.group(1).replace(",", ""))
+        if parsed[0].amount != intro_amount:
+            return None
+    return tuple(parsed)
+
+
+def parse_payment_evidence_blocks(
+    text: str,
+    *,
+    expected_signoff: Sequence[str] = (),
+    expected_context: str = "",
+) -> tuple[PaymentEvidence, ...] | None:
+    """Parse strict v2 evidence, binding any present envelope to configured report text."""
+
+    if _PAYMENT_NEGATIVE_RE.search(text) is not None:
+        return None
+    generated = _parse_generated_single(
+        text,
+        expected_signoff=expected_signoff,
+        expected_context=expected_context,
+    )
+    if generated is not None:
+        return generated
+    return _parse_sent_batch(text, expected_signoff=expected_signoff)
+
+
 def parse_payment_evidence(text: str) -> PaymentEvidence | None:
-    """Return exact amount/reference evidence only when both are unambiguous."""
+    """Return singular payment evidence under the unchanged schema-v1 parser contract."""
 
     positive_signal = _PAID_SIGNAL_RE.search(text) or _CHECK_SENT_SIGNAL_RE.search(text)
-    if positive_signal is None or _PAYMENT_NEGATIVE_RE.search(text) is not None:
+    if positive_signal is None or _LEGACY_PAYMENT_NEGATIVE_RE.search(text) is not None:
         return None
     amount_matches = [match.group(1) for match in _MONEY_RE.finditer(text)]
     if len(amount_matches) != 1:
