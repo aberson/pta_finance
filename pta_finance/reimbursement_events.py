@@ -35,6 +35,7 @@ __all__ = [
     "TicketSelector",
     "classify_approval_reply",
     "empty_anchor_config",
+    "is_zelle_payment_method",
     "load_anchor_config",
     "parse_payment_evidence",
     "parse_payment_evidence_blocks",
@@ -176,8 +177,17 @@ _CHECK_SENT_SIGNAL_RE = re.compile(
     r"\bcheck\s+(?:number|no\.?|#)\s*[A-Za-z0-9-]{3,64}\b[^\r\n.]*\b(?:sent|mailed|issued)\b",
     re.IGNORECASE,
 )
+_LEGACY_PAYMENT_NEGATIVE_RE = re.compile(
+    r"\b(?:not|never|cancelled|canceled|voided?|disput(?:e|ed)|reversed?|failed|pending)\b"
+    r"|\b(?:wrote|said|reported)\s*:|\bplease\s+confirm\b|\bwhether\b|\?",
+    re.IGNORECASE,
+)
 _PAYMENT_NEGATIVE_RE = re.compile(
     r"\b(?:not|never|cancelled|canceled|void(?:ed)?|disput(?:e|ed)|reversed?|failed|pending)\b"
+    r"|\b(?:unpaid|non[-\s]?payment|held|withheld|on\s+hold|refund(?:ed)?)\b"
+    r"|\b(?:isn|wasn|hasn|haven|hadn|didn|doesn|won|wouldn|couldn|shouldn|can)['’]t\b"
+    r"|\bno[-\s]+payment\b|\breturned\b|\bignore\b"
+    r"|\bonly[-\s]+(?:a[-\s]+)?notice\b"
     r"|\b(?:wrote|said|reported)\s*:|\bplease\s+confirm\b|\bwhether\b|\?"
     r"|\b(?:for\s+context|fyi|according\s+to)\b|(?:^|\n)\s*>",
     re.IGNORECASE,
@@ -207,7 +217,6 @@ _PAYMENT_GREETING_RE = re.compile(
     r"(?: [^\r\n]{1,80})?)[,!]$"
 )
 _SENT_DESTINATION_RE = re.compile(r"^Zelle - \S(?:.*\S)?$")
-_SENT_THANK_YOU_RE = re.compile(r"^(?:Thank you[!,]|Thank you for supporting our classrooms!)$")
 _PROPOSAL_REF_RE = re.compile(
     r"^\s*(?:\[|#{1,6}\s*)?"
     r"(?P<refs>[A-Z][A-Z0-9-]*\d(?:\s*,\s*[A-Z][A-Z0-9-]*\d)*)"
@@ -762,11 +771,28 @@ def _payment_lines(text: str) -> list[str] | None:
     normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip("\n")
     if not normalized:
         return None
-    lines = [line.strip() for line in normalized.split("\n")]
+    lines = [line.rstrip() for line in normalized.split("\n")]
     return lines if all("\x00" not in line for line in lines) else None
 
 
-def _parse_generated_single(text: str) -> tuple[PaymentEvidence, ...] | None:
+def is_zelle_payment_method(value: str) -> bool:
+    """Return whether a canonical payment method is exactly the recognized Zelle value."""
+
+    return value.strip().casefold() == "zelle"
+
+
+def _configured_lines(value: str | Sequence[str]) -> list[str]:
+    text = value if isinstance(value, str) else "\n".join(value)
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    return [line.rstrip() for line in normalized.split("\n")]
+
+
+def _parse_generated_single(
+    text: str,
+    *,
+    expected_signoff: Sequence[str],
+    expected_context: str,
+) -> tuple[PaymentEvidence, ...] | None:
     lines = _payment_lines(text)
     if lines is None:
         return None
@@ -787,13 +813,20 @@ def _parse_generated_single(text: str) -> tuple[PaymentEvidence, ...] | None:
         and prefix[1] == ""
     ):
         return None
-    if suffix and not (suffix[0] == "" and len(suffix) >= 2 and all(suffix[1:])):
-        return None
-    amount_matches = [match.group(1) for match in _MONEY_RE.finditer(text)]
-    reference_matches = [match.group(1) for match in _REFERENCE_RE.finditer(text)]
+    if suffix:
+        expected_suffix: list[str] = []
+        if expected_context:
+            expected_suffix.extend(("", *_configured_lines(expected_context)))
+        if expected_signoff:
+            expected_suffix.extend(("", *_configured_lines(expected_signoff)))
+        if suffix != expected_suffix:
+            return None
+    payment_text = "\n".join(lines[index : index + 2])
+    amount_matches = [match.group(1) for match in _MONEY_RE.finditer(payment_text)]
+    reference_matches = [match.group(1) for match in _REFERENCE_RE.finditer(payment_text)]
     if amount_matches != [intro.group(1)] or reference_matches != [confirmation.group(1)]:
         return None
-    for line in prefix + suffix[1:]:
+    for line in prefix:
         if _BARE_MONEY_RE.fullmatch(line) is not None or _BARE_CONFIRMATION_RE.fullmatch(line):
             return None
     amount = Decimal(intro.group(1).replace(",", ""))
@@ -818,7 +851,9 @@ def _split_payment_blocks(lines: Sequence[str]) -> list[list[str]] | None:
     return blocks
 
 
-def _parse_sent_batch(text: str) -> tuple[PaymentEvidence, ...] | None:
+def _parse_sent_batch(
+    text: str, *, expected_signoff: Sequence[str]
+) -> tuple[PaymentEvidence, ...] | None:
     lines = _payment_lines(text)
     if lines is None:
         return None
@@ -856,11 +891,12 @@ def _parse_sent_batch(text: str) -> tuple[PaymentEvidence, ...] | None:
         return None
     if header != expected_header:
         return None
-    if len(tail) < 6 or tail[-4] != "" or any(not line for line in tail[-3:]):
+    footer = _configured_lines(expected_signoff) if expected_signoff else []
+    if not footer or len(tail) <= len(footer) or tail[-len(footer) - 1] != "":
         return None
-    if _SENT_THANK_YOU_RE.fullmatch(tail[-3]) is None:
+    if tail[-len(footer) :] != footer:
         return None
-    blocks = _split_payment_blocks(tail[:-4])
+    blocks = _split_payment_blocks(tail[: -len(footer) - 1])
     if blocks is None or len(blocks) != expected_blocks:
         return None
 
@@ -891,13 +927,17 @@ def _parse_sent_batch(text: str) -> tuple[PaymentEvidence, ...] | None:
     references = [item.reference for item in parsed]
     if len(references) != len(set(references)):
         return None
-    bare_tokens = [line for line in lines if _BARE_CONFIRMATION_RE.fullmatch(line) is not None]
+    payment_lines = lines[: -len(footer) - 1]
+    bare_tokens = [
+        line for line in payment_lines if _BARE_CONFIRMATION_RE.fullmatch(line) is not None
+    ]
     if bare_tokens != references:
         return None
     expected_amount_occurrences = len(parsed) + (1 if single_intro is not None else 0)
-    if len(list(_MONEY_RE.finditer(text))) != expected_amount_occurrences:
+    payment_text = "\n".join(payment_lines)
+    if len(list(_MONEY_RE.finditer(payment_text))) != expected_amount_occurrences:
         return None
-    if _REFERENCE_RE.search(text) is not None:
+    if _REFERENCE_RE.search(payment_text) is not None:
         return None
     if single_intro is not None:
         intro_amount = Decimal(single_intro.group(1).replace(",", ""))
@@ -906,36 +946,31 @@ def _parse_sent_batch(text: str) -> tuple[PaymentEvidence, ...] | None:
     return tuple(parsed)
 
 
-def parse_payment_evidence_blocks(text: str) -> tuple[PaymentEvidence, ...] | None:
-    """Parse one exact generated message or one exact sent Zelle block message."""
+def parse_payment_evidence_blocks(
+    text: str,
+    *,
+    expected_signoff: Sequence[str] = (),
+    expected_context: str = "",
+) -> tuple[PaymentEvidence, ...] | None:
+    """Parse strict v2 evidence, binding any present envelope to configured report text."""
 
     if _PAYMENT_NEGATIVE_RE.search(text) is not None:
         return None
-    generated = _parse_generated_single(text)
+    generated = _parse_generated_single(
+        text,
+        expected_signoff=expected_signoff,
+        expected_context=expected_context,
+    )
     if generated is not None:
         return generated
-    return _parse_sent_batch(text)
+    return _parse_sent_batch(text, expected_signoff=expected_signoff)
 
 
 def parse_payment_evidence(text: str) -> PaymentEvidence | None:
-    """Return exact singular payment evidence while preserving the legacy parser contract."""
-
-    structured = parse_payment_evidence_blocks(text)
-    if structured is not None:
-        return structured[0] if len(structured) == 1 else None
-    if any(
-        marker in text
-        for marker in (
-            "reimbursement has been approved and sent by Zelle.",
-            "Reimbursements have been approved and sent by Zelle.",
-            "reimbursements have been approved and sent by Zelle.",
-            "Zelle confirmations",
-        )
-    ):
-        return None
+    """Return singular payment evidence under the unchanged schema-v1 parser contract."""
 
     positive_signal = _PAID_SIGNAL_RE.search(text) or _CHECK_SENT_SIGNAL_RE.search(text)
-    if positive_signal is None or _PAYMENT_NEGATIVE_RE.search(text) is not None:
+    if positive_signal is None or _LEGACY_PAYMENT_NEGATIVE_RE.search(text) is not None:
         return None
     amount_matches = [match.group(1) for match in _MONEY_RE.finditer(text)]
     if len(amount_matches) != 1:

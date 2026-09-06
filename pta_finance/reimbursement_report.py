@@ -28,7 +28,7 @@ from typing import Any, NoReturn
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-from pta_finance import receipt_ingest
+from pta_finance import receipt_ingest, reimbursement_events
 
 SCHEMA_VERSION = 2
 _MONEY_RE = re.compile(r"^(?:0|[1-9][0-9]*)\.[0-9]{2}$")
@@ -1350,6 +1350,7 @@ def _load_data(value: Any) -> ReimbursementReport:
         _fail("supplemental evidence cannot be both linked and unmatched")
     if event_evidence_keys | unmatched_evidence_keys != set(evidence_by_key):
         _fail("every supplemental evidence record must be linked or unmatched")
+    recorded_payment_targets: set[str] = set()
     for event in supplemental.events:
         evidence = evidence_by_key.get(event.evidence_key)
         if evidence is None or evidence.evidence_sha256 != event.evidence_sha256:
@@ -1360,6 +1361,10 @@ def _load_data(value: Any) -> ReimbursementReport:
             _fail("supplemental event timestamp does not match its accounted evidence")
         if event.ticket_review_key not in ticket_keys:
             _fail("supplemental event targets an unknown ticket review key")
+        if event.kind == "PAYMENT_RECORDED":
+            if event.ticket_review_key in recorded_payment_targets:
+                _fail("a ticket may have at most one recorded payment event")
+            recorded_payment_targets.add(event.ticket_review_key)
         expected_event_key = (
             "event:v1:"
             + hashlib.sha256(
@@ -1382,24 +1387,29 @@ def _load_data(value: Any) -> ReimbursementReport:
         }:
             _fail("mail lifecycle events require mail or operator-payment evidence")
         target = next(ticket for ticket in tickets if ticket.review_key == event.ticket_review_key)
-        source_total = sum(
-            (item.source_amount for item in target.items if item.source_amount is not None),
+        payable_total = sum(
+            (item.effective_amount for item in target.items if item.effective_amount is not None),
             Decimal("0.00"),
         )
         if event.kind == "PAYMENT_RECORDED" and (
             target.live.workflow_state != "SETTLED"
             or target.live.decision != "APPROVED"
-            or target.live.payment_status not in {"PAID", "PAID_PRIOR"}
-            or event.amount != source_total
+            or event.amount != payable_total
         ):
             _fail(
                 "recorded payment events require the linked ticket total to match and be approved "
                 "and settled"
             )
-        if event.kind == "PAYMENT_DISCREPANCY" and event.amount == source_total:
+        if event.kind == "PAYMENT_RECORDED" and target.live.payment_status != "PAID":
+            _fail("recorded payment events require target payment_status PAID")
+        if event.kind == "PAYMENT_RECORDED" and target.live.payment_date != event.occurred_on:
+            _fail("recorded payment event date must match the linked ticket payment date")
+        if event.kind == "PAYMENT_RECORDED":
+            canonical_confirmation = f"Reference {event.reference}; amount ${event.amount:.2f}"
+            if canonical_confirmation not in target.live.confirmations:
+                _fail("recorded payment events require their exact canonical confirmation")
+        if event.kind == "PAYMENT_DISCREPANCY" and event.amount == payable_total:
             _fail("payment discrepancy events must differ from the linked ticket total")
-        if event.kind == "PAYMENT_QUARANTINED" and target.live.payment_status != "NOT_PAID":
-            _fail("quarantined payment events cannot settle the linked ticket")
         if (
             event.kind == "APPROVAL_GRANTED"
             and target.live.decision == "UNREVIEWED"
@@ -1452,7 +1462,7 @@ def _format_date(value: date | None) -> str:
 
 def _payment_confirmation(payment_method: str) -> str:
     lowered = payment_method.casefold()
-    if "zelle" in lowered:
+    if reimbursement_events.is_zelle_payment_method(payment_method):
         return "Zelle confirmation: [ZELLE CONFIRMATION]"
     if "check" in lowered:
         return "Check number: [CHECK NUMBER]"

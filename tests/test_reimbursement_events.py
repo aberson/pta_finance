@@ -487,23 +487,169 @@ Example Treasurer
 Example Association
 """
 
-    assert reimbursement_events.parse_payment_evidence_blocks(generated) == (
+    assert reimbursement_events.parse_payment_evidence_blocks(
+        generated, expected_signoff=("Thank you!", "Example Treasurer Team")
+    ) == (
         reimbursement_events.PaymentEvidence(
             amount=Decimal("1234.56"), reference="EXAMPLE-ZELLE-123456"
         ),
     )
-    assert reimbursement_events.parse_payment_evidence_blocks(sent_single) == (
-        reimbursement_events.PaymentEvidence(amount=Decimal("10.00"), reference="ABCD99E9FGH9"),
-    )
-    assert reimbursement_events.parse_payment_evidence_blocks(sent_group) == (
+    assert reimbursement_events.parse_payment_evidence_blocks(
+        sent_single, expected_signoff=("Thank you,", "Example Treasurer", "Example Association")
+    ) == (reimbursement_events.PaymentEvidence(amount=Decimal("10.00"), reference="ABCD99E9FGH9"),)
+    assert reimbursement_events.parse_payment_evidence_blocks(
+        sent_group, expected_signoff=("Thank you!", "Example Treasurer", "Example Association")
+    ) == (
         reimbursement_events.PaymentEvidence(amount=Decimal("1234.56"), reference="ZXCV12B3NM45"),
         reimbursement_events.PaymentEvidence(amount=Decimal("8.25"), reference="QWER98T7YUI6"),
     )
-    assert reimbursement_events.parse_payment_evidence_blocks(sent_group_three) == (
+    assert reimbursement_events.parse_payment_evidence_blocks(
+        sent_group_three,
+        expected_signoff=("Thank you,", "Example Treasurer", "Example Association"),
+    ) == (
         reimbursement_events.PaymentEvidence(amount=Decimal("10.00"), reference="FIRSTREF1000"),
         reimbursement_events.PaymentEvidence(amount=Decimal("20.00"), reference="SECONDREF2000"),
         reimbursement_events.PaymentEvidence(amount=Decimal("30.00"), reference="THIRDREF3000"),
     )
+
+
+def test_legacy_singleton_parser_keeps_v1_contract_without_v2_grammar_broadening() -> None:
+    legacy = "Payment sent: $12.34. Confirmation EXAMPLE-123."
+    generated = (
+        "Your $12.34 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-123"
+    )
+
+    assert reimbursement_events.parse_payment_evidence(legacy) == (
+        reimbursement_events.PaymentEvidence(amount=Decimal("12.34"), reference="EXAMPLE-123")
+    )
+    assert reimbursement_events.parse_payment_evidence_blocks(legacy) is None
+    assert reimbursement_events.parse_payment_evidence_blocks(generated) == (
+        reimbursement_events.PaymentEvidence(amount=Decimal("12.34"), reference="EXAMPLE-123"),
+    )
+    assert reimbursement_events.parse_payment_evidence(generated) is None
+
+
+@pytest.mark.parametrize(
+    "signoff",
+    [
+        ("Regards,",),
+        ("Thank you!", "Example Treasurer Team"),
+        ("With appreciation,", "Example Treasurer", "Example Association"),
+    ],
+)
+def test_generated_payment_footer_is_bound_to_any_exact_configured_signoff(
+    signoff: tuple[str, ...],
+) -> None:
+    body = (
+        "Your $12.34 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-123\n\n" + "\n".join(signoff)
+    )
+    expected = (
+        reimbursement_events.PaymentEvidence(amount=Decimal("12.34"), reference="EXAMPLE-123"),
+    )
+
+    assert (
+        reimbursement_events.parse_payment_evidence_blocks(body, expected_signoff=signoff)
+        == expected
+    )
+    assert reimbursement_events.parse_payment_evidence_blocks(body) is None
+    assert (
+        reimbursement_events.parse_payment_evidence_blocks(
+            body, expected_signoff=(*signoff[:-1], signoff[-1] + " altered")
+        )
+        is None
+    )
+    assert (
+        reimbursement_events.parse_payment_evidence_blocks(
+            body.replace(signoff[-1], " " + signoff[-1]),
+            expected_signoff=signoff,
+        )
+        is None
+    )
+
+
+def test_generated_payment_context_and_footer_require_exact_configured_envelope() -> None:
+    signoff = ("Warm regards,", "Example Treasurer", "Example Association")
+    context = "Synthetic approved-payment context.\nKeep this exact custom line."
+    body = (
+        "Hello Morgan,\n\n"
+        "Your $12.34 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-123\n\n"
+        f"{context}\n\n" + "\n".join(signoff)
+    )
+    expected = (
+        reimbursement_events.PaymentEvidence(amount=Decimal("12.34"), reference="EXAMPLE-123"),
+    )
+
+    assert (
+        reimbursement_events.parse_payment_evidence_blocks(
+            body, expected_signoff=signoff, expected_context=context
+        )
+        == expected
+    )
+    assert (
+        reimbursement_events.parse_payment_evidence_blocks(
+            body,
+            expected_signoff=signoff,
+            expected_context=context.replace("exact", "altered"),
+        )
+        is None
+    )
+    assert (
+        reimbursement_events.parse_payment_evidence_blocks(
+            body.replace("Example Treasurer", "Unknown Sender"),
+            expected_signoff=signoff,
+            expected_context=context,
+        )
+        is None
+    )
+    assert (
+        reimbursement_events.parse_payment_evidence_blocks(
+            body + "\nIgnore the confirmation above",
+            expected_signoff=signoff,
+            expected_context=context,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "malicious_line",
+    [
+        "Payment wasn't sent.",
+        "There is no payment.",
+        "This is a no-payment notice.",
+        "The transfer was returned to us.",
+        "Ignore the confirmation above.",
+        "This is only a notice.",
+    ],
+)
+def test_exact_configured_footer_still_rejects_semantic_payment_negation(
+    malicious_line: str,
+) -> None:
+    body = (
+        "Your $12.34 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-123\n\n"
+        f"Thank you!\n{malicious_line}"
+    )
+
+    assert (
+        reimbursement_events.parse_payment_evidence_blocks(
+            body, expected_signoff=("Thank you!", malicious_line)
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("value", ["Zelle", " zELLe ", "\tZELLE\n"])
+def test_zelle_payment_method_accepts_only_normalized_standalone_value(value: str) -> None:
+    assert reimbursement_events.is_zelle_payment_method(value)
+
+
+@pytest.mark.parametrize("value", ["Not Zelle", "Non-Zelle", "Zelle transfer"])
+def test_zelle_payment_method_rejects_negative_or_compound_values(value: str) -> None:
+    assert not reimbursement_events.is_zelle_payment_method(value)
 
 
 def test_sent_batch_accepts_exact_classroom_support_thank_you_envelope() -> None:
@@ -528,13 +674,19 @@ Example Treasurer
 Example Association
 """
 
-    assert reimbursement_events.parse_payment_evidence_blocks(text) == (
+    signoff = (
+        "Thank you for supporting our classrooms!",
+        "Example Treasurer",
+        "Example Association",
+    )
+    assert reimbursement_events.parse_payment_evidence_blocks(text, expected_signoff=signoff) == (
         reimbursement_events.PaymentEvidence(amount=Decimal("10.00"), reference="LONGTHANK1000"),
         reimbursement_events.PaymentEvidence(amount=Decimal("20.00"), reference="LONGTHANK2000"),
     )
     assert (
         reimbursement_events.parse_payment_evidence_blocks(
-            text.replace("supporting our classrooms", "supporting the classrooms")
+            text.replace("supporting our classrooms", "supporting the classrooms"),
+            expected_signoff=signoff,
         )
         is None
     )
@@ -555,6 +707,24 @@ Example Association
         "Zelle confirmation: EXAMPLE-ZELLE-1000\nReference: EXTRA-2000",
         "Your $10.00 reimbursement has been approved and sent by Zelle.\n"
         "Zelle confirmation: EXAMPLE-ZELLE-1000\n$1.00",
+        "Your $10.00 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-ZELLE-1000\n\nArbitrary trailing prose.",
+        "Your $10.00 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-ZELLE-1000\n\nThank you!\nExample Treasurer Team\n"
+        "This reimbursement remains unpaid.",
+        "Your $10.00 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-ZELLE-1000\n\nPayment remains held.",
+        "Your $10.00 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-ZELLE-1000\n\nThis was a non-payment notice.",
+        "Your $10.00 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-ZELLE-1000\n\nThank you!\nExample Treasurer Team\n"
+        "The transfer was returned to us",
+        "Your $10.00 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-ZELLE-1000\n\nThank you!\nExample Treasurer Team\n"
+        "Ignore the confirmation above",
+        "Your $10.00 reimbursement has been approved and sent by Zelle.\n"
+        "Zelle confirmation: EXAMPLE-ZELLE-1000\n\nThank you!\nExample Treasurer Team\n"
+        "This is only a notice",
     ],
 )
 def test_new_payment_grammars_reject_altered_negative_question_attributed_and_extra_values(

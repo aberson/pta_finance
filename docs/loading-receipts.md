@@ -390,24 +390,45 @@ A payment link names one normalized Message-ID and binds each selected ticket to
 exact confirmation reference. The mail must be present, in scope, from a configured payment
 operator, and match one complete strict grammar. The generated-single grammar is the exact report
 sentence `Your $AMOUNT reimbursement has been approved and sent by Zelle.` immediately followed by
-`Zelle confirmation: REFERENCE`. The sent-message grammar accepts only the known one-, two-, or
-three-block Zelle wire layouts; each block has a payee label, `Zelle - ...`, optional `Classroom
+`Zelle confirmation: REFERENCE`. A minimal body may omit its footer. When the footer is present,
+it must equal the already-validated `report.email_signoff` exactly; an approved ticket's configured
+`review.email_context`, when present in the message, must likewise match exactly before that
+footer. The sent-message grammar accepts only the known one-, two-, or three-block Zelle wire
+layouts and always requires that same exact configured signoff; each block has a payee label,
+`Zelle - ...`, optional `Classroom
 Supplies`, a bare reference, and a bare amount. Comma-formatted currency is accepted. An exact link
-with one binding may also use the existing strict singleton parser so a historical schema-v1
-payment event remains reproducible after a schema-v2 upgrade; links with multiple bindings never
-use that fallback. Binding order does not matter, but the parsed blocks and bindings must be a
-complete one-to-one set and every amount must equal its already-approved ticket total. A malformed,
-partial, duplicated, extra, wrong-sender, out-of-scope, or ancestry-conflicting group is quarantined
-atomically and changes no ticket. Payment links never propagate to replies.
+with one binding may use the existing strict singleton parser only when the fully reconstructed
+payment event is byte-exact to one prior event, so a historical schema-v1 payment event remains
+reproducible after a schema-v2 upgrade without authorizing fresh legacy text; links with multiple
+bindings never use that fallback. Binding order does not matter, but the parsed blocks and bindings
+must be a complete one-to-one set and every amount must equal its already-approved ticket's
+reviewed amount when present, otherwise its source amount. A grouped amount mismatch records the
+parsed amount and reference as a non-settling discrepancy event, records otherwise valid siblings
+as quarantined with their parsed amount and reference, and changes no ticket. A malformed, partial,
+duplicated, extra, wrong-sender, out-of-scope, or ancestry-conflicting group is quarantined
+atomically and changes no ticket. Only the standalone `Zelle` payment-method value is eligible
+(matched case-insensitively); negative values such as `Not Zelle` and `Non-Zelle` are rejected.
+Payment links never propagate to replies.
+
+Schema-v1 thread/direct-link replay retains its historical source-amount comparison even when a
+reviewed amount is present. Schema-v2 payment links, operator payments, and report validation use
+the reviewed amount when present and otherwise the source amount.
 
 An operator payment requires `record_payment: true`, one exact ticket selector, an ISO date, exact
 two-decimal amount, raw confirmation reference, and a nonblank audit note. It is stored as distinct
 `OPERATOR_PAYMENT` evidence. It settles only a ticket that is already approved and whose total
-matches exactly; an amount discrepancy remains visible and unpaid. Removing or changing an
-accounted mail or operator record fails the existing append-only freshness check. A persisted
-operator-payment outcome also remains fixed if approval state or the report date later changes, so
-operators should add this record only after verifying that the approval and date guards already
-pass.
+matches exactly, using each reviewed amount when present; an amount discrepancy remains visible and
+unpaid. A new payment link or operator-payment record targeting an already settled or paid ticket
+is rejected without changing that ticket, while an exact previously recorded event remains
+replayable. Removing or changing an accounted mail or operator record fails the existing
+append-only freshness check. A persisted operator-payment outcome also remains fixed if approval
+state or the report date later changes, so operators should add this record only after verifying
+that the approval and date guards already pass.
+
+A recorded-payment event is valid only on a `PAID` ticket whose payment date equals the event date
+and whose confirmations contain the exact canonical `Reference REFERENCE; amount $AMOUNT` entry.
+`PAID_PRIOR` is reserved for settlements without a recorded payment event. Existing unrelated
+confirmation history may remain alongside the canonical entry.
 
 Negations, questions, attribution, cancellation language, and ambiguous values fail closed.
 A secondary approval remains scoped to an exact

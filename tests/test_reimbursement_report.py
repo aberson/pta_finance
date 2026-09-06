@@ -244,6 +244,69 @@ def _seal_record(record: dict[str, object]) -> None:
     ).hexdigest()
 
 
+def _recorded_payment_bundle(*, source_type: str = "MAIL") -> dict[str, object]:
+    bundle = reimbursement_report.migrate_bundle(_bundle())
+    ticket = bundle["tickets"][0]
+    ticket["items"][0]["reviewed_amount"] = "9.00"
+    ticket["live"] = {
+        "workflow_state": "SETTLED",
+        "decision": "APPROVED",
+        "payment_status": "PAID",
+        "payment_date": "2026-08-04",
+        "confirmations": ["Reference EXAMPLE-100; amount $9.00"],
+    }
+    ticket["messages"] = []
+    ticket["archive_note"] = "Synthetic payment event test."
+    evidence_digest = "d" * 64
+    if source_type == "MAIL":
+        message_id = "<payment-report@example.invalid>"
+        evidence_key = "mail:v1:" + hashlib.sha256(message_id.encode()).hexdigest()
+        occurred_at = "2026-08-04T12:00:00+00:00"
+        top_authored_sha256 = "e" * 64
+    else:
+        assert source_type == "OPERATOR_PAYMENT"
+        message_id = ""
+        evidence_key = f"operator-payment:v1:{evidence_digest}"
+        occurred_at = ""
+        top_authored_sha256 = evidence_digest
+    evidence: dict[str, object] = {
+        "evidence_key": evidence_key,
+        "source_type": source_type,
+        "message_id": message_id,
+        "in_reply_to": [],
+        "references": [],
+        "occurred_on": "2026-08-04",
+        "occurred_at": occurred_at,
+        "top_authored_sha256": top_authored_sha256,
+        "evidence_sha256": evidence_digest,
+        "attachments": [],
+    }
+    _seal_record(evidence)
+    ticket_key = str(ticket["review_key"])
+    event: dict[str, object] = {
+        "event_key": "event:v1:"
+        + hashlib.sha256(f"{evidence_key}\0{ticket_key}\0PAYMENT_RECORDED".encode()).hexdigest(),
+        "evidence_key": evidence_key,
+        "ticket_review_key": ticket_key,
+        "kind": "PAYMENT_RECORDED",
+        "occurred_on": "2026-08-04",
+        "occurred_at": occurred_at,
+        "evidence_sha256": evidence_digest,
+        "summary": "Synthetic configured-operator payment recorded.",
+        "amount": "9.00",
+        "reference": "EXAMPLE-100",
+        "discrepancy": "",
+    }
+    _seal_record(event)
+    bundle["supplemental"] = {
+        "anchors_sha256": "f" * 64,
+        "evidence": [evidence],
+        "events": [event],
+        "unmatched": [],
+    }
+    return bundle
+
+
 def test_load_render_aggregates_emails_and_layout(tmp_path: Path) -> None:
     path = tmp_path / "bundle.json"
     _write_bundle(path, _bundle())
@@ -302,21 +365,60 @@ def test_load_render_aggregates_emails_and_layout(tmp_path: Path) -> None:
     assert reimbursement_report.render_html(report) == html
 
 
-def test_generated_zelle_email_round_trips_through_payment_parser(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("signoff", "context"),
+    [
+        (("Regards,",), ""),
+        (("Thank you!", "Example Treasurer Team"), "Synthetic exact payment context."),
+        (
+            ("With appreciation,", "Example Treasurer", "Example Association"),
+            "Synthetic context line one.\nSynthetic context line two.",
+        ),
+    ],
+)
+def test_generated_zelle_email_round_trips_through_strict_payment_parser(
+    tmp_path: Path, signoff: tuple[str, ...], context: str
+) -> None:
     path = tmp_path / "bundle.json"
-    _write_bundle(path, _bundle())
+    bundle = _bundle()
+    bundle["report"]["email_signoff"] = list(signoff)
+    bundle["tickets"][0]["review"]["email_context"] = context
+    _write_bundle(path, bundle)
 
-    rendered = reimbursement_report.render_html(reimbursement_report.load_bundle(path))
+    report = reimbursement_report.load_bundle(path)
+    rendered = reimbursement_report.render_html(report)
     body_match = re.search(r'<pre class="mail-body">(.*?)</pre>', rendered, re.DOTALL)
     assert body_match is not None
     sent_body = html.unescape(body_match.group(1)).replace(
         "[ZELLE CONFIRMATION]", "EXAMPLE-ZELLE-1000"
     )
 
-    assert reimbursement_events.parse_payment_evidence(sent_body) == (
+    assert reimbursement_events.parse_payment_evidence_blocks(
+        sent_body,
+        expected_signoff=report.settings.email_signoff,
+        expected_context=report.tickets[0].review.email_context,
+    ) == (
         reimbursement_events.PaymentEvidence(
             amount=Decimal("10.00"), reference="EXAMPLE-ZELLE-1000"
+        ),
+    )
+    assert reimbursement_events.parse_payment_evidence(sent_body) is None
+    assert (
+        reimbursement_events.parse_payment_evidence_blocks(
+            sent_body + "\nThis is only a notice",
+            expected_signoff=report.settings.email_signoff,
+            expected_context=report.tickets[0].review.email_context,
         )
+        is None
+    )
+
+
+@pytest.mark.parametrize("payment_method", ["Not Zelle", "Non-Zelle"])
+def test_negative_zelle_payment_methods_do_not_get_zelle_confirmation(
+    payment_method: str,
+) -> None:
+    assert reimbursement_report._payment_confirmation(payment_method) == (
+        "Check number or Zelle confirmation: [CHECK NUMBER OR ZELLE CONFIRMATION]"
     )
 
 
@@ -608,55 +710,12 @@ def test_supplemental_events_and_unmatched_render_without_changing_totals(
 
 
 def test_payment_event_amount_and_discrepancy_kind_are_strict(tmp_path: Path) -> None:
-    bundle = reimbursement_report.migrate_bundle(_bundle())
+    bundle = _recorded_payment_bundle()
     ticket = bundle["tickets"][0]
-    ticket["live"] = {
-        "workflow_state": "SETTLED",
-        "decision": "APPROVED",
-        "payment_status": "PAID",
-        "payment_date": "2026-08-04",
-        "confirmations": ["Reference EXAMPLE-100; amount $10.00"],
-    }
-    ticket["messages"] = []
-    ticket["archive_note"] = "Synthetic payment event test."
-    message_id = "<payment-report@example.invalid>"
-    evidence_key = "mail:v1:" + hashlib.sha256(message_id.encode()).hexdigest()
-    evidence_digest = "d" * 64
-    evidence: dict[str, object] = {
-        "evidence_key": evidence_key,
-        "source_type": "MAIL",
-        "message_id": message_id,
-        "in_reply_to": [],
-        "references": [],
-        "occurred_on": "2026-08-04",
-        "occurred_at": "2026-08-04T12:00:00+00:00",
-        "top_authored_sha256": "e" * 64,
-        "evidence_sha256": evidence_digest,
-        "attachments": [],
-    }
-    _seal_record(evidence)
+    evidence = bundle["supplemental"]["evidence"][0]
+    event = bundle["supplemental"]["events"][0]
     ticket_key = str(ticket["review_key"])
-    event: dict[str, object] = {
-        "event_key": "event:v1:"
-        + hashlib.sha256(f"{evidence_key}\0{ticket_key}\0PAYMENT_RECORDED".encode()).hexdigest(),
-        "evidence_key": evidence_key,
-        "ticket_review_key": ticket_key,
-        "kind": "PAYMENT_RECORDED",
-        "occurred_on": "2026-08-04",
-        "occurred_at": "2026-08-04T12:00:00+00:00",
-        "evidence_sha256": evidence_digest,
-        "summary": "Synthetic configured-operator payment recorded.",
-        "amount": "10.00",
-        "reference": "EXAMPLE-100",
-        "discrepancy": "",
-    }
-    _seal_record(event)
-    bundle["supplemental"] = {
-        "anchors_sha256": "f" * 64,
-        "evidence": [evidence],
-        "events": [event],
-        "unmatched": [],
-    }
+    evidence_key = str(evidence["evidence_key"])
     path = tmp_path / "payment.json"
     _write_bundle(path, bundle)
     reimbursement_report.load_bundle(path)
@@ -688,6 +747,109 @@ def test_payment_event_amount_and_discrepancy_kind_are_strict(tmp_path: Path) ->
     _seal_record(discrepancy_event)
     _write_bundle(path, equal_discrepancy)
     with pytest.raises(reimbursement_report.ReimbursementReportError, match="must differ"):
+        reimbursement_report.load_bundle(path)
+
+    duplicate_recorded = copy.deepcopy(bundle)
+    second_message_id = "<payment-report-second@example.invalid>"
+    second_evidence_key = "mail:v1:" + hashlib.sha256(second_message_id.encode()).hexdigest()
+    second_evidence_digest = "c" * 64
+    second_evidence = copy.deepcopy(evidence)
+    second_evidence.update(
+        {
+            "evidence_key": second_evidence_key,
+            "message_id": second_message_id,
+            "occurred_at": "2026-08-04T13:00:00+00:00",
+            "evidence_sha256": second_evidence_digest,
+        }
+    )
+    _seal_record(second_evidence)
+    second_event = copy.deepcopy(event)
+    second_event.update(
+        {
+            "event_key": "event:v1:"
+            + hashlib.sha256(
+                f"{second_evidence_key}\0{ticket_key}\0PAYMENT_RECORDED".encode()
+            ).hexdigest(),
+            "evidence_key": second_evidence_key,
+            "occurred_at": "2026-08-04T13:00:00+00:00",
+            "evidence_sha256": second_evidence_digest,
+            "reference": "EXAMPLE-200",
+        }
+    )
+    _seal_record(second_event)
+    duplicate_recorded["supplemental"]["evidence"].append(second_evidence)
+    duplicate_recorded["supplemental"]["evidence"].sort(key=lambda item: item["evidence_key"])
+    duplicate_recorded["supplemental"]["events"].append(second_event)
+    duplicate_recorded["supplemental"]["events"].sort(
+        key=lambda item: (item["occurred_at"], item["event_key"])
+    )
+    _write_bundle(path, duplicate_recorded)
+    with pytest.raises(reimbursement_report.ReimbursementReportError, match="at most one"):
+        reimbursement_report.load_bundle(path)
+
+
+@pytest.mark.parametrize("source_type", ["MAIL", "OPERATOR_PAYMENT"])
+def test_recorded_payment_accepts_exact_mail_and_operator_state(
+    tmp_path: Path, source_type: str
+) -> None:
+    path = tmp_path / f"recorded-{source_type.casefold()}.json"
+    _write_bundle(path, _recorded_payment_bundle(source_type=source_type))
+
+    reimbursement_report.load_bundle(path)
+
+
+def test_recorded_payment_preserves_unrelated_prior_confirmation(tmp_path: Path) -> None:
+    bundle = _recorded_payment_bundle()
+    bundle["tickets"][0]["live"]["confirmations"].insert(
+        0, "Synthetic unrelated prior confirmation."
+    )
+    path = tmp_path / "recorded-with-prior-confirmation.json"
+    _write_bundle(path, bundle)
+
+    reimbursement_report.load_bundle(path)
+
+
+def test_recorded_payment_rejects_paid_prior_target(tmp_path: Path) -> None:
+    bundle = _recorded_payment_bundle()
+    bundle["tickets"][0]["live"]["payment_status"] = "PAID_PRIOR"
+    path = tmp_path / "paid-prior.json"
+    _write_bundle(path, bundle)
+
+    with pytest.raises(reimbursement_report.ReimbursementReportError, match="payment_status PAID"):
+        reimbursement_report.load_bundle(path)
+
+
+def test_recorded_payment_rejects_payment_date_mismatch(tmp_path: Path) -> None:
+    bundle = _recorded_payment_bundle()
+    bundle["tickets"][0]["live"]["payment_date"] = "2026-08-05"
+    path = tmp_path / "wrong-date.json"
+    _write_bundle(path, bundle)
+
+    with pytest.raises(reimbursement_report.ReimbursementReportError, match="payment date"):
+        reimbursement_report.load_bundle(path)
+
+
+def test_recorded_payment_rejects_unrelated_reference_confirmation(tmp_path: Path) -> None:
+    bundle = _recorded_payment_bundle()
+    bundle["tickets"][0]["live"]["confirmations"] = ["Reference UNRELATED-100; amount $9.00"]
+    path = tmp_path / "wrong-reference.json"
+    _write_bundle(path, bundle)
+
+    with pytest.raises(
+        reimbursement_report.ReimbursementReportError, match="canonical confirmation"
+    ):
+        reimbursement_report.load_bundle(path)
+
+
+def test_recorded_payment_rejects_unrelated_amount_confirmation(tmp_path: Path) -> None:
+    bundle = _recorded_payment_bundle()
+    bundle["tickets"][0]["live"]["confirmations"] = ["Reference EXAMPLE-100; amount $1.00"]
+    path = tmp_path / "wrong-confirmation-amount.json"
+    _write_bundle(path, bundle)
+
+    with pytest.raises(
+        reimbursement_report.ReimbursementReportError, match="canonical confirmation"
+    ):
         reimbursement_report.load_bundle(path)
 
 
