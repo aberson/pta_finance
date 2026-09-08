@@ -275,6 +275,7 @@ explicitly so reviewers can confirm the classification rather than infer it.)*
 - **Produces:** nothing in the repo — a gitignored client-secrets file, a gitignored token file, and a `config.toml` edit
 - **Done when:** `pta-finance fetch-mail --since <recent-date> --dry-run` exits 0 and reports a message count. Verified by exit code and count only — no token or secret file contents are ever printed (per the workspace `security.md` rule, "Never dump secret file contents" -- metadata and exit codes only, never file contents). The consenting account is listed as a **test user** and the publishing status is *Testing* (amended 2026-08-26 — Production is not reachable here; see Problem).
 - **Depends on:** 10 — the `Done when:` invokes `fetch-mail`, which Step 10 creates; depending on Step 9 alone would dispatch this step before the command exists.
+- **Status:** DONE (2026-08-26)
 
 <!-- autofix-applied: 2026-08-25 -->
 ### Step M5: Refresh-token longevity check (wait)
@@ -285,6 +286,7 @@ explicitly so reviewers can confirm the classification rather than infer it.)*
 - **Done when:** `pta-finance fetch-mail --since <recent-date> --dry-run` is run in a **fresh shell ≥8 days after consent** and the outcome is recorded. In *Testing* mode a re-consent prompt at that point is the **expected** result (amended 2026-08-26), and re-approving then exiting 0 satisfies this step — it confirms the ~weekly cadence the operator should plan around. A run that exits 0 with no prompt is also fine; neither outcome is a failure.
 - **Depends on:** M4
 - **Blocks:** nothing — this is a background confirmation, deliberately OFF the critical path so the backfill is not stalled for over a week.
+- **Status:** DEFERRED (2026-08-26) — cannot pass while consent is in *Testing*; the 7-day expiry is exactly what this step detects. Meaningful again only if the consent screen is ever published to Production. Issue #18 deliberately left OPEN.
 
 ### Step 11: End-to-end smoke gate — fetch → ingest → map (operator)
 - **Problem:** Run one real cycle over a small date window with real components wired together and no mocks: `fetch-mail --since <date>` into the gitignored inbox, then `ingest-receipts --source <inbox> --profile`, then `map-receipts --source <inbox>` to a CSV (**not** `--write-tab`). Confirm the pipeline completes without exception and that the profile's recognised-submission count and email-date span are consistent with what the mailbox actually holds. Then re-run `fetch-mail` over an **overlapping** window and confirm the mapped row count is unchanged.
@@ -293,6 +295,7 @@ explicitly so reviewers can confirm the classification rather than infer it.)*
 - **Produces:** nothing in the repo — gitignored `.eml` files and a gitignored CSV
 - **Done when:** all three commands exit 0; the mapped CSV row count is stable across the overlapping re-fetch (proving end-to-end idempotency, not just per-file idempotency); no unhandled exception at any stage. Business-logic correctness of individual submissions is explicitly **out of scope** for this gate.
 - **Depends on:** 10, M4
+- **Status:** DONE (2026-08-26)
 
 ### Step 12: Full backfill from the board cut-over + reconciliation (operator)
 - **Problem:** Run the real backfill: `fetch-mail --since 2026-06-01` into `mail_samples/`, then a **single** `map-receipts --source mail_samples` run so the fetched `.eml` files and the existing `.mbox` archives are deduped against each other in one pass. Compare the resulting ledger against the current 554-row ledger: row count, per-month distribution, and total. Confirm the June 2026 submission count is consistent with a dual-intake month, and explicitly check whether any June submission appears **only** in the fetched mail or **only** in the archives.
@@ -301,6 +304,7 @@ explicitly so reviewers can confirm the classification rather than infer it.)*
 - **Produces:** nothing in the repo — gitignored `.eml` files and a gitignored reconciliation CSV
 - **Done when:** the combined run reports a duplicate-drop count the operator has reviewed; the new ledger is a **superset** of the existing 554 rows (no pre-cut-over row lost); no month between 2026-06 and the fetch date is empty; and any June-only-in-one-source submission is listed for follow-up rather than silently merged. If June looks thin against the archives, that is the signal that a second mailbox export is needed — see Risks.
 - **Depends on:** 11
+- **Status:** DONE (2026-08-26)
 
 ### Step 13: Docs + plan reconciliation
 - **Problem:** Replace the Takeout procedure in `SETUP.md` and `docs/loading-receipts.md` with the `fetch-mail` procedure, including the consent-and-token step (Testing mode with a test user — see the Step M4 amendment of 2026-08-26; Production is unreachable for this project), the overlap-don't-gap operating rule, and the
