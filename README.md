@@ -161,9 +161,21 @@ responses, and scoped secondary approvals; ambiguous mail remains visible but ca
 ticket. New submissions receive non-authoritative item-level recommendations while their recorded
 decision remains **unreviewed**. Neither command sends mail or writes Sheets. Existing reviewed
 records fail closed if their source evidence changes or disappears, so a refresh cannot silently
-attach an old decision to different evidence. The current repository gate has **849 collected
-tests**; the final Linux and Windows CI run passed, with zero strict-mypy errors and zero Ruff
+attach an old decision to different evidence. At that milestone the repository gate had 849
+collected tests; the Linux and Windows CI run passed, with zero strict-mypy errors and zero Ruff
 lint/format violations.
+
+**Phase 4 payment-confirmation lanes complete** — landed on `main` 2026-09-06 (commits `01f7bff`,
+`aa9b1b1`). Under schema-v2 private anchors, payment is recorded only through two explicit lanes:
+exact `payment_links` (one archived Message-ID from a configured payment operator, parsed by two
+strict Zelle grammars and bound per ticket to the SHA-256 of its confirmation reference, validated
+atomically as a group) or audited `operator_payments` for the exceptional no-mail case. Ordinary
+thread anchors and direct links still account for correspondence but never authorize payment, and
+schema-v1 anchors keep their historical replay byte-for-byte. The current repository gate has
+**950 collected tests**, zero strict-mypy errors, and zero Ruff lint/format violations. Three
+fail-closed regressions found by the landing review (bundle-held `email_context` replay, the
+schema-v1 source-vs-reviewed total split, and non-Zelle v1 histories under v2) are documented as
+the next fix step; none can mutate a bundle.
 
 **Treasurer-summary Wave 1 foundation (Step 15) complete** — the optional `slides` extra now
 contains a Windows-only, LPAC-isolated native-text PDF parser tested only with fictional fixtures.

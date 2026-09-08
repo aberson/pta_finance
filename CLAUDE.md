@@ -138,7 +138,11 @@ documentation/      committed feature plans (e.g. gmail-ingest-plan.md)
   deterministic Jinja HTML. Exact RFC ancestry or a strict private anchor is required before
   follow-up evidence can mutate a ticket; unmatched/ambiguous mail remains visible. Existing
   reviewed evidence fails closed if it changes or disappears. Secondary approval applies only to
-  an exact parsed proposal and trailing prose is not interpreted. `report-reimbursements` is
+  an exact parsed proposal and trailing prose is not interpreted. Under schema-v2 anchors, payment
+  is recorded only from exact `payment_links` (strict Zelle grammars, per-reference bindings,
+  atomic group validation) or audited `operator_payments`; thread anchors and direct links never
+  authorize payment, and operator records are content-addressed (a persisted review cannot be
+  amended in place). `report-reimbursements` is
   offline; `update-reimbursements` may acquire Gmail first but never sends mail or writes Sheets.
 - **Treasurer-summary foundation** (`treasurer_slides/`): strict private models plus an optional
   Windows-only native-text parser in a pre-read LPAC boundary. It accepts private PDF bytes only
@@ -184,8 +188,13 @@ refreshes stable-keyed original submissions plus supplemental email events, appe
 new submissions as unreviewed, supplies non-authoritative item-level recommendations, and renders.
 Exact RFC/private-anchor linkage supports follow-up receipts, clarification, payment, and scoped
 secondary approval while quarantining ambiguity; existing reviewed evidence fails closed if it
-changes or disappears. Neither command sends mail or writes Sheets. The current repository gate
-has **849 collected tests**; the final Linux and Windows CI run passed, with zero strict-mypy
+changes or disappears. Neither command sends mail or writes Sheets. **Strict payment-confirmation lanes landed 2026-09-06**
+(`01f7bff`, merge `aa9b1b1`): schema-v2 anchors carry `payment_links` (two exact Zelle grammars,
+per-ticket reference-digest bindings, atomic quarantine) and `operator_payments`; three fail-closed
+majors from the landing review remain open as the next fix step (see
+`documentation/reimbursement-refresh-plan.md` § 2026-09-06 amendment). The current repository gate
+has **950 collected tests** (full suite needs `--extra slides` on Windows for the native-parser
+tests); the last Linux and Windows CI run passed, with zero strict-mypy
 errors and zero Ruff lint/format violations.
 **The Gmail read-only ingest connector has also shipped** (`documentation/gmail-ingest-plan.md`,
 tracking span #15–#22; deferred #18 and its umbrella #22 remain open): `gmail_source.py` + the
@@ -238,7 +247,8 @@ setup + M2 real-sheet smoke are DONE). **Next = operator-gated observation:** M3
   do not upload a logo (it triggers app verification).
 - **For supplemental reimbursement linkage/review only (optional):** a gitignored
   `reports/output/reimbursement-anchors.json` beside the private report bundle. It contains strict
-  RFC/direct links, configured actor addresses, and item-complete operator reviews; committed code
+  RFC/direct links, configured actor addresses, item-complete operator reviews, and (schema v2)
+  exact `payment_links` / `operator_payments` payment records; committed code
   and documentation must never contain its real identities or decisions.
 - **Never print, `cat`, or `Get-Content`** `secrets/gmail-token.json` or
   `secrets/gmail-client-secret.json`.

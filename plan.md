@@ -530,8 +530,8 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 - **Issue:** N/A (operator step)
 - **Commands:**
   ```powershell
-  # Local end-to-end:
-  uv run pta-finance report --fy 2026 --variant both
+  # Local end-to-end (use the current fiscal year — FY2027 as of 2026-09):
+  uv run pta-finance report --fy 2027 --variant both
   # CI end-to-end (after adding GOOGLE_SA_KEY_B64 + PTA_CONFIG_B64 secrets):
   gh workflow run monthly-report.yml
   ```
@@ -657,7 +657,7 @@ worktrees); pushed `cbeeecc..193bed2`.**
 ## Phase 4 — Receipt ingestion (shipped: profiler + mapping engine + Reimbursements ledger + Receipts Explorer + the `fetch-mail` Gmail connector)
 
 **Reimbursement refresh milestone complete: all six steps in
-`documentation/reimbursement-refresh-plan.md` shipped. The repository gate is 535 tests passing
+`documentation/reimbursement-refresh-plan.md` shipped. The repository gate was then 535 tests passing
 (plus one optional skip), zero type errors, and zero lint/format violations. Receipt ingestion was
 also shipped end-to-end against a real, gitignored mailbox and live Sheet; the live write path was
 revalidated with snapshot + semantic read-back reconciliation on 2026-08-20. Private mailbox
@@ -697,6 +697,18 @@ counts and financial totals remain outside the repo. Posterity issue #24 is clos
   OAuth pinned to `gmail.readonly`, a date-scoped fetch, and an idempotent `.eml` writer landing files
   in `mail_samples/` beside the archives so ONE `map-receipts` run dedups both. Fetching only — the
   unattended cron half is deliberately not built (see "Not yet built" below).
+- **Strict payment-confirmation lanes** (landed on `main` 2026-09-06, commits `01f7bff` + `aa9b1b1`;
+  built as a build-step outside a numbered plan step, documented in
+  `documentation/reimbursement-refresh-plan.md` § "2026-09-06 payment-confirmation-lanes amendment").
+  Schema-v2 anchors gain `payment_links` (exact archived operator mail, two strict Zelle grammars,
+  per-ticket reference-digest bindings, atomic group validation/quarantine) and `operator_payments`
+  (audited no-mail payments); under v2 only those lanes authorize payment, while schema-v1 anchors
+  replay their historical behavior byte-for-byte, including v1 payment mail's companion
+  clarification/receipt events. Gate at landing: 950 collected tests, strict mypy, Ruff, identity
+  check all green. Known fail-closed gaps from the landing review (next fix step): generated-single
+  mail bound to a bundle-held `email_context` cannot replay after settlement; the v1 lane records at
+  the source total while the loader validates the reviewed-effective total; v1 Check/discrepancy
+  histories cannot replay under v2 although the docs promise reproducibility.
 
 - **Data-driven reimbursement review report** (shipped 2026-08-27; supplemental email-event lane
   shipped 2026-08-30; `documentation/reimbursement-refresh-plan.md`) — `report-reimbursements`
@@ -745,4 +757,5 @@ Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready),
 | Operational scope | Parsing, mapping, and `--write-tab` are shipped; Gmail OAuth **fetching** shipped later as `fetch-mail` (see the Monthly-automation bullet above). Unattended/cron ingestion and linked Drive-file retrieval remain deferred. |
 | Identity rule | Recognition is structural; no org/person/email in code or tests. Real `.eml` samples stay gitignored (default source `./mail_samples`). |
 | Supplemental linkage | Follow-up mail changes a ticket only through exact RFC ancestry or a strict private anchor. Secondary approval applies only to the fully parsed anchored proposal; trailing prose does not broaden scope. |
+| Payment under schema v2 | Only `payment_links` / `operator_payments` settle a ticket; the ticket must already be APPROVED with every item A and the amount must equal the reviewed-effective total, else the record is quarantined or held (and that outcome persists). Operator records are content-addressed, so a persisted operator review cannot be amended in place — retiring the prior review record and event from the bundle is the current workaround; a `supersede` mechanism is a fix-step candidate. |
 | Sheet-side work | Related dashboard work (chart recolor, FY2025/27 `raw_category` canonicalization, the Group Explorer tab) lives in the Google Sheet, not this repo. |
