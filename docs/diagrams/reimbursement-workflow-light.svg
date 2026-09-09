@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 248" font-family="ui-monospace,'Cascadia Code','SF Mono',Consolas,'Roboto Mono',monospace" role="img" aria-label="Reimbursement workflow: collect emails, organize the receipt ledger and review queue, review requests, then follow up or record payment.">
+  <title>Reimbursement workflow: collect emails, organize the receipt ledger and review queue, review requests, then follow up or record payment.</title>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="7.5" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#3355E0"/></marker>
+    <filter id="shadow" x="-20%" y="-45%" width="140%" height="190%"><feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="rgba(20,26,40,.16)"/></filter>
+  </defs>
+  <style>
+    .bg{fill:#FFFFFF;stroke:#D4DBE8;stroke-width:1.5}
+    .spine{fill:none;stroke:#3355E0;stroke-width:2.4;marker-end:url(#arrow)}
+    .node rect{fill:#FFFFFF;stroke:#C0C9DA;stroke-width:1.4;filter:url(#shadow)}
+    .pn{fill:#3355E0;font-size:13px;font-weight:600}
+    .ps{fill:#6E778C;font-size:10.5px}
+    .lbl{fill:#6E778C;font-size:11px;letter-spacing:.12em;font-weight:600}
+    .cap{fill:#6E778C;font-size:10.5px}
+  </style>
+  <rect class="bg" x="6" y="6" width="988" height="236" rx="16"/>
+  <text class="lbl" x="24" y="33">COLLECT</text>
+  <text class="lbl" x="280" y="33">ORGANIZE</text>
+  <text class="lbl" x="536" y="33">REVIEW</text>
+  <text class="lbl" x="792" y="33">FOLLOW UP</text>
+  <path class="spine" d="M224,76 L280,76"/>
+  <path class="spine" d="M248,76 L248,166 L280,166"/>
+  <path class="spine" d="M480,166 L536,166"/>
+  <path class="spine" d="M736,166 L764,166 L764,76 L792,76"/>
+  <path class="spine" d="M764,166 L792,166"/>
+  <g class="node"><rect x="24" y="50" width="200" height="52" rx="10"/><text class="pn" x="38" y="72">Save receipt emails</text><text class="ps" x="38" y="90">Gmail or existing exports</text></g>
+  <g class="node"><rect x="280" y="50" width="200" height="52" rx="10"/><text class="pn" x="294" y="72">Build receipt ledger</text><text class="ps" x="294" y="90">map-receipts</text></g>
+  <text class="cap" x="294" y="120">Optional Sheet update</text>
+  <g class="node"><rect x="280" y="140" width="200" height="52" rx="10"/><text class="pn" x="294" y="162">Refresh review queue</text><text class="ps" x="294" y="180">update-reimbursements</text></g>
+  <g class="node"><rect x="536" y="140" width="200" height="52" rx="10"/><text class="pn" x="550" y="162">Review each request</text><text class="ps" x="550" y="180">Items, evidence, decision</text></g>
+  <g class="node"><rect x="792" y="50" width="200" height="52" rx="10"/><text class="pn" x="806" y="72">Draft a response</text><text class="ps" x="806" y="90">Clarify missing details</text></g>
+  <g class="node"><rect x="792" y="140" width="200" height="52" rx="10"/><text class="pn" x="806" y="162">Record a payment</text><text class="ps" x="806" y="180">After paying elsewhere</text></g>
+  <text class="cap" x="24" y="225">The treasurer makes the decisions, sends the emails, and handles the payments.</text>
+</svg>

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 170" font-family="ui-monospace,'Cascadia Code','SF Mono',Consolas,'Roboto Mono',monospace" role="img" aria-label="Budget workflow: edit the annual budget, preview changes, update the Sheet, then prepare reports.">
+  <title>Budget workflow: edit the annual budget, preview changes, update the Sheet, then prepare reports.</title>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="7.5" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#3355E0"/></marker>
+    <filter id="shadow" x="-20%" y="-45%" width="140%" height="190%"><feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="rgba(20,26,40,.16)"/></filter>
+  </defs>
+  <style>
+    .bg{fill:#FFFFFF;stroke:#D4DBE8;stroke-width:1.5}
+    .spine{fill:none;stroke:#3355E0;stroke-width:2.4;marker-end:url(#arrow)}
+    .node rect{fill:#FFFFFF;stroke:#C0C9DA;stroke-width:1.4;filter:url(#shadow)}
+    .pn{fill:#3355E0;font-size:13px;font-weight:600}
+    .ps{fill:#6E778C;font-size:10.5px}
+    .lbl{fill:#6E778C;font-size:11px;letter-spacing:.12em;font-weight:600}
+    .cap{fill:#6E778C;font-size:10.5px}
+  </style>
+  <rect class="bg" x="6" y="6" width="988" height="158" rx="16"/>
+  <text class="lbl" x="24" y="33">EDIT</text>
+  <text class="lbl" x="280" y="33">CHECK</text>
+  <text class="lbl" x="536" y="33">UPDATE</text>
+  <text class="lbl" x="792" y="33">REPORT</text>
+  <path class="spine" d="M224,88 L280,88"/>
+  <path class="spine" d="M480,88 L536,88"/>
+  <path class="spine" d="M736,88 L792,88"/>
+  <g class="node"><rect x="24" y="62" width="200" height="52" rx="10"/><text class="pn" x="38" y="84">Annual budget</text><text class="ps" x="38" y="102">Edit amounts and notes</text></g>
+  <g class="node"><rect x="280" y="62" width="200" height="52" rx="10"/><text class="pn" x="294" y="84">Preview changes</text><text class="ps" x="294" y="102">sync-budget</text></g>
+  <g class="node"><rect x="536" y="62" width="200" height="52" rx="10"/><text class="pn" x="550" y="84">Update the Sheet</text><text class="ps" x="550" y="102">sync-budget --apply</text></g>
+  <g class="node"><rect x="792" y="62" width="200" height="52" rx="10"/><text class="pn" x="806" y="84">Reports &amp; comparisons</text><text class="ps" x="806" y="102">report · analyze</text></g>
+  <text class="cap" x="24" y="142">Use the FY Budget tab</text>
+  <text class="cap" x="280" y="142">Review before applying</text>
+  <text class="cap" x="536" y="142">Backed up before writing</text>
+  <text class="cap" x="792" y="142">Built from the same data</text>
+</svg>

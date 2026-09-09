@@ -4,164 +4,126 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-A finance toolkit for PTA, booster club, and small nonprofit treasurers. Keep the budget in
-**Google Sheets**, turn reimbursement emails into a **review queue**, and generate **financial
-reports for the board and members**.
+Keep PTA finances in order: **plan a budget, review reimbursements, and explain the numbers to
+your board.** Also suited to booster clubs and small nonprofits.
 
-- **Budget in a spreadsheet.** Edit a readable annual budget, preview the changes, and sync them
-  into the dataset that feeds reports and analysis.
-- **Work through reimbursements.** See each request's line items, recorded decision, payment
-  status, and next action, with email drafts and an archive of settled cases.
-- **Prepare reports from the same numbers.** Compare spending with the budget, track fundraising
-  and grade allocations, and produce internal and aggregate public summaries.
+- **Plan the budget.** Edit amounts in Google Sheets and check changes before saving.
+- **Review reimbursements.** See each request, its status, and what needs to happen next.
+- **Explain the numbers.** Track fundraising, spending, and progress against the budget.
 
-Python commands do the processing; Google Sheets and generated HTML are the operator-facing
-surfaces. The HTML opens in a browser without an app server. The shipped workflows use
-deterministic parsing, calculations, and templates; they do not require an LLM.
+Google Sheets holds the budget. A local Python tool prepares the reports, which open in your
+browser.
 
-![Reimbursement review queue showing summary totals, review states, and a ticket-by-ticket action index for a fictional PTA](docs/screenshots/reimbursement-queue.png)
+![Reimbursement review showing totals, request statuses, and next actions for a fictional PTA](docs/screenshots/reimbursement-queue.png)
 
-*The real reimbursement report, rendered with fictional data. All screenshots below use invented
-names, amounts, and review records; no private spreadsheet or mailbox was used.*
+*The real review report with fictional names, amounts, and decisions. All examples on this page
+use fictional data.*
 
-[Workflows](#workflows) · [Getting started](#getting-started) · [Operator guides](#operator-guides) ·
-[Current scope](#current-scope) · [Development](#development)
+[Workflows](#workflows) · [Get started](#get-started) · [Guides](#guides) · [Project status](#project-status)
 
 ## Workflows
 
-### 1. Edit a budget, then see what changed
+### Update the budget
 
-The **`FY<year> Budget`** tab is where an operator edits proposed amounts and notes.
-`sync-budget` previews a diff against **Budget Timeseries**, the long-format dataset used by
-`analyze` and `report`. Applying the diff snapshots the affected tabs first, updates changed
-amounts and notes, and appends new lines. Removed lines are flagged for review.
+Edit the **`FY<year> Budget`** tab in Google Sheets. Preview your changes, then apply them.
+The tool saves a backup first and leaves actual spending and other years alone.
 
-```mermaid
-flowchart LR
-    A["Edit FY2027 Budget<br/>Proposed amounts and notes"] --> B["sync-budget<br/>Preview the diff"]
-    B --> C["--apply<br/>Snapshot, then update"]
-    C --> D[(Budget Timeseries)]
-    D --> E["analyze<br/>Totals and comparisons"]
-    D --> F["report<br/>Internal and public HTML"]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/budget-workflow-dark.svg">
+  <img alt="Edit the annual budget, preview changes, update the Sheet with a backup, then prepare reports and comparisons." src="docs/diagrams/budget-workflow-light.svg">
+</picture>
 
-```powershell
-uv run pta-finance sync-budget --fy 2027          # preview; no writes
-uv run pta-finance sync-budget --fy 2027 --apply  # snapshot, then apply
-uv run pta-finance analyze --fy 2027             # read-only analysis
-```
-
-The sync preserves actuals, other fiscal years, and enrichment columns. Editing an old copy of
-a budget does not update the reporting dataset. The
-[spreadsheet guide](docs/using-the-spreadsheet.md) explains which tabs to edit and how existing
-spreadsheet dashboards use the data.
-
-### 2. Prepare financial reports for two audiences
-
-One command generates two self-contained HTML files for a fiscal year, with charts embedded in
-each file. Reports cover the selected fiscal year's available data; running them monthly
-refreshes that fiscal-year view.
-
-| Output | What's included | Intended audience |
-|---|---|---|
-| **Internal report** | Income, expenses, net, fundraising progress, budget remaining, grade allocations, category variance, and source rows | Treasurer and board |
-| **Public summary** | Headline totals, fundraising progress, budget remaining, and aggregate grade allocations | Members and the wider community |
-
-The public report omits category detail and individual source rows. Its data model is checked
-at runtime for prohibited payee, receipt, memo, and member identity fields before rendering.
-
-![Public financial summary with income, expenses, fundraising progress, budget remaining, and a grade allocation chart, using fictional figures](docs/screenshots/financial-summary.png)
-
-*The public summary keeps the financial overview together in one browser-readable document.*
+Reports read **Budget Timeseries**, the sheet's table of budget and actual amounts.
+The [spreadsheet guide](docs/using-the-spreadsheet.md) explains which tabs to edit.
 
 <details>
-<summary><strong>Inside the internal report: category spending and budget variance</strong></summary>
+<summary><strong>Budget and report commands</strong></summary>
 
-![Internal report section showing an expense-by-category chart and budget-versus-actual table for fictional school programs](docs/screenshots/budget-vs-actual.png)
+```powershell
+uv run pta-finance sync-budget --fy 2027          # preview changes
+uv run pta-finance sync-budget --fy 2027 --apply  # back up, then save
+uv run pta-finance analyze --fy 2027             # show totals and comparisons
+uv run pta-finance report --fy 2027 --variant both
+```
 
-The current CLI reads fiscal-year summary lines from **Budget Timeseries**. The internal
-report's transaction table therefore shows those summary rows, rather than an itemized bank
-ledger or the separate reimbursement queue.
+The last command saves two HTML reports in `reports/output/` and records the run in the
+sheet's `report_log`:
+
+- **Internal:** totals, grade allocations, category comparisons, and source rows for the board.
+- **Public:** summary figures, with payee, receipt, and individual source details omitted.
+
+Reports cover the selected fiscal year's available data. Leave out `--fy` on `report` to use
+the current fiscal year. The source rows are annual summaries, not an itemized bank ledger.
 
 </details>
 
-```powershell
-uv run pta-finance report --fy 2026 --variant both
-```
+### Tell the financial story
 
-This writes `reports/output/FY2026-internal.html` and `reports/output/FY2026-external.html`,
-then appends a row per variant to the spreadsheet's `report_log`. Omitting `--fy` selects the
-current fiscal year using the configured start month.
+A single slide brings together cash on hand, money raised, spending, and progress toward the
+annual goals. The short summary explains why the balance changed.
 
-### 3. Turn reimbursement email into a ledger and review queue
+![Fictional treasurer snapshot showing bank balances, fundraising, spending, budget progress, and a plain-language summary](docs/screenshots/treasurer-snapshot.png)
 
-Fetch a date window from Gmail with read-only OAuth, or use an existing `.eml` / `.mbox`
-archive. The parser recognizes supported reimbursement form emails, extracts line items,
-checks stated totals, and maps categories. Process the complete local archive together so
-overlapping exports can be deduplicated.
+*Fictional copy of the approved treasurer snapshot prototype.
+[Download the editable PowerPoint](docs/examples/treasurer-snapshot.pptx).
+Automatic slide creation is still in development.*
 
-```mermaid
-flowchart TD
-    A["Gmail<br/>Read-only, local fetch"] --> B["Local email archive<br/>.eml and .mbox"]
-    C[Existing email exports] --> B
-    B --> D["ingest-receipts<br/>Profile and inspect"]
-    B --> E["map-receipts<br/>Map categories and deduplicate"]
-    E --> F["--write-tab Reimbursements<br/>Snapshot and replace the ledger"]
-    B --> G["update-reimbursements<br/>Refresh submissions and linked evidence"]
-    H["Private review bundle<br/>Recorded decisions and payment history"] <--> G
-    G --> I["HTML review queue<br/>Items, next actions, and email drafts"]
-    H --> J["report-reimbursements<br/>Offline render only"]
-    J --> I
-```
+### Work through reimbursements
 
-The **Reimbursements** tab is a machine-owned line-item ledger; its sheet write is an explicit
-step. The **private review queue** is a separate HTML report built from a validated local
-bundle. Refreshing that queue preserves existing reviews and adds new submissions as
-**unreviewed**, even when a card offers an item-level recommendation.
+Fetch receipt emails from Gmail, or use an existing email export. The tool sorts line items,
+checks totals, and prepares the review queue.
 
-![A fictional reimbursement ticket showing approved activity materials, equipment needing clarification, a next action, and a generated email draft](docs/screenshots/reimbursement-detail.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/reimbursement-workflow-dark.svg">
+  <img alt="Collect receipt emails, organize the ledger and review queue, review each request, then draft a response or record a payment." src="docs/diagrams/reimbursement-workflow-light.svg">
+</picture>
 
-*A ticket brings the review evidence, unresolved question, and draft response into one place.
-The report displays decisions and drafts; it does not submit decisions or send messages.*
+Each request shows its items, decision, payment status, and next step. New requests stay
+**unreviewed** until a decision is recorded. Suggestions help with review; they do not authorize
+payment. The treasurer sends replies and handles payments.
 
-Follow-up receipts and responses are linked through exact email ancestry or explicit private
-anchors. Ambiguous evidence remains visible for review. Recorded payments require an explicit,
-validated confirmation link or an audited operator payment record. Changed or missing evidence
-for an existing review stops the refresh instead of silently carrying its decision forward.
+![Reimbursement request with item decisions, a question to resolve, and an email draft](docs/screenshots/reimbursement-detail.png)
+
+*The items, open question, and draft reply stay together.*
+
+Follow-up receipts and replies can be linked to the original request. Unclear matches remain
+visible for review. If evidence behind an existing review changes or disappears, the refresh
+stops so it can be checked.
 
 <details>
-<summary><strong>Commands for an already configured reimbursement workflow</strong></summary>
+<summary><strong>Receipt and review commands</strong></summary>
+
+These commands assume the setup in the [receipt guide](docs/loading-receipts.md) is complete,
+including a category map and private review data file.
 
 ```powershell
-# Acquire mail locally; never sends or modifies Gmail messages.
+# Download emails. Gmail access is read-only.
 uv run pta-finance fetch-mail --since 2026-07-01
 
-# Inspect the archive and mapping before any Sheet write.
+# Check the complete local archive before updating the Sheet.
 uv run pta-finance ingest-receipts --source mail_samples --profile --originals-only
 uv run pta-finance map-receipts --source mail_samples
 
-# Explicitly replace the line-item ledger, with a pre-write snapshot.
+# Optional: back up and replace the Reimbursements tab.
 uv run pta-finance map-receipts --source mail_samples --write-tab Reimbursements
 
-# Refresh the existing private review bundle and its HTML from local mail.
+# Preview a review-queue refresh, then run it.
 uv run pta-finance update-reimbursements --dry-run
 uv run pta-finance update-reimbursements
 
-# Or just rebuild HTML from the existing bundle, completely offline.
+# Rebuild the HTML from saved review data, without checking email.
 uv run pta-finance report-reimbursements
 ```
 
-The review commands require the private bundle and category mapping described in the
-[receipt-loading guide](docs/loading-receipts.md#step-4--refresh-the-private-review-report).
-An optional `--fetch-since` on `update-reimbursements` fetches Gmail before refreshing.
-Neither review command writes Sheets or sends email. Payment itself happens outside the tool.
+The Sheet ledger and private review report are separate. Refreshing the report does not update
+Sheets or send email. Add `--fetch-since` to `update-reimbursements` to fetch mail first.
 
 </details>
 
-## Getting started
+## Get started
 
-You need **Python 3.12+**, **[uv](https://docs.astral.sh/uv/)**, and a Google Sheet shared with
-a Google service account. Gmail acquisition is optional and uses a separate user OAuth credential.
+Day-to-day budget editing happens in Google Sheets. Initial setup and report updates need
+**Python 3.12+**, **[uv](https://docs.astral.sh/uv/)**, and Google credentials.
 
 ```powershell
 git clone https://github.com/aberson/pta_finance.git
@@ -170,96 +132,58 @@ uv sync --locked --extra dev
 Copy-Item config.example.toml config.toml
 ```
 
-Follow **[SETUP.md](SETUP.md)** to fill in the private configuration, configure the service
-account, and prepare the spreadsheet. Organization identity, contact addresses, sheet IDs,
-fiscal-year start month, and grade labels are configurable.
+Follow **[SETUP.md](SETUP.md)** to connect your Sheet and fill in the private configuration.
+Your organization name, contacts, fiscal year, and grade labels are configurable.
+Gmail access is optional.
 
-Once the spreadsheet and credentials are ready:
-
-```powershell
-uv run pta-finance check    # validates schema/source; writes and removes a test-sheet probe
-uv run pta-finance analyze
-uv run pta-finance report --variant both
-```
-
-`init-sheet` provisions `report_log`; it does **not** create or populate Budget Timeseries or
-the custom dashboard tabs. The canonical `transactions`, `receipts`, `budget`, and `events`
-tabs belong to the optional legacy import path and are not required by current reporting.
+The toolkit expects a prepared spreadsheet. It does not build the budget tables or install
+dashboards into a blank Sheet.
 
 <details>
-<summary><strong>Optional: scheduled monthly reports</strong></summary>
+<summary><strong>Optional: monthly reports</strong></summary>
 
-The [monthly report workflow](.github/workflows/monthly-report.yml) runs at **09:00 UTC on the
-first of each month** and supports manual dispatch. It generates both variants for the current
-fiscal year, uploads them as Actions artifacts, and commits a small keepalive timestamp.
-It uses `GOOGLE_SA_KEY_B64` and `PTA_CONFIG_B64` repository secrets. Gmail fetching stays local.
+The [monthly workflow](.github/workflows/monthly-report.yml) refreshes both HTML reports on the
+first of each month at 09:00 UTC. It can also be run manually. Setup uses the repository secrets
+`GOOGLE_SA_KEY_B64` and `PTA_CONFIG_B64`. Mail fetching stays on your computer.
 
-**Artifact access matters:** this workflow uploads the internal report too. GitHub allows
-signed-in users with repository read access to
-[download workflow artifacts](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts).
-In a public repository, that is not private delivery. Use a private deployment repository or
-change the delivery destination before running it with confidential data. Private Drive upload
-is not implemented.
+The workflow uploads **both reports**, including the internal version, as downloadable GitHub
+files. Anyone signed in with repository read access can
+[download them](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts).
+For confidential data, use a private repository or change where the reports are delivered.
+Private Drive upload is not built yet.
 
 </details>
 
-## Operator guides
+## Guides
 
-| What you need | Where to go |
+| I want to… | Read |
 |---|---|
-| Work in the spreadsheet, change budgets, or understand its tabs | [Using the spreadsheet](docs/using-the-spreadsheet.md) |
-| Get help from an AI assistant with day-to-day tasks | [Ready-to-use prompts](docs/ask-an-ai-assistant.md) |
-| Connect Google credentials and prepare the Sheet | [Setup guide](SETUP.md) |
-| Fetch, map, verify, and review reimbursement submissions | [Loading receipts](docs/loading-receipts.md) |
-| Understand the implementation and planned work | [Project plan](plan.md) |
+| Edit the budget or understand the spreadsheet | [Spreadsheet guide](docs/using-the-spreadsheet.md) |
+| Connect Google and run the tool | [Setup guide](SETUP.md) |
+| Load receipts and refresh the review queue | [Receipt guide](docs/loading-receipts.md) |
+| Ask an AI assistant for help | [Example prompts](docs/ask-an-ai-assistant.md) |
 
-## Current scope
+## Project status
 
-**Available now:** budget sync; fiscal-year analysis and HTML reports; local Gmail fetching;
-email receipt ingestion and mapping; a private reimbursement review report with supplemental
-evidence and explicit payment records; snapshots; and the monthly report workflow.
+**Ready to use:** budget updates, financial analysis, HTML reports, Gmail downloads, receipt
+mapping, and the reimbursement review queue.
 
-**Still in development or deferred:** an admin web app, Apps Script automation, automatic
-reimbursement roll-up into Budget Timeseries, live Drive receipt retrieval/upload, and a complete
-treasurer presentation workflow. The optional Windows PDF parser is only the
-[treasurer-summary foundation](documentation/treasurer-summary-wave-1-plan.md), not a shipped
-Google Slides command. Existing spreadsheet dashboards are workbook-specific; the CLI does
-not install a dashboard suite into a fresh Sheet.
+**In progress:** turning the treasurer snapshot prototype into an automatic slide workflow.
+The [slide plan](documentation/treasurer-summary-wave-1-plan.md) tracks the remaining work.
 
-Known reimbursement refresh limitations and pending fixes are tracked in the
-[reimbursement plan](documentation/reimbursement-refresh-plan.md). Automated recommendations
-do not perform OCR, visual receipt inspection, or policy adjudication.
+**Not built yet:** an admin web app, automatic reimbursement totals in the budget, or live
+Drive receipt retrieval and report upload. Existing spreadsheet dashboards are specific to the
+workbook. See the [project plan](plan.md) and
+[known review limitations](documentation/reimbursement-refresh-plan.md) for details.
 
-Real configuration, credentials, email archives, snapshots, and generated financial reports
-belong in gitignored local paths. Only fictional examples and screenshots are committed here.
-
-## Development
-
-| Layer | Tools |
-|---|---|
-| Runtime and packaging | Python 3.12+, `uv`, Hatchling |
-| Google access | `gspread`, `google-auth`; optional Gmail user OAuth via Google's API client |
-| Analysis and reports | pandas, matplotlib, Jinja2 |
-| Optional foundations | WeasyPrint PDF renderer; `pypdfium2` in a Windows-isolated worker |
-| Quality checks | pytest, Ruff, strict mypy; Linux and Windows GitHub Actions jobs |
-
-```text
-pta_finance/
-  cli.py, config.py              Commands and private configuration
-  budget_sync.py, report_source.py
-                                 Editable budgets and Budget Timeseries adapter
-  receipt_ingest.py, receipt_map.py, gmail_source.py
-                                 Email acquisition, parsing, and ledger mapping
-  reimbursement_*.py             Review evidence, refresh, and HTML report
-  analytics/, reports/           Aggregations, charts, and report templates
-  treasurer_slides/              Native PDF parser foundation
-tests/                           Fictional fixtures and automated checks
-docs/                            Operator guides and README screenshots
-documentation/                   Feature plans and implementation records
-```
+Real configuration, credentials, emails, and financial reports stay in private local files
+excluded from Git. The tool does not require an AI model.
 
 <details>
-<summary><strong>Run the quality checks</strong></summary>
+<summary><strong>For developers</strong></summary>
+
+Python, pandas, and matplotlib handle the numbers and charts. Jinja2 renders the reports.
+Google access uses `gspread` and Google's API client.
 
 ```powershell
 uv sync --locked --extra dev --extra slides
@@ -270,24 +194,33 @@ uv run pytest -q
 uv run python scripts/check_no_identity.py
 ```
 
-The native PDF parser tests require Windows and the `slides` extra. For the Linux test split,
-see [CI](.github/workflows/ci.yml). The ordinary report workflow does not require that extra.
+Native PDF parser tests need Windows and the `slides` extra.
+See [CI](.github/workflows/ci.yml) for the Linux test split.
 
 </details>
 
 <details>
-<summary><strong>Regenerate the README screenshots</strong></summary>
+<summary><strong>Update the README visuals</strong></summary>
+
+Capture the two reimbursement screenshots with fictional data:
 
 ```powershell
 uv run --with playwright==1.58.0 python -m playwright install chromium
 uv run --with playwright==1.58.0 python scripts/capture_readme.py
 ```
 
-The [capture script](scripts/capture_readme.py) builds invented Budget Timeseries rows and a
-fictional review bundle, renders the production templates, and captures them in headless
-Chromium. It reads only `config.example.toml`, makes no Google calls, and leaves only the four
-PNGs under `docs/screenshots/`. Browser downloads are needed on first use; Playwright is not
-a runtime dependency of the toolkit.
+The [capture script](scripts/capture_readme.py) renders the real report template without reading
+private data or connecting to Google.
+
+The [snapshot source](docs/examples/treasurer-snapshot.pptx) is an editable, fictional slide.
+After editing it, export its screenshot with desktop PowerPoint on Windows:
+
+```powershell
+powershell -NoProfile -File scripts/export_example_snapshot.ps1
+```
+
+Workflow diagrams are editable SVGs in [docs/diagrams](docs/diagrams/), with light and dark
+versions in the style of [skill-mesh](https://github.com/aberson/skill-mesh).
 
 </details>
 

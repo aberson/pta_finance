@@ -1,11 +1,12 @@
-"""Capture real report templates with fictional data; no Google credentials or live I/O.
+"""Capture the real reimbursement report with fictional data and no live I/O.
 
 From the repository root:
     uv run --with playwright==1.58.0 python -m playwright install chromium
     uv run --with playwright==1.58.0 python scripts/capture_readme.py
 
 Playwright is a documentation-only dependency. HTML and the sample bundle live in a
-temporary directory; only the four PNG screenshots are written into the repository.
+temporary directory; only the two reimbursement PNGs are written into the repository.
+The separate PowerPoint example is exported by export_example_snapshot.ps1.
 """
 
 from __future__ import annotations
@@ -19,8 +20,7 @@ from typing import Any
 
 from playwright.sync_api import Page, sync_playwright
 
-from pta_finance import reimbursement_report, report_source, reports
-from pta_finance.config import load_config
+from pta_finance import reimbursement_report
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "docs" / "screenshots"
@@ -247,37 +247,6 @@ def example_bundle() -> dict[str, Any]:
 
 
 def render_examples(directory: Path) -> None:
-    # Read only the committed placeholder config, never config.toml or credentials.
-    config = load_config(ROOT / "config.example.toml")
-    rows = []
-    lines = [
-        ("Fundraising Income", "income", "", "24000.00", "18650.00"),
-        ("Kindergarten Materials", "expense", "K", "1800.00", "1245.50"),
-        ("Grade 1 Reading", "expense", "1", "2000.00", "1540.00"),
-        ("Grade 2 Art", "expense", "2", "2200.00", "1780.25"),
-        ("Grade 3 Field Trips", "expense", "3", "3500.00", "2875.00"),
-        ("Grade 4 Science", "expense", "4", "3000.00", "2160.75"),
-        ("Grade 5 Celebration", "expense", "5", "2500.00", "1920.00"),
-    ]
-    for category, kind, grade, proposed, actual in lines:
-        for measure, amount in (("proposed", proposed), ("actual", actual)):
-            rows.append(
-                {
-                    "fiscal_year": "2026",
-                    "category_group": "Programs",
-                    "type": kind,
-                    "measure": measure,
-                    "amount": amount,
-                    "is_fundraiser": str(kind == "income"),
-                    "grade": grade,
-                    "raw_category": category,
-                    "source_tab": "Example FY2026",
-                }
-            )
-    budget, transactions = report_source.to_inputs(rows, start_month=config.fiscal_year.start_month)
-    internal, external = reports.build_reports(config, 2026, transactions, budget)
-    (directory / "internal.html").write_text(reports.render_internal(internal), encoding="utf-8")
-    (directory / "external.html").write_text(reports.render_external(external), encoding="utf-8")
     bundle_path = directory / "reimbursements.json"
     bundle_path.write_text(json.dumps(example_bundle(), indent=2), encoding="utf-8")
     reimbursement_report.build_report(bundle_path, directory / "reimbursements.html")
@@ -312,25 +281,8 @@ def main() -> None:
             },
         )
         page.locator("#new-02").screenshot(path=OUTPUT / "reimbursement-detail.png")
-        page.set_viewport_size({"width": 1120, "height": 1000})
-        open_report(page, directory / "external.html")
-        page.screenshot(path=OUTPUT / "financial-summary.png", full_page=True)
-        open_report(page, directory / "internal.html")
-        heading = page.locator('[data-section="by-category"]').bounding_box()
-        table = page.locator('[data-section="by-category-table"]').bounding_box()
-        assert heading is not None and table is not None
-        page.screenshot(
-            path=OUTPUT / "budget-vs-actual.png",
-            full_page=True,
-            clip={
-                "x": 16,
-                "y": heading["y"] - 16,
-                "width": 1088,
-                "height": table["y"] + table["height"] - heading["y"] + 32,
-            },
-        )
         browser.close()
-    print(f"Captured four report screenshots with fictional data in {OUTPUT}")
+    print(f"Captured two reimbursement screenshots with fictional data in {OUTPUT}")
 
 
 if __name__ == "__main__":
