@@ -167,7 +167,8 @@ variant is a Phase-2 nicety, not v1.
 
 Charts are matplotlib (Agg) PNGs embedded in the HTML. **Reports are never committed to the public
 repo.** They are written to `reports/output/` (gitignored) locally and (in CI) attached as an
-ephemeral workflow artifact for the operator. A row is appended to `report_log`. **Live upload to a
+ephemeral workflow artifact. Both variants in that artifact are downloadable by signed-in readers
+of this public repo; it is not private storage. A row is appended to `report_log`. **Live upload to a
 private Drive folder is deferred to Phase 2** — it needs `google-api-python-client`, which §8 defers
 to Phase 2; v1 ships local output + the CI artifact, and `report_log.output_url` records the local
 path.
@@ -239,7 +240,7 @@ pta_finance/                      # repo root (standalone public repo)
 ├── CLAUDE.md                     # project context for future sessions (generic)
 ├── README.md                     # generic toolkit readme
 ├── SETUP.md                      # one-time Google + local setup guide
-├── docs/                         # operator guides: spreadsheet, receipt loading, AI prompts
+├── docs/                         # operator guides + diagrams/, screenshots/, examples/ (fictional)
 ├── documentation/                # public-safe planning/playbook documents
 ├── pyproject.toml                # uv + hatchling + ruff + mypy(strict) + pytest
 ├── config.example.toml           # committed template with FAKE placeholders
@@ -282,6 +283,8 @@ pta_finance/                      # repo root (standalone public repo)
 │           ├── external.html.j2
 │           └── reimbursement_queue.html.j2
 ├── scripts/
+│   ├── capture_readme.py         # real reimbursement renderer + fictional fixtures → screenshots
+│   ├── export_example_snapshot.ps1 # desktop PowerPoint → fictional snapshot PNG
 │   └── check_no_identity.py      # CI guard: blocks staged credentials / identity strings
 ├── tests/
 │   ├── conftest.py               # fake-org fixtures + mocked gspread client
@@ -322,8 +325,9 @@ pta_finance/                      # repo root (standalone public repo)
   rewrites existing ones.
 - **Pure-template reports, deterministic charts.** matplotlib Agg + Jinja2; PDF is an optional
   extra so the core toolkit installs without Pango/Cairo native deps on Windows.
-- **Reports never enter the public repo.** Written to a private Drive folder + ephemeral CI
-  artifact only — generated reports can contain financial/identifying detail.
+- **Real reports never enter Git.** Local reports stay in gitignored `reports/output/`.
+  The monthly workflow uploads both variants as Actions artifacts accessible to signed-in readers
+  of the public repo. Private Drive upload remains deferred; README examples contain fictional data.
 - **Config-driven identity, fiscal year, and grades.** Makes the toolkit generic and reusable;
   this deployment binds calendar-year fiscal periods via config.
 - **Snapshot-before-write + atomic batch + Sheets history** for corruption protection;
@@ -365,10 +369,10 @@ cp config.example.toml config.toml
 # 4. Smoke-check the wiring
 uv run pta-finance check
 
-# 5. One-time legacy normalize, then analyze + report
-uv run pta-finance normalize
+# 5. Analyze + report from the operator-maintained Budget Timeseries tab
 uv run pta-finance analyze
-uv run pta-finance report --fy 2026 --variant both
+uv run pta-finance report --fy 2027 --variant both
+# normalize is a legacy write command; it is not part of the current reporting setup.
 ```
 
 ```bash
@@ -472,7 +476,7 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 - **Status:** DONE (2026-06-23)
 
 ### Step 8: GitHub Actions monthly report workflow
-- **Problem:** Add `.github/workflows/monthly-report.yml` — `schedule: cron "0 9 1 * *"` + `workflow_dispatch`; `actions/checkout@v4`; `astral-sh/setup-uv` (cache on); restore `GOOGLE_SA_KEY_B64` + `PTA_CONFIG_B64` secrets by base64-decoding to files **without echoing**; `uv run pta-finance report --variant both` (the command writes to the private Drive folder, the canonical destination); the workflow then uploads the local `reports/output/` as an ephemeral artifact for operator download; **never commit reports to the repo**. Also append a UTC timestamp to a tracked `.github/last-run.txt` and push it (keepalive so the public-repo scheduler isn't auto-disabled after 60 days; this liveness marker is not a report). Confirm `ci.yml` (lint/type/test on PR) from Step 1 is green.
+- **Problem:** Add `.github/workflows/monthly-report.yml` — `schedule: cron "0 9 1 * *"` + `workflow_dispatch`; `actions/checkout@v4`; `astral-sh/setup-uv` (cache on); restore `GOOGLE_SA_KEY_B64` + `PTA_CONFIG_B64` secrets by base64-decoding to files **without echoing**; `uv run pta-finance report --variant both` writes local reports and appends `report_log` rows; the workflow uploads `reports/output/` as an ephemeral artifact accessible to signed-in readers of this public repo; **never commit real reports to the repo**. Private Drive upload remains deferred. Also append a UTC timestamp to a tracked `.github/last-run.txt` and push it (keepalive so the public-repo scheduler isn't auto-disabled after 60 days; this liveness marker is not a report). Confirm `ci.yml` (lint/type/test on PR) from Step 1 is green.
 - **Type:** code
 - **Issue:** #8
 - **Flags:** --reviewers code --isolation worktree
@@ -528,6 +532,9 @@ quality bar for producer→consumer pipelines and scheduled jobs.
 - **Type:** operator
 - **Source step:** Step 8 (scheduled job, exercised end-to-end); requires Step 7 smoke gate green and Step M2 passed
 - **Issue:** N/A (operator step)
+- **Data boundary:** the CI run uploads both report variants to an artifact accessible to signed-in
+  readers of this public repo. Use only data suitable for that audience in CI; observe private
+  figures locally. Private Drive upload remains unimplemented.
 - **Commands:**
   ```powershell
   # Local end-to-end (use the current fiscal year — FY2027 as of 2026-09):
@@ -759,3 +766,35 @@ Receipts land in a **flat, denormalized "Reimbursements" tab** (Explorer-ready),
 | Supplemental linkage | Follow-up mail changes a ticket only through exact RFC ancestry or a strict private anchor. Secondary approval applies only to the fully parsed anchored proposal; trailing prose does not broaden scope. |
 | Payment under schema v2 | Only `payment_links` / `operator_payments` settle a ticket; the ticket must already be APPROVED with every item A and the amount must equal the reviewed-effective total, else the record is quarantined or held (and that outcome persists). Operator records are content-addressed, so a persisted operator review cannot be amended in place — retiring the prior review record and event from the bundle is the current workaround; a `supersede` mechanism is a fix-step candidate. |
 | Sheet-side work | Related dashboard work (chart recolor, FY2025/27 `raw_category` canonicalization, the Group Explorer tab) lives in the Google Sheet, not this repo. |
+
+---
+
+## README presentation refresh — 2026-09-08
+
+**Status: COMPLETE.** Accepted by the user; shipped in `79bed2d` and `273d0ed`.
+This documentation update adds no application behavior and completes no pending build step.
+
+### What changed
+
+- Shorter, plain-language descriptions of budgets, financial reports, and reimbursement review.
+- Light/dark workflow diagrams in the style of skill-mesh.
+- Screenshots from the real reimbursement renderer using fictional data.
+- A native, editable fictional treasurer snapshot and its PowerPoint-exported screenshot.
+- Clear boundaries for shipped features, the unfinished slide workflow, and public Actions artifacts.
+
+### Files and maintenance
+
+| File | Purpose |
+|---|---|
+| `README.md` | Public overview, examples, setup links, and visual regeneration commands |
+| `docs/diagrams/` | Editable light/dark SVG sources for both workflows |
+| `docs/screenshots/` | Two reimbursement views and the treasurer snapshot |
+| `docs/examples/treasurer-snapshot.pptx` | Editable one-slide example containing only fictional data |
+| `scripts/capture_readme.py` | Render fictional reimbursement fixtures and capture them with Playwright |
+| `scripts/export_example_snapshot.ps1` | Export the example slide through desktop PowerPoint on Windows |
+
+Validation: 42 report/reimbursement tests passed; Ruff lint/format and strict mypy passed.
+Linux and Windows CI passed for `273d0ed`. Both capture helpers ran; the README was checked
+in light/dark themes and at a narrow width. The sample deck was checked for private content
+and its fictional figures were reconciled. The slide is a presentation example; automatic
+slide generation remains governed by `documentation/treasurer-summary-wave-1-plan.md`.

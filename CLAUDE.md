@@ -9,11 +9,10 @@
 
 ## 1. Overview
 
-A command-line Python toolkit that treats a **Google Sheet as the system-of-record database**
-for a small org's finances: it normalizes a messy multi-year ledger into a clean schema, runs an
-analytics engine (spend by category/grade, budget-vs-actual, multi-year trends), and generates
-**pure-template monthly reports** in an internal (full) and external (public-safe) variant. v1 has
-**no web UI, no LLM, no Apps Script** — a local CLI plus a GitHub Actions monthly cron.
+A command-line Python toolkit for budgets, financial reports, and reimbursement review.
+**Google Sheets holds the budget data**; a private local email archive and review bundle hold
+reimbursement evidence. It generates HTML reports, including a browser-readable review queue.
+There is no hosted web app, LLM dependency, or Apps Script; scheduled financial reports use GitHub Actions.
 
 ## 2. Stack
 
@@ -105,6 +104,9 @@ snapshots/          gitignored — safe CSV + exact tagged userEnteredValue .raw
 config.toml         gitignored private config; config.example.toml ships fake values
                     (incl. optional [receipt_mapping] and [gmail] blocks)
 documentation/      committed feature plans (e.g. gmail-ingest-plan.md)
+docs/               operator guides, light/dark SVG workflows, fictional report screenshots,
+                    and an editable fictional treasurer-snapshot.pptx example
+scripts/            identity guard + README screenshot capture and PowerPoint export helpers
 ```
 
 ## 5. Architecture
@@ -130,8 +132,10 @@ documentation/      committed feature plans (e.g. gmail-ingest-plan.md)
   flag ambiguous rows `needs_review`, snapshot-before-write. Idempotent.
 - **Analytics** (`analytics/`): pandas aggregations + multi-year trends.
 - **Reports** (`reports/`): builder computes a data model → Jinja2 renders internal + external
-  variants (matplotlib charts; optional WeasyPrint PDF). **Reports are never committed to the
-  repo** — they go to `reports/output/` + a private Drive folder + an ephemeral CI artifact.
+  variants (matplotlib charts; optional WeasyPrint PDF). **Real financial reports are never
+  committed** — local output goes to gitignored `reports/output/`. The monthly workflow uploads
+  both variants as Actions artifacts, downloadable by signed-in readers of this public repo.
+  Private Drive upload is not implemented. Committed README examples use only fictional data.
 - **Reimbursement refresh** (`reimbursement_events.py`, `reimbursement_pipeline.py`,
   `reimbursement_report.py`): stable-keyed original submissions plus an append-only supplemental
   email/event lane in a strict private schema-v2 bundle (with explicit v1 migration) and
@@ -155,6 +159,11 @@ documentation/      committed feature plans (e.g. gmail-ingest-plan.md)
   user refresh token. Those Gmail credentials are also gitignored and deliberately never enter CI.
 
 ## 6. Current state
+
+**README refresh accepted (2026-09-08).** Public examples show the real reimbursement renderer
+with fictional data and an editable native PowerPoint snapshot. The snapshot is a presentation
+example, not evidence of a shipped slide-generation command. Workflow diagrams have matching
+light/dark SVG sources; regeneration instructions are in the README.
 
 **v1 automated build COMPLETE (Steps 1–8, issues #1–#8 closed).** The full pipeline works end-to-end
 under test: Sheets client, ETL/normalize, analytics, internal/external reports (runtime PII guard),
@@ -228,6 +237,8 @@ setup + M2 real-sheet smoke are DONE). **Next = operator-gated observation:** M3
 ## 7. Environment requirements
 
 - Windows 11 + Python `>=3.12`; `uv` on PATH. No `pip` (uv-managed).
+- README screenshot maintenance only: the reimbursement capture helper uses ephemeral
+  Playwright 1.58.0 + Chromium; exporting the example slide requires desktop PowerPoint on Windows.
 - **For the optional Treasurer Slides native-text foundation only:** a Windows host and
   `uv sync --extra dev --extra slides`. `pypdfium2` runs only in the LPAC worker; there is no
   supported operator command until the remaining Wave 1 steps ship.
@@ -260,7 +271,7 @@ setup + M2 real-sheet smoke are DONE). **Next = operator-gated observation:** M3
   a fault. Mail fetching is **local-only by design**: there is **no Gmail credential in CI** and the
   monthly workflow does reports only.
 - Optional `[pdf]` extra needs WeasyPrint's Pango/Cairo native libs (heavy on Windows — PDF is
-  optional; Markdown + HTML are the primary outputs).
+  optional; HTML is the primary output).
 - GitHub repo secrets for CI: `GOOGLE_SA_KEY_B64`, `PTA_CONFIG_B64`.
 - **Scheduled-workflow keepalive.** GitHub disables scheduled workflows in **public** repos after
   60 days of no repository activity (the monthly cron firing does **not** count). `monthly-report.yml`
