@@ -1,195 +1,296 @@
 # pta_finance
 
-A generic, reusable **finance toolkit for a PTA / booster club / small nonprofit**. It treats a
-**Google Sheet as the system-of-record database** for the organization's finances: it normalizes a
-messy multi-year ledger into a clean schema, runs an analytics engine over it (spend by category,
-spend by grade, budget-vs-actual, multi-year fundraising/spend trends), and generates **monthly
-reports** in an **internal** (full-detail) and an **external** (public-safe) variant.
+[![CI](https://github.com/aberson/pta_finance/actions/workflows/ci.yml/badge.svg)](https://github.com/aberson/pta_finance/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-> **The repo is public; your data is private.** No organization, school, person, or email is
-> hard-coded anywhere in this repository. All identity — org name, school name, board emails,
-> spreadsheet/Drive IDs, fiscal-year setting, grade labels — lives only in a private, gitignored
-> `config.toml`. Examples and tests use fake placeholders (`Example PTA`, `treasurer@example.org`).
+A finance toolkit for PTA, booster club, and small nonprofit treasurers. Keep the budget in
+**Google Sheets**, turn reimbursement emails into a **review queue**, and generate **financial
+reports for the board and members**.
 
-v1 is deliberately small: a local Python CLI plus a GitHub Actions monthly cron — **no web UI, no
-LLM, no Google Apps Script**. The design keeps recurring work in a cloud (GitHub Actions now, Google
-Apps Script in a later phase) so the operational core never depends on a server anyone must pay for
-or keep alive — which is what lets a non-technical successor operate it later with only a browser.
+- **Budget in a spreadsheet.** Edit a readable annual budget, preview the changes, and sync them
+  into the dataset that feeds reports and analysis.
+- **Work through reimbursements.** See each request's line items, recorded decision, payment
+  status, and next action, with email drafts and an archive of settled cases.
+- **Prepare reports from the same numbers.** Compare spending with the budget, track fundraising
+  and grade allocations, and produce internal and aggregate public summaries.
 
-## How to use this documentation
+Python commands do the processing; Google Sheets and generated HTML are the operator-facing
+surfaces. The HTML opens in a browser without an app server. The shipped workflows use
+deterministic parsing, calculations, and templates; they do not require an LLM.
 
-New here? Read only the guide that matches what you need — you do **not** have to read them all.
+![Reimbursement review queue showing summary totals, review states, and a ticket-by-ticket action index for a fictional PTA](docs/screenshots/reimbursement-queue.png)
 
-| If you want to… | Read | Who it's for |
+*The real reimbursement report, rendered with fictional data. All screenshots below use invented
+names, amounts, and review records; no private spreadsheet or mailbox was used.*
+
+[Workflows](#workflows) · [Getting started](#getting-started) · [Operator guides](#operator-guides) ·
+[Current scope](#current-scope) · [Development](#development)
+
+## Workflows
+
+### 1. Edit a budget, then see what changed
+
+The **`FY<year> Budget`** tab is where an operator edits proposed amounts and notes.
+`sync-budget` previews a diff against **Budget Timeseries**, the long-format dataset used by
+`analyze` and `report`. Applying the diff snapshots the affected tabs first, updates changed
+amounts and notes, and appends new lines. Removed lines are flagged for review.
+
+```mermaid
+flowchart LR
+    A["Edit FY2027 Budget<br/>Proposed amounts and notes"] --> B["sync-budget<br/>Preview the diff"]
+    B --> C["--apply<br/>Snapshot, then update"]
+    C --> D[(Budget Timeseries)]
+    D --> E["analyze<br/>Totals and comparisons"]
+    D --> F["report<br/>Internal and public HTML"]
+```
+
+```powershell
+uv run pta-finance sync-budget --fy 2027          # preview; no writes
+uv run pta-finance sync-budget --fy 2027 --apply  # snapshot, then apply
+uv run pta-finance analyze --fy 2027             # read-only analysis
+```
+
+The sync preserves actuals, other fiscal years, and enrichment columns. Editing an old copy of
+a budget does not update the reporting dataset. The
+[spreadsheet guide](docs/using-the-spreadsheet.md) explains which tabs to edit and how existing
+spreadsheet dashboards use the data.
+
+### 2. Prepare financial reports for two audiences
+
+One command generates two self-contained HTML files for a fiscal year, with charts embedded in
+each file. Reports cover the selected fiscal year's available data; running them monthly
+refreshes that fiscal-year view.
+
+| Output | What's included | Intended audience |
 |---|---|---|
-| Understand what this is | this README | everyone |
-| **Work with the spreadsheet day-to-day** — change the budget, read the dashboards | **[docs/using-the-spreadsheet.md](docs/using-the-spreadsheet.md)** | **non-technical operators** |
-| **Just ask an AI** (ChatGPT/Claude) instead of reading — ready-made prompts | **[docs/ask-an-ai-assistant.md](docs/ask-an-ai-assistant.md)** | **anyone** |
-| Connect the toolkit to your Google Sheet (one-time) | [SETUP.md](SETUP.md) | whoever runs the tools |
-| Load reimbursement receipts from email | [docs/loading-receipts.md](docs/loading-receipts.md) | whoever runs the tools |
-| Refresh or rebuild the private reimbursement queue | [docs/loading-receipts.md#step-4--refresh-the-private-review-report](docs/loading-receipts.md#step-4--refresh-the-private-review-report) | treasurer/reviewer |
+| **Internal report** | Income, expenses, net, fundraising progress, budget remaining, grade allocations, category variance, and source rows | Treasurer and board |
+| **Public summary** | Headline totals, fundraising progress, budget remaining, and aggregate grade allocations | Members and the wider community |
 
-**The one rule that saves everyone time:** the spreadsheet _is_ the database, and there is exactly
-**one** place to change a year's budget — the tab named **"FY&lt;year&gt; Budget"** (e.g.
-`FY2027 Budget`). Make your changes there. **Never copy, duplicate, or edit an old budget sheet** —
-those aren't connected to anything, so changes made on them have to be re-typed by hand before they
-count. The full plain-language tour — every tab, how to change the budget, and how to hand over a
-sheet you already edited — is in **[docs/using-the-spreadsheet.md](docs/using-the-spreadsheet.md)**.
+The public report omits category detail and individual source rows. Its data model is checked
+at runtime for prohibited payee, receipt, memo, and member identity fields before rendering.
 
-## Stack
+![Public financial summary with income, expenses, fundraising progress, budget remaining, and a grade allocation chart, using fictional figures](docs/screenshots/financial-summary.png)
 
-| Layer | Tool | Why |
-|---|---|---|
-| Language / runtime | Python `>=3.12` | `tomllib` in stdlib (no TOML dependency) |
-| Dependency / build | `uv` + `hatchling` | Reproducible, fast |
-| Sheets / Drive access | `gspread` + `google-auth` (service account) | Clean API, atomic batch writes |
-| Gmail access (optional) | `google-api-python-client` + `google-auth-oauthlib` | User OAuth pinned to `gmail.readonly` |
-| Analytics | `pandas` | By-category / grade / month aggregation, trends |
-| Charts | `matplotlib` (Agg backend) | Deterministic, headless, zero-browser in CI |
-| Templating | `Jinja2` (+ optional `WeasyPrint` for PDF) | Two report variants; HTML output, PDF optional |
-| Native statement parsing (foundation) | optional `pypdfium2` `slides` extra in a Windows LPAC worker | Parse private PDF bytes only after a fail-closed sandbox attestation |
-| CLI / config | stdlib `argparse` / `tomllib` | No extra dependency |
-| Scheduler | GitHub Actions cron | Free, cloud-hosted monthly run |
-| Lint / type / test | `ruff`, `mypy --strict`, `pytest` | — |
+*The public summary keeps the financial overview together in one browser-readable document.*
 
-## Prerequisites
+<details>
+<summary><strong>Inside the internal report: category spending and budget variance</strong></summary>
 
-- Python `>=3.12` and [`uv`](https://docs.astral.sh/uv/) on your PATH.
-- A Google account with a Cloud project (Sheets API + Drive API enabled) and a **service account**
-  whose JSON key you can download.
-- The target spreadsheet and a Drive folder shared with the service-account email (Editor role).
-- *(Optional, only for `fetch-mail`)* an OAuth **Desktop app** client for the mailbox you want to
-  read — a separate credential from the service account; see SETUP.md §6.
+![Internal report section showing an expense-by-category chart and budget-versus-actual table for fictional school programs](docs/screenshots/budget-vs-actual.png)
 
-## Setup
+The current CLI reads fiscal-year summary lines from **Budget Timeseries**. The internal
+report's transaction table therefore shows those summary rows, rather than an itemized bank
+ledger or the separate reimbursement queue.
 
-```bash
-# 1. Install
-uv sync --extra dev            # add the [pdf] extra if you want WeasyPrint PDF output
+</details>
 
-# 2. Configure (private, gitignored)
-cp config.example.toml config.toml
-#    fill in: org/school name + email, board emails, spreadsheet_id,
-#    drive folder ids, grade labels, fiscal_year.start_month (1 = calendar year),
-#    and optional receipt_mapping.received_since (inclusive ledger cutoff)
-
-# 3. Google service account (one-time)
-#    download the service-account JSON to secrets/service-account.json
-#    share the spreadsheet + Drive folder with the service-account email (Editor)
-
-# 4. Verify, then run
-uv run pta-finance check                                  # validate report_log + Budget Timeseries source
-uv run pta-finance analyze                                # run analytics (Budget Timeseries)
-uv run pta-finance report --fy YYYY --variant both        # fiscal-year reports (default: current FY)
+```powershell
+uv run pta-finance report --fy 2026 --variant both
 ```
 
-The live toolkit provisions/validates only the `report_log` tab and sources `analyze` / `report`
-from the operator-maintained **Budget Timeseries** tab; the canonical `transactions` / `receipts` /
-`budget` / `events` tabs (and the `normalize` / `import-budget` commands that fill them) are
-**optional/legacy** and may be deleted from the spreadsheet.
+This writes `reports/output/FY2026-internal.html` and `reports/output/FY2026-external.html`,
+then appends a row per variant to the spreadsheet's `report_log`. Omitting `--fy` selects the
+current fiscal year using the configured start month.
 
-For the unattended monthly report, add two GitHub Actions secrets — `GOOGLE_SA_KEY_B64` (base64 of
-the service-account JSON) and `PTA_CONFIG_B64` (base64 of `config.toml`) — and the
-`monthly-report.yml` workflow runs on the 1st of each month (and on demand via **Run workflow**).
+### 3. Turn reimbursement email into a ledger and review queue
 
-## Key design decisions
+Fetch a date window from Gmail with read-only OAuth, or use an existing `.eml` / `.mbox`
+archive. The parser recognizes supported reimbursement form emails, extracts line items,
+checks stated totals, and maps categories. Process the complete local archive together so
+overlapping exports can be deduplicated.
 
-- **Sheet-as-DB + service account** — zero-server, transparent, and survives a non-technical
-  handoff; unattended CI access without a human login.
-- **One source of truth for schema + IDs** — column lists and ID formats live in single modules
-  every producer and consumer imports; tests assert column-list identity so drift fails CI.
-- **Stable, human-readable, fiscal-year-scoped IDs** (`TXN-FY26-0001`) — assigned by the tool,
-  never rewritten.
-- **Reports never enter this public repo** — written to a private Drive folder + an ephemeral CI
-  artifact; the external variant has a runtime guard that rejects payee/receipt/PII fields.
-- **Config-driven identity, fiscal year, and grades** — making the toolkit generic and reusable.
-
-## Project layout
-
-```
-pta_finance/        package: config, ids, schema, models, sheets, backup, etl, cli,
-                    gmail_source, budget_sync, report_source, receipt_ingest, receipt_map,
-                    reimbursement_events, reimbursement_pipeline, reimbursement_report,
-                    analytics/, reports/(templates/)
-tests/              fake-org fixtures + mocked gspread; an end-to-end wiring smoke gate
-.github/workflows/  ci.yml (PR gate) + monthly-report.yml (cron)
-config.example.toml committed template with fake values; real config.toml is gitignored
+```mermaid
+flowchart TD
+    A["Gmail<br/>Read-only, local fetch"] --> B["Local email archive<br/>.eml and .mbox"]
+    C[Existing email exports] --> B
+    B --> D["ingest-receipts<br/>Profile and inspect"]
+    B --> E["map-receipts<br/>Map categories and deduplicate"]
+    E --> F["--write-tab Reimbursements<br/>Snapshot and replace the ledger"]
+    B --> G["update-reimbursements<br/>Refresh submissions and linked evidence"]
+    H["Private review bundle<br/>Recorded decisions and payment history"] <--> G
+    G --> I["HTML review queue<br/>Items, next actions, and email drafts"]
+    H --> J["report-reimbursements<br/>Offline render only"]
+    J --> I
 ```
 
-See [plan.md](plan.md) for the full design, data model, and build steps, and
-[CLAUDE.md](CLAUDE.md) for project context.
+The **Reimbursements** tab is a machine-owned line-item ledger; its sheet write is an explicit
+step. The **private review queue** is a separate HTML report built from a validated local
+bundle. Refreshing that queue preserves existing reviews and adds new submissions as
+**unreviewed**, even when a card offers an item-level recommendation.
 
-## Status
+![A fictional reimbursement ticket showing approved activity materials, equipment needing clarification, a next action, and a generated email draft](docs/screenshots/reimbursement-detail.png)
 
-**v1 complete** — issues #1–#8 closed. The full toolkit ships: config/IDs, a single-source-of-truth
-schema, a service-account Sheets client (atomic row-targeted writes + 429 backoff), idempotent
-legacy-ledger ETL (ID assignment, dedup, malformed-row resilience), an exact-cents analytics engine,
-internal/external HTML reports with a runtime PII guard, an end-to-end smoke gate, and a monthly
-GitHub Actions report workflow. The full test suite, `mypy --strict`, and Ruff gates passed at that
-milestone. First-run setup needs the Google service account (see Setup) — then
-`uv run pta-finance check`.
+*A ticket brings the review evidence, unresolved question, and draft response into one place.
+The report displays decisions and drafts; it does not submit decisions or send messages.*
 
-**Receipt ingestion (Phase 4)** — a credential-free `.eml`/`.mbox` parser (`receipt_ingest.py`) with
-two CLIs: `ingest-receipts --profile` scans a whole mailbox and reports the data spread (form types,
-category vocabulary, blank-field rates, reconciliation, and the **email-date span** that catches a
-gappy export), and `map-receipts` projects the parsed submissions onto a flat **Reimbursements**
-ledger (carry-forward blank categories, per-form defaults, `Message-ID` + content-hash dedup,
-`needs_review` flags). Its optional private `receipt_mapping.received_since` cutoff is applied to
-the outer email date before dedup; `fetch-mail --since` controls acquisition only. The mapper
-reports its effective cutoff and excluded count, then writes to the Sheet with `--write-tab`. A
-zero-row `--write-tab` is refused before any Sheet client is constructed. A dropdown-driven
-**Receipts Explorer** dashboard reads that ledger. Mail now arrives through
-`fetch-mail` — a read-only Gmail
-connector (`gmail_source.py`, OAuth pinned to `gmail.readonly`) that fetches a date window straight
-into the gitignored inbox directory, retiring the manual Takeout export. See
-[docs/loading-receipts.md](docs/loading-receipts.md) for the end-to-end load (`fetch-mail` →
-`map-receipts`) with a completeness check. Receipt CSV exports neutralize formula-like inbound text
-while retaining validated signed money as numeric cells. A replacement backup keeps a
-spreadsheet-safe CSV beside a versioned, tagged raw JSON `userEnteredValue` grid, so the first
-replacement of a pre-existing tab is safe to inspect and formulas remain distinguishable from
-identical literal text. Native numbers, booleans, strings, and empty cells remain typed in JSON.
-Formatting/comments are outside the artifact; Sheets version history is the primary recovery path,
-and there is no automated JSON restore command. The full test suite, `mypy --strict`, and Ruff gates
-pass.
+Follow-up receipts and responses are linked through exact email ancestry or explicit private
+anchors. Ambiguous evidence remains visible for review. Recorded payments require an explicit,
+validated confirmation link or an audited operator payment record. Changed or missing evidence
+for an existing review stops the refresh instead of silently carrying its decision forward.
 
-**Phase 4 reimbursement refresh complete** — issues #24 closed. The private reimbursement queue
-is data-driven: `report-reimbursements` validates one gitignored schema-v2 bundle and renders the
-complete HTML offline, while `update-reimbursements` optionally runs `fetch-mail`, refreshes
-stable-keyed original submissions plus append-only supplemental email evidence, and then renders.
-Exact RFC ancestry or an explicit private anchor links follow-up receipts, clarification/payment
-responses, and scoped secondary approvals; ambiguous mail remains visible but cannot mutate a
-ticket. New submissions receive non-authoritative item-level recommendations while their recorded
-decision remains **unreviewed**. Neither command sends mail or writes Sheets. Existing reviewed
-records fail closed if their source evidence changes or disappears, so a refresh cannot silently
-attach an old decision to different evidence. At that milestone the repository gate had 849
-collected tests; the Linux and Windows CI run passed, with zero strict-mypy errors and zero Ruff
-lint/format violations.
+<details>
+<summary><strong>Commands for an already configured reimbursement workflow</strong></summary>
 
-**Phase 4 payment-confirmation lanes complete** — landed on `main` 2026-09-06 (commits `01f7bff`,
-`aa9b1b1`). Under schema-v2 private anchors, payment is recorded only through two explicit lanes:
-exact `payment_links` (one archived Message-ID from a configured payment operator, parsed by two
-strict Zelle grammars and bound per ticket to the SHA-256 of its confirmation reference, validated
-atomically as a group) or audited `operator_payments` for the exceptional no-mail case. Ordinary
-thread anchors and direct links still account for correspondence but never authorize payment, and
-schema-v1 anchors keep their historical replay byte-for-byte. The current repository gate has
-**950 collected tests**, zero strict-mypy errors, and zero Ruff lint/format violations. Three
-fail-closed regressions found by the landing review (bundle-held `email_context` replay, the
-schema-v1 source-vs-reviewed total split, and non-Zelle v1 histories under v2) are documented as
-the next fix step; none can mutate a bundle.
+```powershell
+# Acquire mail locally; never sends or modifies Gmail messages.
+uv run pta-finance fetch-mail --since 2026-07-01
 
-**Treasurer-summary Wave 1 foundation (Step 15) complete** — the optional `slides` extra now
-contains a Windows-only, LPAC-isolated native-text PDF parser tested only with fictional fixtures.
-Non-Windows hosts fail closed before a statement file is read. This is deliberately not yet an
-operator-facing slide workflow: OCR, reconciliation, budget facts, review, Google Slides creation,
-and private acceptance remain in the later Wave 1 steps.
+# Inspect the archive and mapping before any Sheet write.
+uv run pta-finance ingest-receipts --source mail_samples --profile --originals-only
+uv run pta-finance map-receipts --source mail_samples
 
-The live `map-receipts --write-tab` path was revalidated on 2026-08-20 with a pre-write snapshot
-and a semantic read-back reconciliation. Private mailbox counts, financial totals, and generated
-reports remain outside this public repository.
+# Explicitly replace the line-item ledger, with a pre-write snapshot.
+uv run pta-finance map-receipts --source mail_samples --write-tab Reimbursements
 
-Roadmap beyond v1: Apps Script automation (nag emails, calendar, sign-in), an admin web UI, then
-forecasting / receipt automation / bank imports / wiki / live Drive upload (`google-api-python-client`).
+# Refresh the existing private review bundle and its HTML from local mail.
+uv run pta-finance update-reimbursements --dry-run
+uv run pta-finance update-reimbursements
+
+# Or just rebuild HTML from the existing bundle, completely offline.
+uv run pta-finance report-reimbursements
+```
+
+The review commands require the private bundle and category mapping described in the
+[receipt-loading guide](docs/loading-receipts.md#step-4--refresh-the-private-review-report).
+An optional `--fetch-since` on `update-reimbursements` fetches Gmail before refreshing.
+Neither review command writes Sheets or sends email. Payment itself happens outside the tool.
+
+</details>
+
+## Getting started
+
+You need **Python 3.12+**, **[uv](https://docs.astral.sh/uv/)**, and a Google Sheet shared with
+a Google service account. Gmail acquisition is optional and uses a separate user OAuth credential.
+
+```powershell
+git clone https://github.com/aberson/pta_finance.git
+cd pta_finance
+uv sync --locked --extra dev
+Copy-Item config.example.toml config.toml
+```
+
+Follow **[SETUP.md](SETUP.md)** to fill in the private configuration, configure the service
+account, and prepare the spreadsheet. Organization identity, contact addresses, sheet IDs,
+fiscal-year start month, and grade labels are configurable.
+
+Once the spreadsheet and credentials are ready:
+
+```powershell
+uv run pta-finance check    # validates schema/source; writes and removes a test-sheet probe
+uv run pta-finance analyze
+uv run pta-finance report --variant both
+```
+
+`init-sheet` provisions `report_log`; it does **not** create or populate Budget Timeseries or
+the custom dashboard tabs. The canonical `transactions`, `receipts`, `budget`, and `events`
+tabs belong to the optional legacy import path and are not required by current reporting.
+
+<details>
+<summary><strong>Optional: scheduled monthly reports</strong></summary>
+
+The [monthly report workflow](.github/workflows/monthly-report.yml) runs at **09:00 UTC on the
+first of each month** and supports manual dispatch. It generates both variants for the current
+fiscal year, uploads them as Actions artifacts, and commits a small keepalive timestamp.
+It uses `GOOGLE_SA_KEY_B64` and `PTA_CONFIG_B64` repository secrets. Gmail fetching stays local.
+
+**Artifact access matters:** this workflow uploads the internal report too. GitHub allows
+signed-in users with repository read access to
+[download workflow artifacts](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts).
+In a public repository, that is not private delivery. Use a private deployment repository or
+change the delivery destination before running it with confidential data. Private Drive upload
+is not implemented.
+
+</details>
+
+## Operator guides
+
+| What you need | Where to go |
+|---|---|
+| Work in the spreadsheet, change budgets, or understand its tabs | [Using the spreadsheet](docs/using-the-spreadsheet.md) |
+| Get help from an AI assistant with day-to-day tasks | [Ready-to-use prompts](docs/ask-an-ai-assistant.md) |
+| Connect Google credentials and prepare the Sheet | [Setup guide](SETUP.md) |
+| Fetch, map, verify, and review reimbursement submissions | [Loading receipts](docs/loading-receipts.md) |
+| Understand the implementation and planned work | [Project plan](plan.md) |
+
+## Current scope
+
+**Available now:** budget sync; fiscal-year analysis and HTML reports; local Gmail fetching;
+email receipt ingestion and mapping; a private reimbursement review report with supplemental
+evidence and explicit payment records; snapshots; and the monthly report workflow.
+
+**Still in development or deferred:** an admin web app, Apps Script automation, automatic
+reimbursement roll-up into Budget Timeseries, live Drive receipt retrieval/upload, and a complete
+treasurer presentation workflow. The optional Windows PDF parser is only the
+[treasurer-summary foundation](documentation/treasurer-summary-wave-1-plan.md), not a shipped
+Google Slides command. Existing spreadsheet dashboards are workbook-specific; the CLI does
+not install a dashboard suite into a fresh Sheet.
+
+Known reimbursement refresh limitations and pending fixes are tracked in the
+[reimbursement plan](documentation/reimbursement-refresh-plan.md). Automated recommendations
+do not perform OCR, visual receipt inspection, or policy adjudication.
+
+Real configuration, credentials, email archives, snapshots, and generated financial reports
+belong in gitignored local paths. Only fictional examples and screenshots are committed here.
+
+## Development
+
+| Layer | Tools |
+|---|---|
+| Runtime and packaging | Python 3.12+, `uv`, Hatchling |
+| Google access | `gspread`, `google-auth`; optional Gmail user OAuth via Google's API client |
+| Analysis and reports | pandas, matplotlib, Jinja2 |
+| Optional foundations | WeasyPrint PDF renderer; `pypdfium2` in a Windows-isolated worker |
+| Quality checks | pytest, Ruff, strict mypy; Linux and Windows GitHub Actions jobs |
+
+```text
+pta_finance/
+  cli.py, config.py              Commands and private configuration
+  budget_sync.py, report_source.py
+                                 Editable budgets and Budget Timeseries adapter
+  receipt_ingest.py, receipt_map.py, gmail_source.py
+                                 Email acquisition, parsing, and ledger mapping
+  reimbursement_*.py             Review evidence, refresh, and HTML report
+  analytics/, reports/           Aggregations, charts, and report templates
+  treasurer_slides/              Native PDF parser foundation
+tests/                           Fictional fixtures and automated checks
+docs/                            Operator guides and README screenshots
+documentation/                   Feature plans and implementation records
+```
+
+<details>
+<summary><strong>Run the quality checks</strong></summary>
+
+```powershell
+uv sync --locked --extra dev --extra slides
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy --strict pta_finance
+uv run pytest -q
+uv run python scripts/check_no_identity.py
+```
+
+The native PDF parser tests require Windows and the `slides` extra. For the Linux test split,
+see [CI](.github/workflows/ci.yml). The ordinary report workflow does not require that extra.
+
+</details>
+
+<details>
+<summary><strong>Regenerate the README screenshots</strong></summary>
+
+```powershell
+uv run --with playwright==1.58.0 python -m playwright install chromium
+uv run --with playwright==1.58.0 python scripts/capture_readme.py
+```
+
+The [capture script](scripts/capture_readme.py) builds invented Budget Timeseries rows and a
+fictional review bundle, renders the production templates, and captures them in headless
+Chromium. It reads only `config.example.toml`, makes no Google calls, and leaves only the four
+PNGs under `docs/screenshots/`. Browser downloads are needed on first use; Playwright is not
+a runtime dependency of the toolkit.
+
+</details>
 
 ## License
 
-TBD.
+[MIT](LICENSE).
