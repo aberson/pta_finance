@@ -798,3 +798,17 @@ Linux and Windows CI passed for `273d0ed`. Both capture helpers ran; the README 
 in light/dark themes and at a narrow width. The sample deck was checked for private content
 and its fictional figures were reconciled. The slide is a presentation example; automatic
 slide generation remains governed by `documentation/treasurer-summary-wave-1-plan.md`.
+
+---
+
+## Phase 6 — Monthly reimbursement board summary — planned (Steps 26–31)
+
+**Objective:** Produce a repeatable one-page reimbursement update for the board, principal,
+and teacher representatives from the reviewed private queue, with explicit reporting dates,
+editable discussion items, and preserved final HTML/PDF editions.
+
+**Status: PLANNED.** The private reference design was accepted and finalized on 2026-09-10.
+Production implementation is governed by
+[documentation/reimbursement-board-summary-plan.md](documentation/reimbursement-board-summary-plan.md).
+Reserve Steps 26–31 for this workflow. It is independent of the bank-statement/Google Slides
+work in Steps 14–25 and adds no scheduled mail fetching, Sheet writes, or message sending.

@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Monthly reimbursement summary — workflow proposal</title>
+  <style>
+    :root{--ground:#f5f8f7;--surface:#fff;--surface-2:#eef3f2;--ink:#16201e;--soft:#45524f;--muted:#64726e;--line:#d8e0dd;--accent:#075a50;--accent-bg:#e0f0ed;--turn:#85540d;--turn-bg:#f6ecd8;--shadow:0 8px 24px -12px #14282424;font-family:system-ui,"Segoe UI",sans-serif;color-scheme:light}
+    @media(prefers-color-scheme:dark){:root{--ground:#0c1312;--surface:#131c1b;--surface-2:#17211f;--ink:#e9efed;--soft:#bac6c2;--muted:#9caaa6;--line:#31413e;--accent:#7fd6c9;--accent-bg:#123c37;--turn:#ebba78;--turn-bg:#372c16;--shadow:none;color-scheme:dark}}
+    *{box-sizing:border-box}body{margin:0;background:var(--ground);color:var(--ink);line-height:1.55}
+    main{max-width:1000px;margin:auto;padding:clamp(24px,5vw,64px) clamp(18px,4vw,44px)}
+    h1,h2,h3,p{margin:0}h1{font-size:clamp(32px,5.5vw,54px);line-height:1.08;letter-spacing:-.035em;max-width:760px;margin:10px 0 18px}h2{font-size:25px;line-height:1.2;margin-bottom:12px}h3{font-size:17px;line-height:1.3;margin-bottom:8px}
+    .eyebrow{font-size:11px;font-weight:750;letter-spacing:.12em;text-transform:uppercase;color:var(--accent)}
+    .lead{font-size:20px;line-height:1.5;max-width:720px;color:var(--soft)}
+    .ribbon{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}.chip{font-size:12px;font-weight:600;padding:5px 11px;border-radius:20px;border:1px solid var(--line);background:var(--surface)}.chip.good{background:var(--accent-bg);color:var(--accent)}.chip.pending{background:var(--turn-bg);color:var(--turn)}
+    section{margin-top:38px}.kicker{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-bottom:11px;border-bottom:1px solid var(--line);padding-bottom:7px}
+    a{color:var(--accent);text-underline-offset:3px}a,code{overflow-wrap:anywhere}code{font-family:ui-monospace,"Cascadia Code",monospace;font-size:.86em}
+    .panel,.decision{background:var(--surface);border:1px solid var(--line);padding:20px;box-shadow:var(--shadow)}
+    .panel p+p{margin-top:10px}.panel p,.decision p{color:var(--soft)}
+    .heard{display:grid;grid-template-columns:1fr 1fr;gap:12px}.heard .panel{border-top:3px solid var(--accent)}
+    .timeline{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.phase{border:1px solid var(--line);padding:17px;background:var(--surface)}.phase .number{font-size:11px;color:var(--accent);font-weight:750;letter-spacing:.06em;margin-bottom:7px}.phase p{font-size:14px;color:var(--soft)}.phase.attended{border-top:3px solid var(--turn)}
+    .after{margin-top:16px;padding:15px 18px;border-left:3px solid var(--accent);background:var(--accent-bg);font-size:14px}
+    .choices{display:grid;gap:12px}.decision{display:grid;grid-template-columns:40px 1fr;gap:14px;break-inside:avoid}.id{display:inline-flex;align-items:center;justify-content:center;width:36px;height:29px;border-radius:5px;font:700 12px ui-monospace,monospace;background:var(--accent-bg);color:var(--accent)}.defaults .id{background:var(--turn-bg);color:var(--turn)}.decision p{font-size:14px}.decision p+p{margin-top:6px}.decision .tweak{color:var(--muted)}.decision strong{color:var(--ink)}
+    .cuts{padding:20px;background:var(--surface-2);border:1px solid var(--line);color:var(--soft)}
+    table{border-collapse:collapse;width:100%;font-size:14px}caption{text-align:left;color:var(--muted);padding-bottom:10px}th,td{padding:12px 14px;vertical-align:top;text-align:left;border:1px solid var(--line)}th{background:var(--surface-2)}td{background:var(--surface);color:var(--soft)}th:first-child{width:28%}
+    .reply{border-left:4px solid var(--turn)}.reply code{display:block;margin-top:8px;color:var(--accent)}footer{margin-top:28px;padding-top:15px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}footer p+p{margin-top:5px}
+    @media(max-width:650px){.heard,.timeline{grid-template-columns:1fr}.decision{grid-template-columns:32px 1fr;gap:10px;padding:16px}.id{width:30px}th,td{padding:9px 8px}h2{font-size:23px}}
+    @media print{
+      @page{size:letter portrait;margin:14mm}
+      :root{--ground:#fff;--surface:#fff;--surface-2:#eef3f2;--ink:#16201e;--soft:#45524f;--muted:#64726e;--line:#d8e0dd;--accent:#075a50;--accent-bg:#e0f0ed;--turn:#85540d;--turn-bg:#f6ecd8;--shadow:none;color-scheme:light}
+      *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}body{font-size:11px}main{max-width:none;padding:0}h1{font-size:32px}.lead{font-size:15px}section{margin-top:22px}h2{font-size:20px}h3{font-size:14px}.decision p,.phase p,table{font-size:11px}.panel,.decision,.phase{padding:12px;box-shadow:none;break-inside:avoid}.heard{grid-template-columns:1fr 1fr}.timeline{grid-template-columns:repeat(3,1fr)}.decision{grid-template-columns:36px 1fr}h1,h2,h3,.kicker{break-after:avoid}tr,.after,.cuts,.reply{break-inside:avoid}a{color:var(--accent)}
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">Workflow proposal · Publication 2 · September 10, 2026</p>
+    <h1>A monthly reimbursement update, ready for the meeting.</h1>
+    <p class="lead">Use the approved one-page design each month: prepare the figures, review the wording, and preserve the final edition.</p>
+    <div class="ribbon"><span class="chip good">Report design accepted</span><span class="chip pending">Plan accepted for preparation</span><span class="chip">5 build steps + 1 attended check</span></div>
+  </header>
+
+  <section aria-labelledby="heard-title">
+    <p class="kicker">01 · What I heard</p>
+    <h2 id="heard-title">A short update that helps the meeting move forward.</h2>
+    <div class="heard">
+      <div class="panel"><h3>Keep the page that worked</h3><p>Plain language, compact figures, one pie chart, open items for discussion, and a short closing paragraph. Show a reporting period as well as an as-of date.</p></div>
+      <div class="panel"><h3>Make it repeatable</h3><p>Turn the process into a Python workflow like the existing reimbursement refresh. Remove draft numbering from the accepted report and keep a fixed final copy.</p></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="shape-title">
+    <p class="kicker">02 · Why this shape</p>
+    <h2 id="shape-title">The figures are calculated. The wording stays editable.</h2>
+    <div class="panel"><p>The existing reviewed queue already holds the case status and amounts. The workflow takes a fixed copy, calculates the summary, and suggests discussion items and a short narrative for the treasurer to review.</p><p>Queue totals describe the current cumulative picture. The payment card has its own date window, including a clear distinction between dated payments and paper checks whose issue dates are unknown.</p><p>A finalization command preserves the page you reviewed. A later monthly run creates another edition.</p></div>
+  </section>
+
+  <section aria-labelledby="build-title">
+    <p class="kicker">03 · Build sequence</p>
+    <h2 id="build-title">Six steps, with a usable result at each stage.</h2>
+    <div class="timeline">
+      <article class="phase"><p class="number">STEP 26</p><h3>Prepare the packet</h3><p>Freeze the queue, calculate the figures, and suggest editable discussion items.</p></article>
+      <article class="phase"><p class="number">STEP 27</p><h3>Render the page</h3><p>Use the accepted HTML style with accurate dates, a pie chart, and working source links.</p></article>
+      <article class="phase"><p class="number">STEP 28</p><h3>Export and preserve</h3><p>Verify one printed page and save the reviewed HTML, PDF, preview, and checksums.</p></article>
+      <article class="phase"><p class="number">STEP 29</p><h3>Add the monthly runner</h3><p>Connect the existing refresh to summary preparation and document the review steps.</p></article>
+      <article class="phase"><p class="number">STEP 30</p><h3>Test a complete cycle</h3><p>Run actual components with fictional input; test retries, a second month, and interrupted output.</p></article>
+      <article class="phase attended"><p class="number">STEP 31 · ATTENDED</p><h3>Verify the real workflow</h3><p>Use the private queue on the treasurer’s Windows machine and compare with the accepted report.</p></article>
+    </div>
+    <div class="after"><strong>After plan preparation:</strong> run <code>plan-expedite --plan documentation/reimbursement-board-summary-plan.md</code> from the project folder to prepare issues, then <code>build-phase --plan documentation/reimbursement-board-summary-plan.md</code> to implement the steps.</div>
+  </section>
+
+  <section aria-labelledby="picked-title">
+    <p class="kicker">04 · Your choices</p>
+    <h2 id="picked-title">P means explicitly requested or accepted.</h2>
+    <div class="choices">
+      <article class="decision" id="P1"><span class="id">P1</span><div><h3>The accepted one-page summary</h3><p>Board, principal, and teacher representatives; plain language; the existing style; compact figures; one pie; discussion items; a closing paragraph.</p></div></article>
+      <article class="decision" id="P2"><span class="id">P2</span><div><h3>Show the reporting dates</h3><p>Keep a date range alongside the as-of date.</p></div></article>
+      <article class="decision" id="P3"><span class="id">P3</span><div><h3>Finalize the accepted edition</h3><p>Draft labels have been removed. A read-only reference copy with checksums preserves the approved files.</p></div></article>
+      <article class="decision" id="P4"><span class="id">P4</span><div><h3>Plan a Python workflow</h3><p>Make this process repeatable in the existing project, similar to the end-to-end reimbursement run. Plan-expedite was authorized on September 10, 2026.</p></div></article>
+    </div>
+  </section>
+
+  <section class="defaults" aria-labelledby="defaults-title">
+    <p class="kicker">05 · Working defaults</p>
+    <h2 id="defaults-title">D means a choice you can change.</h2>
+    <div class="choices">
+      <article class="decision" id="D1"><span class="id">D1</span><div><h3>Suggest wording for your review</h3><p><strong>What:</strong> Start with simple rules and editable private notes for discussion items, follow-ups, and the narrative.</p><p><strong>Why:</strong> Cuts monthly writing while keeping policy decisions and editorial judgment with the treasurer.</p><p class="tweak">Tweak: supply all wording yourself, or change how suggestions are selected.</p></div></article>
+      <article class="decision" id="D2"><span class="id">D2</span><div><h3>Keep cumulative queue totals</h3><p><strong>What:</strong> Cases tracked, closed, and still open describe the source queue as of its snapshot date, including earlier carryovers.</p><p><strong>Why:</strong> Preserves the accepted report’s meaning and keeps older open items visible.</p><p class="tweak">Tweak: use cases from the selected month plus earlier open cases; this would change the headline and pie definitions.</p></div></article>
+      <article class="decision" id="D3"><span class="id">D3</span><div><h3>Give payments their own window</h3><p><strong>What:</strong> Default to the reporting period; allow a narrower latest-update window. Show undated checks by their recorded date, with that distinction stated.</p><p><strong>Why:</strong> A payment update should not imply all spending across a longer period or invent check issue dates.</p><p class="tweak">Tweak: always use the whole reporting period and remove the narrower-window option.</p></div></article>
+      <article class="decision" id="D4"><span class="id">D4</span><div><h3>Run it when preparing the meeting</h3><p><strong>What:</strong> Separate prepare, render, and finalize commands, plus one Python helper that refreshes and prepares a preview.</p><p><strong>Why:</strong> Fits the existing local workflow and leaves time to review the content before it becomes final.</p><p class="tweak">Tweak: change the command names or make use of the already-reviewed queue the helper’s default.</p></div></article>
+      <article class="decision" id="D5"><span class="id">D5</span><div><h3>Use the same browser export</h3><p><strong>What:</strong> Chromium creates PDF and PNG files. The workflow stops with an edit-needed message if the report exceeds one page.</p><p><strong>Why:</strong> Matches the route used for the accepted report and keeps the text readable.</p><p class="tweak">Tweak: support HTML-only operation as the primary mode; final PDF validation would then need a different acceptance rule.</p></div></article>
+      <article class="decision" id="D6"><span class="id">D6</span><div><h3>Preserve each final edition</h3><p><strong>What:</strong> Freeze source data, retain the exact reviewed files, and store read-only finals with checksums. Wording changes create a new edition.</p><p><strong>Why:</strong> The report presented at a meeting stays available even as the live queue changes.</p><p class="tweak">Tweak: change archive naming or retention; the initial workflow never deletes older finals.</p></div></article>
+      <article class="decision" id="D7"><span class="id">D7</span><div><h3>Build in six bounded steps</h3><p><strong>What:</strong> Phase 6 covers five implementation steps followed by a real private acceptance run. This work is independent of the unfinished Google Slides workflow.</p><p><strong>Why:</strong> Each step has a verifiable result and the final check covers the actual machine and data.</p><p class="tweak">Tweak: change the delivery order or choose a smaller first milestone.</p></div></article>
+    </div>
+  </section>
+
+  <section aria-labelledby="scope-title">
+    <p class="kicker">06 · Not in version 1</p>
+    <h2 id="scope-title">The scope is the monthly summary.</h2>
+    <p class="cuts">No sending messages, initiating payments, changing approvals, uploading check proof, writing Sheets, bank reconciliation, Google Slides, hosted editor, AI service, or scheduled runs. Missing payments and clarifications still need to be resolved in the source reimbursement workflow.</p>
+  </section>
+
+  <section aria-labelledby="risks-title">
+    <p class="kicker">07 · What to watch</p>
+    <h2 id="risks-title">Checks built into the workflow.</h2>
+    <table><caption>Practical limits and planned handling</caption><thead><tr><th scope="col">Risk</th><th scope="col">How the plan handles it</th></tr></thead><tbody>
+      <tr><td>An incomplete source queue</td><td>Keep unmatched and unreviewed evidence visible in the private packet. A successful run never claims every email or payment was understood.</td></tr>
+      <tr><td>Dates or payments misread</td><td>Use explicit windows, deduplicate by stable case identity, and separate dated payments from undated checks.</td></tr>
+      <tr><td>Too many open items</td><td>Let the treasurer choose the meeting agenda, acknowledge additional items in the source, and stop if the page does not fit.</td></tr>
+      <tr><td>A later run changes the final</td><td>Publish complete editions without overwriting history; verify file checksums and reject stale previews.</td></tr>
+    </tbody></table>
+  </section>
+
+  <section aria-labelledby="feedback-title">
+    <p class="kicker">08 · Feedback</p>
+    <h2 id="feedback-title">Reference an ID to change a choice.</h2>
+    <div class="panel reply"><p>The most useful choices to check are <a href="#D1">D1: suggested wording</a>, <a href="#D2">D2: cumulative counts</a>, and <a href="#D3">D3: payment windows</a>. The proposed defaults stand unless you change them.</p><code>D1 -&gt; I will supply the wording each month</code><code>D2 -&gt; selected month plus earlier open cases</code><p style="margin-top:12px">Plain-language feedback works too. The plan remains the source of truth; this proposal is its readable view.</p></div>
+  </section>
+  <footer>
+    <p>Source: <a href="reimbursement-board-summary-plan.md">reimbursement-board-summary-plan.md</a> · <a href="reimbursement-board-summary-review.md">Plan review</a> · <a href="reimbursement-board-summary-wrap.md">Readiness check</a></p>
+    <p>Publication 2. Decision IDs stay stable on revision. No production workflow has been implemented by this proposal.</p>
+  </footer>
+</main>
+</body>
+</html>
