@@ -36,10 +36,10 @@
 <body>
 <main>
   <header>
-    <p class="eyebrow">Workflow proposal · Publication 2 · September 10, 2026</p>
+    <p class="eyebrow">Workflow proposal · Publication 3 · September 10, 2026</p>
     <h1>A monthly reimbursement update, ready for the meeting.</h1>
     <p class="lead">Use the approved one-page design each month: prepare the figures, review the wording, and preserve the final edition.</p>
-    <div class="ribbon"><span class="chip good">Report design accepted</span><span class="chip pending">Plan accepted for preparation</span><span class="chip">5 build steps + 1 attended check</span></div>
+    <div class="ribbon"><span class="chip good">Report design accepted</span><span class="chip pending">Plan ready for build</span><span class="chip">5 build steps + 1 attended check</span></div>
   </header>
 
   <section aria-labelledby="heard-title">
@@ -68,7 +68,7 @@
       <article class="phase"><p class="number">STEP 30</p><h3>Test a complete cycle</h3><p>Run actual components with fictional input; test retries, a second month, and interrupted output.</p></article>
       <article class="phase attended"><p class="number">STEP 31 · ATTENDED</p><h3>Verify the real workflow</h3><p>Use the private queue on the treasurer’s Windows machine and compare with the accepted report.</p></article>
     </div>
-    <div class="after"><strong>After plan preparation:</strong> run <code>plan-expedite --plan documentation/reimbursement-board-summary-plan.md</code> from the project folder to prepare issues, then <code>build-phase --plan documentation/reimbursement-board-summary-plan.md</code> to implement the steps.</div>
+    <div class="after"><strong>Ready for build:</strong> <a href="https://github.com/aberson/pta_finance/issues/55">Umbrella #55</a> tracks all six steps. Run <code>build-phase --plan documentation/reimbursement-board-summary-plan.md</code> from the project folder. The automated build covers Steps 26–30 (#56–60); stop before attended Step 31 (#61).</div>
   </section>
 
   <section aria-labelledby="picked-title">
@@ -120,7 +120,7 @@
   </section>
   <footer>
     <p>Source: <a href="reimbursement-board-summary-plan.md">reimbursement-board-summary-plan.md</a> · <a href="reimbursement-board-summary-review.md">Plan review</a> · <a href="reimbursement-board-summary-wrap.md">Readiness check</a></p>
-    <p>Publication 2. Decision IDs stay stable on revision. No production workflow has been implemented by this proposal.</p>
+    <p>Publication 3. Decision IDs stay stable on revision. No production workflow has been implemented by this proposal.</p>
   </footer>
 </main>
 </body>

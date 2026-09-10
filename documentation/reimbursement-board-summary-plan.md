@@ -15,6 +15,10 @@ The selected defaults below stand for implementation; their D labels retain thei
 as agent recommendations. GitHub uses Phase 6 with global Steps 26–31, following the
 separate Phase 5 slide track without depending on its unfinished work.
 
+**Issue tracking:** [Phase 6 umbrella #55](https://github.com/aberson/pta_finance/issues/55).
+Steps 26–30 map to #56–60; attended Step 31 maps to #61. Plan-expedite completed the
+review, readiness, and issue-synchronization gates on 2026-09-10.
+
 Proposal: documentation/reimbursement-board-summary-proposal.html
 
 ### What This Feature Does
@@ -396,7 +400,7 @@ so no server URL or runtime reviewer is required.
 - **Problem:** Expose a preparation command that derives an editable monthly summary packet from validated frozen reimbursement inputs.
 - **Type:** code
 - **Status:** PENDING
-- **Issue:** #
+- **Issue:** #56
 - **Flags:** --reviewers deep --isolation worktree
 - **Files:** `pta_finance/reimbursement_summary.py`, `pta_finance/cli.py`, `tests/test_reimbursement_summary.py`, `tests/test_reimbursement_cli.py`, `tests/fixtures/reimbursement_summary/`.
 - **Produces:** `prepare-reimbursement-summary`, strict new private schemas, deterministic facts/suggestions, input snapshots, and synthetic examples.
@@ -409,7 +413,7 @@ so no server URL or runtime reviewer is required.
 - **Problem:** Expose a render command that turns a reviewed packet into the approved style of offline board summary.
 - **Type:** code
 - **Status:** PENDING
-- **Issue:** #
+- **Issue:** #57
 - **Flags:** --reviewers deep --isolation worktree
 - **Files:** `pta_finance/reimbursement_summary_render.py`, `pta_finance/reports/templates/reimbursement_board_summary.html.j2`, `pta_finance/cli.py`, `tests/test_reimbursement_summary_render.py`, `tests/fixtures/reimbursement_summary/`.
 - **Produces:** `report-reimbursement-summary --html-only`, the generic template, adjacent detailed report, and a receipt with export checks pending.
@@ -421,7 +425,7 @@ so no server URL or runtime reviewer is required.
 - **Problem:** Finalize an unchanged reviewed preview into a validated immutable HTML/PDF edition.
 - **Type:** code
 - **Status:** PENDING
-- **Issue:** #
+- **Issue:** #58
 - **Flags:** --reviewers deep --isolation worktree
 - **Files:** `pta_finance/reimbursement_summary_render.py`, `pta_finance/cli.py`, `pyproject.toml`, `uv.lock`, `tests/test_reimbursement_summary_render.py`, `.github/workflows/ci.yml`.
 - **Produces:** Default render with PDF/PNG, summary export extra, `finalize-reimbursement-summary`, hash manifests, read-only editions, concurrency/error handling, and browser-export CI coverage.
@@ -434,7 +438,7 @@ so no server URL or runtime reviewer is required.
 - **Problem:** Let the treasurer prepare the monthly summary through one local command with the existing refresh behavior.
 - **Type:** code
 - **Status:** PENDING
-- **Issue:** #
+- **Issue:** #59
 - **Flags:** --reviewers deep --isolation worktree
 - **Files:** `scripts/run_reimbursement_summary.py`, `docs/reimbursement-board-summary.md`, `docs/examples/reimbursement-summary-launchers.toml`, `tests/test_reimbursement_summary_pipeline.py`, `README.md`, `CLAUDE.md`, `SETUP.md`, `docs/loading-receipts.md`.
 - **Produces:** A runner calling the existing refresh CLI followed by summary prepare/render, concrete setup/recovery/review instructions, copyable launchers, and a private-reference conversion procedure for the accepted payment register.
@@ -446,7 +450,7 @@ so no server URL or runtime reviewer is required.
 - **Problem:** Prove the packaged commands can complete one summary cycle through their actual interfaces.
 - **Type:** code
 - **Status:** PENDING
-- **Issue:** #
+- **Issue:** #60
 - **Flags:** --reviewers code --isolation worktree
 - **Files:** `tests/test_reimbursement_summary_pipeline.py`, `tests/fixtures/reimbursement_summary/`, `.github/workflows/ci.yml`, `docs/reimbursement-board-summary.md`.
 - **Produces:** A bounded smoke gate wiring an actual synthetic email archive, anchor/category inputs, refresh CLI, snapshot preparation, note edit, render, finalize, and final manifest verification; no mocks at the producer/consumer boundaries.
@@ -458,7 +462,7 @@ so no server URL or runtime reviewer is required.
 - **Problem:** Confirm that the installed monthly workflow produces a usable private board packet from the actual reviewed queue.
 - **Type:** operator
 - **Status:** PENDING
-- **Issue:** #
+- **Issue:** #61
 - **Files:** No code changes; run the acceptance procedure already written in `docs/reimbursement-board-summary.md`.
 - **Produces:** Private run evidence, a checked comparison with the accepted reference, and an operator acceptance result or a concrete defects list.
 - **Done when:** The operator runs the real helper with the chosen date windows, reviews the suggested wording, verifies a known paid case and a received clarification against the queue, confirms paper checks remain undated where evidence is absent, previews/prints one legible page, and finalizes a new edition. A retry returns the same final and a later run leaves it unchanged. Record source refresh failures as findings rather than weakening evidence rules. A private no-refresh replay reproduces the accepted reference's figures and editorial choices with its narrower payment window. Acceptance may not be claimed solely from unit tests.
@@ -558,13 +562,13 @@ the source checkout supplying missing package data.
 
 ### Development handoff
 
-This plan follows plan-review → plan-redline → plan-wrap before issue creation. Next,
-`plan-expedite --plan documentation/reimbursement-board-summary-plan.md` from this repository
-rechecks the plan and synchronizes issues; `build-phase --plan
-documentation/reimbursement-board-summary-plan.md` then executes numbered steps in order.
+This plan passed plan-review → plan-redline → plan-wrap before issue creation.
+Plan-expedite synchronized umbrella #55 and step issues #56–61 on 2026-09-10.
+Next, `build-phase --plan documentation/reimbursement-board-summary-plan.md` from this
+repository executes numbered steps in order.
 Each code step gets an isolated worktree, its declared code review, and the repository
-quality gates. Step 31 is attended, with no code-authoring obligation. Blank Issue fields
-are expected now and must be filled by repo-sync before build-phase starts.
+quality gates. The automated goal covers Steps 26–30 (#56–60) and stops before Step 31
+(#61), which is attended with no code-authoring obligation. All Issue fields are populated.
 
 ## Appendix
 

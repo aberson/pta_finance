@@ -812,3 +812,6 @@ Production implementation is governed by
 [documentation/reimbursement-board-summary-plan.md](documentation/reimbursement-board-summary-plan.md).
 Reserve Steps 26–31 for this workflow. It is independent of the bank-statement/Google Slides
 work in Steps 14–25 and adds no scheduled mail fetching, Sheet writes, or message sending.
+
+Plan preparation completed 2026-09-10: [umbrella #55](https://github.com/aberson/pta_finance/issues/55),
+automated Steps 26–30 in #56–60, and attended Step 31 in #61. Implementation remains pending.
