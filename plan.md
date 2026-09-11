@@ -815,3 +815,28 @@ work in Steps 14–25 and adds no scheduled mail fetching, Sheet writes, or mess
 
 Plan preparation completed 2026-09-10: [umbrella #55](https://github.com/aberson/pta_finance/issues/55),
 automated Steps 26–30 in #56–60, and attended Step 31 in #61. Implementation remains pending.
+
+---
+
+## Phase 7 — Shared reimbursement workflow proof — planned (Steps 32–35)
+
+**Objective:** Explain and prove a small Google-hosted workflow in which two authenticated
+users share one fictional reimbursement request, comments, a decision, and the next owner.
+
+**Status: PLANNED.** Implementation has not started. The scoped source of truth is
+[documentation/shared-workflow-proof-plan.md](documentation/shared-workflow-proof-plan.md).
+Reserve Steps 32–35 for this feature; it is independent of the pending Slides and monthly
+board-summary work.
+
+Execute the feature plan in two separate phases. Phase A contains automated Step 32 and
+attended Step 33/M6: prove attributed shared comments and persistence across a new service
+revision with two real Google identities. Phase B contains automated Step 34 and attended
+Step 35/M7: reviewer approval/not-approval and processor completion. Phase B is ineligible
+until Step 33/M6 is recorded DONE with deployed evidence; do not run the entire plan as
+one unattended span.
+
+The proposed service uses direct IAP on Cloud Run and separate Firestore workflow state.
+Administrative completion does not record payment or mutate the private reimbursement
+bundle, Sheets ledger, or mailbox. Actual project, account, and billing configuration stays
+private. The independent plan review is recorded in
+[documentation/shared-workflow-proof-review.md](documentation/shared-workflow-proof-review.md).
