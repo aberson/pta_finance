@@ -254,7 +254,7 @@ Do not issue the Phase B command until the M6 check described above is complete.
 
 - **Problem:** Deliver the smallest deployable shared-comment slice through the real HTTP entry point.
 - **Type:** code
-- **Issue:**
+- **Issue:** #63
 - **Flags:** --reviewers deep --isolation worktree
 - **Status:** PENDING
 - **Files:** New `pta_finance/shared_workflow/` source/resources listed in §5; new `deployment/shared-workflow/` files listed in §5; new `scripts/stage_shared_workflow.py`, `scripts/shared_workflow_smoke.py`, `tests/test_shared_workflow_*.py`, and `docs/shared-workflow-proof.md`; existing `pyproject.toml`, `uv.lock`, `.github/workflows/ci.yml`, `README.md`, and `CLAUDE.md`. Reuse `pta_finance/reimbursement_report.py` unchanged; preserve `.gitignore` and private inputs.
@@ -269,7 +269,7 @@ Do not issue the Phase B command until the M6 check described above is complete.
 
 - **Problem:** Establish real browser identity and cross-session persistence on the intended deployment before business controls are built.
 - **Type:** operator
-- **Issue:**
+- **Issue:** #64
 - **Status:** PENDING
 - **Files:** Execute prepared `scripts/stage_shared_workflow.py`, the fixed `deployment/shared-workflow/cloudbuild.yaml`, and `docs/shared-workflow-proof.md` commands without source edits; configure private `secrets/shared-workflow.runtime.json` / `shared-workflow.env.json`; record runtime evidence under `reports/output/shared-workflow/`.
 - **Produces:** Private deployed-resource/revision/access receipts and an attended pass/fail record for M6; no code artifacts or application-source changes.
@@ -322,7 +322,7 @@ Phase A ends after Step 32's code delivery with **run M6 / Step 33 next**. Any M
 
 - **Problem:** Make one server-authorized approval outcome determine the next participant's permitted action.
 - **Type:** code
-- **Issue:**
+- **Issue:** #65
 - **Flags:** --reviewers deep --isolation worktree
 - **Status:** PENDING
 - **Files:** `pta_finance/shared_workflow/config.py`, `models.py`, `store.py`, `app.py`, `templates/request.html.j2`, and `static/request.js`; `tests/test_shared_workflow_*.py`, `scripts/shared_workflow_smoke.py`, and `docs/shared-workflow-proof.md`; update `README.md` and `CLAUDE.md` only for the delivered optional behavior. Keep private reimbursement modules unchanged.
@@ -337,7 +337,7 @@ Phase A ends after Step 32's code delivery with **run M6 / Step 33 next**. Any M
 
 - **Problem:** Demonstrate both terminal outcomes with the two real Google sessions using the shared cloud store.
 - **Type:** operator
-- **Issue:**
+- **Issue:** #66
 - **Status:** PENDING
 - **Files:** Execute prepared staging/build/deploy commands from `docs/shared-workflow-proof.md` without source edits; configure private `secrets/shared-workflow.runtime.json` / `shared-workflow.env.json`; record runtime evidence under `reports/output/shared-workflow/`.
 - **Produces:** Private M7 acceptance observations, final image/revision receipt, and a concise functional-proof verdict; no code artifacts.
