@@ -33,7 +33,7 @@
 <ol class="timeline"><li><span class="phase">A</span><div class="card"><h3>Shared comments · Steps 32–33</h3>
 <p>Step 32 builds the minimal page, verified sign-in boundary, comment transactions, local tests, and safe deployment preparation. Step 33 is the attended <strong>M6</strong> test on Cloud Run.</p>
 <p class="small">M6: sign in as A and B → exchange comments → redeploy a fresh revision → read both comments again → verify denial of unauthorized access.</p>
-<div class="after"><strong>Start after issue synchronization:</strong><pre>/build-phase --plan documentation/shared-workflow-proof-plan.md --phase A</pre><p><strong>Afterwards:</strong> run M6 / Step 33 from the prepared runbook. Phase A’s automatic work ends at Step 32.</p></div></div></li></ol>
+<div class="after"><strong>Step 32 is blocked in review.</strong><p>The isolated implementation passes local gates, but two review Nits remain after the three-iteration limit. Feature code is not merged. See the <a href="shared-workflow-proof-sync.md#step-32-review-boundary--2026-09-11">execution record</a> for the remaining fix scope.</p><p><strong>After Step 32 passes:</strong> run attended M6 / Step 33 from the prepared runbook. M6 is currently unexecuted.</p></div></div></li></ol>
 <div class="barrier"><strong>M6 is the boundary.</strong> Phase B cannot start until the M6 record has been checked and Step 33 is marked DONE. Never run the whole plan as one unattended span: the build runner defers human checks.</div>
 <ol class="timeline" start="2"><li><span class="phase">B</span><div class="card"><h3>Approval handoff · Steps 34–35</h3>
 <p>Step 34 adds the reviewer’s decision and processor’s completion action. Step 35 is the attended <strong>M7</strong> test using the same two real accounts.</p>
@@ -74,7 +74,7 @@ P2 → keep the one-request scope</pre>
 <p class="small">Feedback changes the plan first; this same proposal file is republished with the same IDs. Substantive changes return through technical review before the readiness check.</p>
 <p class="source"><strong>Plan:</strong> <a href="shared-workflow-proof-plan.md">documentation/shared-workflow-proof-plan.md</a><br />
 <strong>Technical review:</strong> <a href="shared-workflow-proof-review.md">documentation/shared-workflow-proof-review.md</a><br />
-<strong>Next:</strong> plan-wrap is READY. Synchronize issues, then build Phase A through Step 32. Prepare M6 for attended execution; Phase B still requires checked M6 completion.</p></div></section>
+<strong>Next:</strong> resolve the two retained Step 32 review findings in an authorized follow-up pass, then complete integration and delivery gates. Planning and issue synchronization are complete. M6 is prepared but unexecuted; Phase B still requires checked M6 completion.</p></div></section>
 <footer>Publication 1 · 2026-09-11 · 5 operator choices / 10 agent defaults · All examples are fictional.<br />
 Standalone file: open in a browser, then Print → Save as PDF. This proposal records a plan, not a deployment or completed acceptance.</footer>
 </main></body></html>

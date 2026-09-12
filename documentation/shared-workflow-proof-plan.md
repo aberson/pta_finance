@@ -1,6 +1,6 @@
 # Shared workflow proof plan
 
-**Status:** PLANNED — technical review and plan-wrap READY; implementation has not started. Planning baseline: `dc259ee3d19e3b95f1f6f9d68388a6a0dfda4f9f`, inspected 2026-09-11. The operator authorized scoped planning closeout, issue synchronization, and Phase A through Step 32 on 2026-09-11; prepare M6 for attended execution.
+**Status:** STEP 32 BLOCKED IN REVIEW — planning and issue synchronization are complete. The implementation is preserved in its isolated worktree, with local gates passing, but two review Nits remain after the three-iteration build limit; feature code is not merged or pushed. Step 32 remains PENDING until the remaining findings and delivery gates pass. M6 is prepared but unexecuted; Phase B remains ineligible. See [the execution record](shared-workflow-proof-sync.md#step-32-review-boundary--2026-09-11). Planning baseline: `dc259ee3d19e3b95f1f6f9d68388a6a0dfda4f9f`, inspected 2026-09-11. The operator authorized scoped planning closeout, issue synchronization, and Phase A through Step 32 on 2026-09-11; prepare M6 for attended execution.
 
 **Reserved steps:** 32–35. A scan of `plan.md` and every `documentation/*plan.md` found the latest global span 26–31 in the monthly reimbursement board-summary plan; the slide plan owns 14–25. Older feature plans contain historical local numbering. No sibling currently claims 32–35. Recheck before issue synchronization; this feature neither completes nor renumbers existing work. The master-plan pointer is Phase 7 in `plan.md`.
 

@@ -818,12 +818,12 @@ automated Steps 26–30 in #56–60, and attended Step 31 in #61. Implementation
 
 ---
 
-## Phase 7 — Shared reimbursement workflow proof — planned (Steps 32–35)
+## Phase 7 — Shared reimbursement workflow proof — Step 32 blocked in review (Steps 32–35)
 
 **Objective:** Explain and prove a small Google-hosted workflow in which two authenticated
 users share one fictional reimbursement request, comments, a decision, and the next owner.
 
-**Status: PLANNED.** Implementation has not started. The scoped source of truth is
+**Status: STEP 32 BLOCKED IN REVIEW.** Planning and issue synchronization are complete. The isolated implementation passes local gates but retains two review Nits after three iterations; feature code is not merged. M6 is prepared and unexecuted. The scoped source of truth is
 [documentation/shared-workflow-proof-plan.md](documentation/shared-workflow-proof-plan.md).
 Reserve Steps 32–35 for this feature; it is independent of the pending Slides and monthly
 board-summary work.

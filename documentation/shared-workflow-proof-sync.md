@@ -29,3 +29,13 @@ Use one build/integration owner for shared dependencies, CI, documentation and p
 The serial path is preparation -> Step 32 -> inspected image -> identity deployment and subject binding -> comments deployment -> M6 -> checked Step 33 DONE -> Step 34 -> inspected new image -> M7. Do not invoke this plan as one unattended span. Preserve the approval namespace; test not-approval in a fresh namespace.
 
 Plan pipeline: /plan-review + /plan-wrap -> /repo-sync (step 4 of 5) -> /build-phase.
+
+## Step 32 review boundary — 2026-09-11
+
+The isolated candidate contains the optional authenticated comments service, packaged fictional fixture, Firestore transactions, browser interface, staging/image recipes, tests, CI changes and attended runbook. Feature code remains unmerged and unpushed. Step 32/#63 stays open and PENDING; Steps 33–35 remain pending.
+
+The final frozen-source Windows run collected 1,090 cases: 1,087 passed, three unchanged existing skips, and zero failures/errors. All 140 web cases ran without skips; the temporary-PyYAML supplement passed all nine workflow tests. Strict package mypy, Ruff lint/format, installed-wheel browser/emulator smoke (6.23 seconds after readiness), build/distribution privacy and identity checks passed. Post-merge and new-feature remote CI gates have not run because integration has not occurred.
+
+The final six independent reviews retained two Nits: reject noncanonical configured origins such as trailing `?` or `#` before readiness, and make the duplicate-key HTTP negative case otherwise valid so it isolates the strict JSON parser. Correctness and test quality returned NEEDS-WORK; bugs, security, style and plan conformance passed. The build-step run reached its three-iteration limit and its parent-authenticated result is BLOCKED. The candidate and all three rounds of evidence are preserved for a bounded follow-up; no fourth iteration was started.
+
+M6's ordered runbook is prepared in the candidate, and its blank private acceptance record and local-tool notes are under ignored `reports/output/shared-workflow/`. Every M6 observation remains PENDING. No cloud authentication, cloud resource mutation or attended acceptance occurred. The local emulator and app are stopped; the pre-existing `.gitignore` change was restored exactly. Step 32 must pass its remaining review/integration gates before M6 execution; Phase B still requires checked M6 and Step 33 DONE.
