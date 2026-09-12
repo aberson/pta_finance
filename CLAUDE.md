@@ -12,7 +12,9 @@
 A command-line Python toolkit for budgets, financial reports, and reimbursement review.
 **Google Sheets holds the budget data**; a private local email archive and review bundle hold
 reimbursement evidence. It generates HTML reports, including a browser-readable review queue.
-There is no hosted web app, LLM dependency, or Apps Script; scheduled financial reports use GitHub Actions.
+An optional, separate comments-only web proof uses one packaged fictional request; its real
+Cloud Run acceptance remains pending. There is no LLM dependency or Apps Script; scheduled
+financial reports use GitHub Actions.
 
 ## 2. Stack
 
@@ -33,7 +35,7 @@ There is no hosted web app, LLM dependency, or Apps Script; scheduled financial 
 ## 3. Key commands
 
 ```bash
-uv sync --extra dev                 # install (add [pdf] for WeasyPrint; [slides] for the Windows-only native-parser foundation)
+uv sync --extra dev --extra web     # add [slides] for native-parser tests, [pdf] for WeasyPrint
 uv run pytest -q                    # test
 uv run ruff check .                 # lint
 uv run ruff format --check .        # format check
@@ -111,6 +113,20 @@ scripts/            identity guard + README screenshot capture and PowerPoint ex
 
 ## 5. Architecture
 
+- **Optional shared-comment proof** (`shared_workflow/`, `[web]`): separate FastAPI/Uvicorn
+  entry point, strict `PTA_WORKFLOW_CONFIG` JSON, verified IAP assertions, two pinned subjects,
+  and bounded Firestore transactions. It loads only its packaged fictional bundle through
+  the existing offline validator; it never discovers private CLI configuration or imports
+  the CLI/Sheet/Gmail clients. `identity` mode never creates a store; `comments` mode provides
+  a shared request and append-only plain-text comments, capped at 100 events. No decision,
+  completion, import, or reset route exists. Production rejects emulator/test settings.
+  `scripts/shared_workflow_smoke.py` is a nonpackaged local test factory using ephemeral keys,
+  a real loopback emulator, an installed wheel, and headless Chromium. Test modules requiring
+  the emulator fail when `web` is installed and `FIRESTORE_EMULATOR_HOST` is missing.
+  See [docs/shared-workflow-proof.md](docs/shared-workflow-proof.md) for all commands,
+  source staging, the fixed Cloud Build image-inspection recipe, and pending M6 acceptance.
+  Phase B is ineligible until M6 is verified and Step 33 marked DONE.
+
 - **Data layer** (`sheets.py`, `schema.py`, `models.py`, `ids.py`): one Google Spreadsheet.
   `schema.py` (column lists) and `ids.py` (ID formats) are **single sources of truth** — tests
   assert column identity with `is`. The full `schema.TABS` registry (`transactions`, `receipts`,
@@ -160,6 +176,8 @@ scripts/            identity guard + README screenshot capture and PowerPoint ex
 
 ## 6. Current state
 
+**Shared workflow Step 32 delivered (2026-09-12 UTC).** The optional comments-only service passed local HTTP/browser/emulator and installed-wheel checks, the complete main-checkout suite, six independent reviews, and feature CI. Step 33/M6 remains attended and unexecuted; Phase B remains ineligible. See the [delivery record](documentation/shared-workflow-proof-sync.md#step-32-delivery--2026-09-12-utc).
+
 **README refresh accepted (2026-09-08).** Public examples show the real reimbursement renderer
 with fictional data and an editable native PowerPoint snapshot. The snapshot is a presentation
 example, not evidence of a shipped slide-generation command. Workflow diagrams have matching
@@ -202,9 +220,7 @@ changes or disappears. Neither command sends mail or writes Sheets. **Strict pay
 per-ticket reference-digest bindings, atomic quarantine) and `operator_payments`; three fail-closed
 majors from the landing review remain open as the next fix step (see
 `documentation/reimbursement-refresh-plan.md` § 2026-09-06 amendment). The current repository gate
-has **950 collected tests** (full suite needs `--extra slides` on Windows for the native-parser
-tests); the last Linux and Windows CI run passed, with zero strict-mypy
-errors and zero Ruff lint/format violations.
+has **1,110 collected tests** with dev/slides/web installed and the local Firestore emulator running: 1,107 passed and three unchanged existing skips; all 160 web cases pass without skips. The optional PyYAML supplement passes all nine workflow checks. Strict package mypy and Ruff pass, as do all three feature CI jobs.
 **The Gmail read-only ingest connector has also shipped** (`documentation/gmail-ingest-plan.md`,
 tracking span #15–#22; deferred #18 and its umbrella #22 remain open): `gmail_source.py` + the
 `fetch-mail` CLI replace the manual Google Takeout export —

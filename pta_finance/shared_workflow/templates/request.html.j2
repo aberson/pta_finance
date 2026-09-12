@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shared request proof · Example PTA</title>
+  <link rel="stylesheet" href="/static/request.css">
+  {% if mode == 'comments' %}<script src="/static/request.js" defer></script>{% endif %}
+</head>
+<body>
+<main data-request-id="{{ request_id }}">
+  <p class="eyebrow">Example PTA · Fictional collaboration proof</p>
+  <h1>Shared request</h1>
+  <p>Signed in as <strong>{{ actor.label }}</strong></p>
+  {% if mode == 'identity' %}
+  <section aria-labelledby="setup-title">
+    <h2 id="setup-title">Account setup</h2>
+    <p>Privately record these verified details with the operator.</p>
+    <dl><dt>Email</dt><dd>{{ actor.email }}</dd><dt>Subject</dt><dd>{{ actor.subject }}</dd></dl>
+    <p>Shared comments become available after both accounts are configured.</p>
+  </section>
+  {% else %}
+  <p>This fictional request is for shared comments. It does not record a payment.</p>
+  <section aria-labelledby="request-title">
+    <h2 id="request-title">Loading request…</h2>
+    <p id="request-meta"></p>
+    <p id="request-state"></p>
+    <ul id="items"></ul>
+  </section>
+  <section aria-labelledby="history-title">
+    <h2 id="history-title">Comments</h2>
+    <ol id="history"></ol>
+    <button type="button" id="reload">Reload</button>
+  </section>
+  <form id="comment-form">
+    <label for="comment">Your comment</label>
+    <textarea id="comment" name="comment" rows="4" maxlength="2000" required></textarea>
+    <p>Plain text, up to 2,000 characters. Use fictional details only.</p>
+    <button type="submit" id="save" disabled>Save comment</button>
+    <button type="button" id="retry" hidden>Retry same comment</button>
+  </form>
+  <p id="feedback" role="status" aria-live="polite"></p>
+  <a id="session-refresh" href="{{ origin }}" hidden>Refresh your sign-in</a>
+  {% endif %}
+</main>
+</body>
+</html>

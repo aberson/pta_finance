@@ -1,0 +1,13 @@
+# Staging's positive manifest is the privacy boundary; this is an additional guard.
+.git
+**/__pycache__
+**/*.pyc
+secrets
+mail_samples
+snapshots
+reports
+config.toml
+.claude
+.build-step
+tests
+scripts

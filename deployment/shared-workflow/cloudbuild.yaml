@@ -1,0 +1,18 @@
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args: ['build', '--tag', '${_IMAGE}', '.']
+  - id: inspect-actual-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - run
+      - --rm
+      - --read-only
+      - --network=none
+      - --entrypoint=/app/.venv/bin/python
+      - '${_IMAGE}'
+      - /app/inspect_image.py
+images: ['${_IMAGE}']
+options:
+  logging: CLOUD_LOGGING_ONLY
+timeout: 1200s

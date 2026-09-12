@@ -818,12 +818,12 @@ automated Steps 26–30 in #56–60, and attended Step 31 in #61. Implementation
 
 ---
 
-## Phase 7 — Shared reimbursement workflow proof — Step 32 blocked in review (Steps 32–35)
+## Phase 7 — Shared reimbursement workflow proof — Step 32 delivered; M6 pending (Steps 32–35)
 
 **Objective:** Explain and prove a small Google-hosted workflow in which two authenticated
 users share one fictional reimbursement request, comments, a decision, and the next owner.
 
-**Status: STEP 32 BLOCKED IN REVIEW.** Planning and issue synchronization are complete. The isolated implementation passes local gates but retains two review Nits after three iterations; feature code is not merged. M6 is prepared and unexecuted. The scoped source of truth is
+**Status: STEP 32 DONE; M6 PENDING.** The optional comments-only service, local browser/emulator proof, packaging and deployment runbook are delivered. Independent reviews, full local integration tests, and feature CI pass. Real Google/IAP identity, image inspection, cloud IAM and deployed durability remain attended Step 33/M6. The scoped source of truth is
 [documentation/shared-workflow-proof-plan.md](documentation/shared-workflow-proof-plan.md).
 Reserve Steps 32–35 for this feature; it is independent of the pending Slides and monthly
 board-summary work.
@@ -835,8 +835,46 @@ Step 35/M7: reviewer approval/not-approval and processor completion. Phase B is 
 until Step 33/M6 is recorded DONE with deployed evidence; do not run the entire plan as
 one unattended span.
 
-The proposed service uses direct IAP on Cloud Run and separate Firestore workflow state.
+The service is prepared for direct IAP on Cloud Run and separate Firestore workflow state; cloud acceptance remains pending.
 Administrative completion does not record payment or mutate the private reimbursement
 bundle, Sheets ledger, or mailbox. Actual project, account, and billing configuration stays
 private. The independent plan review is recorded in
 [documentation/shared-workflow-proof-review.md](documentation/shared-workflow-proof-review.md).
+
+---
+
+## Manual UAT
+
+*Prepared for attended execution after Step 32 delivery. Every M6 observation remains pending.*
+
+### M6: Prove two independent Google users share durable state on Cloud Run
+
+- **Source step:** Step 33 in [the shared workflow proof plan](documentation/shared-workflow-proof-plan.md); Phase A code ends at Step 32.
+- **Issue:** #64
+- **Commands to run:** Complete the ordered readiness, resource setup, and identity-binding instructions in [the attended runbook](docs/shared-workflow-proof.md). Supply its private variables before these commands. Each command must succeed before continuing; an unavailable prerequisite remains pending.
+
+  ```powershell
+  uv sync --locked --extra dev --extra web
+  if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
+  uv run python scripts/stage_shared_workflow.py --output $PtaStage
+  if ($LASTEXITCODE -ne 0) { throw 'Source staging failed' }
+  gcloud builds submit $PtaStage --project=$PtaProject --region=$PtaBuildRegion --service-account=$PtaBuildIdentity --gcs-source-staging-dir="gs://$PtaSourceBucket/source" --config="$PtaStage/cloudbuild.yaml" --substitutions="_IMAGE=$PtaImageTag"
+  if ($LASTEXITCODE -ne 0) { throw 'Build or image inspection failed' }
+  ```
+
+  Record the successful image inspection and immutable digest privately, then use the runbook's digest-based deployment commands. Complete identity mode, pin the two observed subjects and canonical service origin, switch to comments mode, and run every observation below. A fresh revision with the same image/database/namespace must preserve saved comments. Record results in ignored `reports/output/shared-workflow/m6-acceptance.md` using the runbook's template.
+
+- **What you're looking for:**
+
+  | Check | Expected outcome |
+  |---|---|
+  | Prerequisites and ownership | Project, ancestry/policy, billing/APIs, locations, deployment permissions, dedicated identities and intended resource ownership are verified privately; denied reads remain unknown. |
+  | Actual image | The actual Cloud Build image passes inventory/environment and packaged-resource inspection before deployment; build ID and immutable digest are recorded. |
+  | Identity | Two separate Google profiles show distinct signed subjects and the assigned roles; identity mode reveals no request or history. |
+  | Shared comments | Within 60 seconds of comments-mode readiness, A saves and B reads a unique fictional comment, then B saves and A reads; actor, timestamps and versions are correct. |
+  | Durability | A new Cloud Run revision using the same namespace retains both saved comments for both profiles. |
+  | Admission and authorization | Signed-out access reveals no data; disabled-roster B is denied while still admitted by IAP, and works again after restoration. |
+  | Direct request boundaries | Actor/role spoofing and missing/wrong Origin or CSRF headers fail without adding events. Unavailable cloud assertion-injection checks remain pending or identified as local-only evidence. |
+  | IAM and storage | IAP is enabled, invocation is private, only the two intended users have effective admission, the dedicated runtime identity is attached, and database access has the intended boundary. |
+  | Error and portability behavior | No false saved message follows an uncertain error; hosted comments still work with the local development server stopped. |
+  | Evidence and phase gate | The private record names checked revisions, digest and each outcome. Step 33 remains pending until every required observation is verified; Step 34/Phase B cannot begin before that. |

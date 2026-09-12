@@ -171,6 +171,12 @@ mapping, and the reimbursement review queue.
 **In progress:** turning the treasurer snapshot prototype into an automatic slide workflow.
 The [slide plan](documentation/treasurer-summary-wave-1-plan.md) tracks the remaining work.
 
+**Optional collaboration proof:** the `web` extra adds an authenticated, comments-only
+service for one fictional request. Local tests use signed test identities, real HTTP,
+Chromium, and the Firestore emulator. Real two-account Cloud Run acceptance (M6) is still
+pending; approval and completion controls remain a later phase. See the
+[shared-workflow runbook](docs/shared-workflow-proof.md) for startup, packaging, and M6.
+
 **Not built yet:** an admin web app, automatic reimbursement totals in the budget, or live
 Drive receipt retrieval and report upload. Existing spreadsheet dashboards are specific to the
 workbook. See the [project plan](plan.md) and
@@ -186,7 +192,7 @@ Python, pandas, and matplotlib handle the numbers and charts. Jinja2 renders the
 Google access uses `gspread` and Google's API client.
 
 ```powershell
-uv sync --locked --extra dev --extra slides
+uv sync --locked --extra dev --extra slides --extra web
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy --strict pta_finance
@@ -195,6 +201,9 @@ uv run python scripts/check_no_identity.py
 ```
 
 Native PDF parser tests need Windows and the `slides` extra.
+Full-package mypy and the complete web-enabled suite require `web`; start the loopback
+Firestore emulator and install Chromium as described in the shared-workflow runbook first.
+The base installation can still run its existing regression suite without `web`.
 See [CI](.github/workflows/ci.yml) for the Linux test split.
 
 </details>

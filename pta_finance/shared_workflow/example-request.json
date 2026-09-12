@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "report": {
+    "title": "Reimbursement Review",
+    "eyebrow": "Example PTA / Treasurer",
+    "subtitle": "Receipts, decisions, and next steps / Fictional example data",
+    "organization": "Example PTA",
+    "email_signoff": [
+      "Thank you!",
+      "Example PTA Treasurer"
+    ],
+    "logo_data_uri": "",
+    "confirmed_outstanding": "0.00",
+    "cutoff_date": "2026-07-01",
+    "policy_version": "example-v1",
+    "as_of_date": "2026-08-15"
+  },
+  "provenance": {
+    "mapped_sha256": "d68a2fa432bc1966d15daa3a9273c9f75643d8572da8ff3ef79d908ba9870b39",
+    "policy_sha256": "0547c17517eb56779cb22f48fa05e30b00d0e52e037f8d7455fc38ae13ed4d88",
+    "source_snapshot_sha256": "51204882a418ebd7b42324779a154fb44c6580980da6fe946925cf1b09a12c92",
+    "accounted_review_keys": [
+      "submission:v1:5272243f03b28c44023c00c5a1d059e785fe0cb63a9d3ff29f302c9446942c81"
+    ]
+  },
+  "source_summary": {
+    "mapped_rows": 2,
+    "mapped_submissions": 1,
+    "mapped_total": "184.50",
+    "first_received": "2026-08-12",
+    "last_received": "2026-08-12"
+  },
+  "tickets": [
+    {
+      "review_key": "submission:v1:5272243f03b28c44023c00c5a1d059e785fe0cb63a9d3ff29f302c9446942c81",
+      "ref": "NEW-01",
+      "form_label": "",
+      "origin": "submission",
+      "display_order": 1,
+      "requestor_name": "Example Volunteer 1",
+      "form_type": "Example Reimbursement Form",
+      "submitted": "2026-08-12",
+      "submitted_label": "",
+      "payment_method": "Zelle",
+      "source_evidence_sha256": "48574d7ed8913325b86069285c4e5c1ef380b68d6044a03776f74eff192289e9",
+      "source": {
+        "stated_total": "184.50",
+        "mapped_total": "184.50",
+        "categories": [
+          "Classroom Supplies"
+        ],
+        "flags": []
+      },
+      "live": {
+        "workflow_state": "ACTIVE",
+        "decision": "UNREVIEWED",
+        "payment_status": "NOT_PAID",
+        "payment_date": "",
+        "confirmations": []
+      },
+      "review": {
+        "status": "A",
+        "action": "Review classroom supply receipts",
+        "block": "Review classroom supply receipts.",
+        "asks": [],
+        "note": "Fictional example for documentation. Decisions shown are sample records.",
+        "email_questions": [],
+        "email_context": ""
+      },
+      "items": [
+        {
+          "item_key": "NEW-01:line:1",
+          "source_index": 1,
+          "source_date": "2026-08-10",
+          "source_description": "Art paper packs",
+          "source_amount": "124.50",
+          "canonical_category": "Classroom Supplies",
+          "display_date": "",
+          "display_item": "",
+          "reviewed_amount": "",
+          "status": "A",
+          "why": "Itemized form matches the stated total; reviewer confirmation remains."
+        },
+        {
+          "item_key": "NEW-01:line:2",
+          "source_index": 2,
+          "source_date": "2026-08-10",
+          "source_description": "Washable paints",
+          "source_amount": "60.00",
+          "canonical_category": "Classroom Supplies",
+          "display_date": "",
+          "display_item": "",
+          "reviewed_amount": "",
+          "status": "A",
+          "why": "Classroom materials; recommendation awaits a recorded decision."
+        }
+      ],
+      "messages": [
+        {
+          "kind": "draft",
+          "date": "",
+          "mode": "generated",
+          "body": ""
+        }
+      ],
+      "archive_note": ""
+    }
+  ],
+  "supplemental": {
+    "anchors_sha256": "a6f53596b33f269688a88eec108f71f615656161c1e326f95ec70af98f577dab",
+    "evidence": [],
+    "events": [],
+    "unmatched": []
+  },
+  "appendix": {
+    "amendments": [],
+    "cfo_checks": [],
+    "excluded": [],
+    "defects": []
+  }
+}

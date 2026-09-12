@@ -27,9 +27,6 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
-      - name: Mypy (strict)
-        run: uv run mypy --strict pta_finance
-
       - name: Pytest
         run: |
           uv run pytest -q --ignore=tests/test_treasurer_slides_bank_statements_native.py
@@ -37,6 +34,65 @@ jobs:
 
       - name: Identity / secret guard
         run: uv run python scripts/check_no_identity.py
+
+  shared-workflow:
+    runs-on: ubuntu-latest
+    env:
+      FIRESTORE_EMULATOR_HOST: 127.0.0.1:8787
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Install Python and dependencies
+        run: |
+          uv python install 3.12
+          uv sync --locked --extra dev --extra slides --extra web
+          uv run playwright install --with-deps chromium
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: cloud-firestore-emulator
+      - name: Start the local Firestore emulator
+        run: |
+          nohup gcloud emulators firestore start --project=example-workflow-test --host-port=127.0.0.1:8787 --quiet > "$RUNNER_TEMP/firestore.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/firestore.pid"
+          uv run python - <<'PY'
+          import socket, time
+          deadline = time.monotonic() + 60
+          while time.monotonic() < deadline:
+              try:
+                  with socket.create_connection(('127.0.0.1', 8787), timeout=1):
+                      break
+              except OSError:
+                  time.sleep(.2)
+          else:
+              raise SystemExit('Firestore emulator did not become ready')
+          PY
+      - name: Installed-wheel HTTP and browser smoke before the longer matrix
+        run: uv run python scripts/shared_workflow_smoke.py --emulator-host 127.0.0.1:8787 --deadline-seconds 60
+      - name: Full-package strict mypy
+        run: uv run mypy --strict pta_finance
+      - name: Web verification and distribution tests
+        run: |
+          uv run pytest -q tests/test_shared_workflow_*.py --junitxml=web-results.xml
+          uv run python - <<'PY'
+          from xml.etree import ElementTree
+          suites = ElementTree.parse('web-results.xml').getroot().findall('testsuite')
+          assert sum(int(s.attrib['tests']) for s in suites) > 0
+          assert sum(int(s.attrib['skipped']) for s in suites) == 0, 'Web coverage was omitted'
+          PY
+      - name: Build distributions
+        run: uv build
+      - name: Stop the owned emulator
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/firestore.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/firestore.pid")" || true
+          fi
 
   windows-native-sandbox:
     runs-on: windows-2022

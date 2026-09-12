@@ -32,6 +32,8 @@ Plan pipeline: /plan-review + /plan-wrap -> /repo-sync (step 4 of 5) -> /build-p
 
 ## Step 32 review boundary — 2026-09-11
 
+> Historical checkpoint, superseded by the bounded delivery below.
+
 The isolated candidate contains the optional authenticated comments service, packaged fictional fixture, Firestore transactions, browser interface, staging/image recipes, tests, CI changes and attended runbook. Feature code remains unmerged and unpushed. Step 32/#63 stays open and PENDING; Steps 33–35 remain pending.
 
 The final frozen-source Windows run collected 1,090 cases: 1,087 passed, three unchanged existing skips, and zero failures/errors. All 140 web cases ran without skips; the temporary-PyYAML supplement passed all nine workflow tests. Strict package mypy, Ruff lint/format, installed-wheel browser/emulator smoke (6.23 seconds after readiness), build/distribution privacy and identity checks passed. Post-merge and new-feature remote CI gates have not run because integration has not occurred.
@@ -39,3 +41,13 @@ The final frozen-source Windows run collected 1,090 cases: 1,087 passed, three u
 The final six independent reviews retained two Nits: reject noncanonical configured origins such as trailing `?` or `#` before readiness, and make the duplicate-key HTTP negative case otherwise valid so it isolates the strict JSON parser. Correctness and test quality returned NEEDS-WORK; bugs, security, style and plan conformance passed. The build-step run reached its three-iteration limit and its parent-authenticated result is BLOCKED. The candidate and all three rounds of evidence are preserved for a bounded follow-up; no fourth iteration was started.
 
 M6's ordered runbook is prepared in the candidate, and its blank private acceptance record and local-tool notes are under ignored `reports/output/shared-workflow/`. Every M6 observation remains PENDING. No cloud authentication, cloud resource mutation or attended acceptance occurred. The local emulator and app are stopped; the pre-existing `.gitignore` change was restored exactly. Step 32 must pass its remaining review/integration gates before M6 execution; Phase B still requires checked M6 and Step 33 DONE.
+
+## Step 32 delivery — 2026-09-12 UTC
+
+The operator authorized one additional bounded iteration. Delivery `9652b159df877b373bbe55bfb0676dc518869784` preserves the original candidate and fixes only the remaining origin validation and HTTP test findings. The origin guard now rejects unsupported serialized forms at startup; a complete duplicate-key operation proves the real HTTP parser rejects the request without changing events or version. A temporary in-memory ordinary-JSON parser substitution made that corrected test fail; the real parser was restored before gates.
+
+The complete Windows suite passed in both the candidate and main checkout: 1,110 cases, 1,107 passed, three unchanged existing skips; all 160 web cases passed without skips. The optional PyYAML supplement passed all nine workflow tests. Strict package mypy, Ruff lint/format, installed-wheel HTTP/Chromium/restart smoke, packaging/privacy and identity checks passed. All six independent review lenses passed with zero findings. All three [feature CI jobs](https://github.com/aberson/pta_finance/actions/runs/34674326030) passed on `9652b15`.
+
+Integration used a three-way Git merge so the earlier main documentation updates survived. The pre-existing `.gitignore` change remains local, unstaged and byte-identical. The R3 candidate, R4 patch, tests and independent review receipts remain preserved in the original worktree. Step 32/#63 is complete; umbrella #62 and Steps 33–35/#64–66 remain open.
+
+Stop boundary: the [M6 runbook](../docs/shared-workflow-proof.md) and root Manual UAT block are ready, but no attended M6 observation or cloud operation was performed. Phase B cannot begin until the private M6 record is checked and Step 33 is marked DONE.
