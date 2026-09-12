@@ -76,7 +76,7 @@ New files use the components in §5. If implementation discovers an existing sha
 | `pta_finance/shared_workflow/models.py`, `store.py` | Separate workflow/event schema, pure transition rules, Firestore transaction implementation, immutable fictional source projection. |
 | `pta_finance/shared_workflow/app.py`, `templates/request.html.j2`, `static/request.js`, `static/request.css` | FastAPI routes, same-origin protections, small autoescaped page, accessible feedback, explicit reload and comment form. |
 | `pta_finance/shared_workflow/example-request.json` | Exactly one strict schema-v2 fictional bundle, based on `NEW-01`; correct provenance inventory, two mapped rows, one submission, `184.50` mapped total, zero confirmed outstanding. |
-| `deployment/shared-workflow/Dockerfile`, `.dockerignore`, `cloudbuild.yaml`, `source-manifest.txt`, `runtime.example.json` | Fixed build/image-inspection recipe, explicit source inclusion, fictional runtime configuration, resource defaults. No actual project/user identifiers. |
+| `deployment/shared-workflow/Dockerfile`, `.dockerignore`, `cloudbuild.yaml`, `inspect_image.py`, `source-manifest.txt`, `runtime.example.json` | Fixed build/image-inspection recipe, explicit source inclusion, fictional runtime configuration, resource defaults. No actual project/user identifiers. |
 | `scripts/stage_shared_workflow.py` | Local-only allowlisted source staging and content manifest. No cloud calls, runtime-config reads, deployment, or IAM reconciliation. |
 | `scripts/shared_workflow_smoke.py` | Bounded local integration runner using the real HTTP server, actual token verification with ephemeral test signing keys, and Firestore emulator. The test key transport is injected in this runner only. |
 | `tests/test_shared_workflow_*.py` | Auth, routes, transactions, client behavior, startup invariants, packaging/privacy, and regression boundaries. |
@@ -276,12 +276,15 @@ Do not issue the Phase B command until the M6 check described above is complete.
 - **Done when:** The actual Cloud Build image passes inspection before deployment, and all M6 observations below pass on one deployed comments-only revision and the subsequent fresh revision. The two observed subjects are distinct and pinned; A reads B's saved comment and B reads A's; both survive redeploy to the same database/namespace. Signed-out and disabled-roster access reveal no request data, direct actor/role spoofing cannot alter attribution, malformed signed assertions fail closed where the IAP test mechanism permits injection, and deployed IAM/source-context checks match the prepared boundaries. Unavailable cloud checks remain failed/pending rather than being replaced with local evidence. Record the exact image digest/revisions and checked outcome in private `reports/output/shared-workflow/m6-acceptance.md` before marking Step 33 DONE.
 - **Depends on:** 32
 
-Commands produced by Step 32, run from the repository root after filling private runtime configuration and completing the runbook's explicit Google setup commands. The following shell variables are supplied privately: `$PtaProject`, `$PtaRegion`, `$PtaBuildRegion`, `$PtaService`, `$PtaRuntimeIdentity` (email), `$PtaBuildIdentity` (full service-account resource name), `$PtaImageTag` (unique Artifact Registry tag), and `$PtaStage` (new staging path under `reports/output/shared-workflow/`). None are hard-coded into source. An unavailable prerequisite blocks the cloud action; no automatic fallback/reconciler is introduced.
+Commands produced by Step 32, run from the repository root after filling private runtime configuration and completing the runbook's explicit Google setup commands. The following shell variables are supplied privately: `$PtaProject`, `$PtaRegion`, `$PtaBuildRegion`, `$PtaService`, `$PtaRuntimeIdentity` (email), `$PtaBuildIdentity` (full service-account resource name), `$PtaSourceBucket` (dedicated source bucket), `$PtaImageTag` (unique Artifact Registry tag), and `$PtaStage` (new staging path under `reports/output/shared-workflow/`). None are hard-coded into source. An unavailable prerequisite blocks the cloud action; no automatic fallback/reconciler is introduced.
 
 ```powershell
 uv sync --locked --extra dev --extra web
+if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed; stop this procedure.' }
 uv run python scripts/stage_shared_workflow.py --output $PtaStage
-gcloud builds submit $PtaStage --project=$PtaProject --region=$PtaBuildRegion --service-account=$PtaBuildIdentity --config="$PtaStage/cloudbuild.yaml" --substitutions="_IMAGE=$PtaImageTag"
+if ($LASTEXITCODE -ne 0) { throw 'Source staging failed; stop this procedure.' }
+gcloud builds submit $PtaStage --project=$PtaProject --region=$PtaBuildRegion --service-account=$PtaBuildIdentity --gcs-source-staging-dir="gs://$PtaSourceBucket/source" --config="$PtaStage/cloudbuild.yaml" --substitutions="_IMAGE=$PtaImageTag"
+if ($LASTEXITCODE -ne 0) { throw 'Build or image inspection failed; stop this procedure.' }
 ```
 
 After the build's actual image-inspection/resource-load steps pass, use its receipt to set `$PtaImageDigest` to the immutable full image URI including `@sha256:...`. Do not deploy an unchecked tag. Create the private environment file using D6, then deploy:
@@ -289,9 +292,13 @@ After the build's actual image-inspection/resource-load steps pass, use its rece
 ```powershell
 $PtaRevision = 'proof-' + [Guid]::NewGuid().ToString('N').Substring(0,12)
 gcloud run deploy $PtaService --project=$PtaProject --region=$PtaRegion --image=$PtaImageDigest --service-account=$PtaRuntimeIdentity --env-vars-file=secrets/shared-workflow.env.json --no-allow-unauthenticated --iap --revision-suffix=$PtaRevision --cpu=1 --memory=512Mi --min-instances=0 --max-instances=2 --concurrency=20 --timeout=30s
+if ($LASTEXITCODE -ne 0) { throw 'Deployment failed; stop this procedure.' }
 gcloud run services describe $PtaService --project=$PtaProject --region=$PtaRegion --format='value(status.url,status.latestReadyRevisionName)'
+if ($LASTEXITCODE -ne 0) { throw 'Service verification failed; stop this procedure.' }
 gcloud run services get-iam-policy $PtaService --project=$PtaProject --region=$PtaRegion
+if ($LASTEXITCODE -ne 0) { throw 'Invocation policy verification failed; stop this procedure.' }
 gcloud iap web get-iam-policy --project=$PtaProject --region=$PtaRegion --resource-type=cloud-run --service=$PtaService
+if ($LASTEXITCODE -ne 0) { throw 'IAP policy verification failed; stop this procedure.' }
 ```
 
 These are fixed CLI surfaces, verified in the [build](https://docs.cloud.google.com/sdk/gcloud/reference/builds/submit) and [deploy](https://docs.cloud.google.com/sdk/gcloud/reference/run/deploy) references. The prepared runbook includes the separate exact commands for APIs, registry/build identity, runtime identity/database condition, IAP invoker/user access, image digest receipt, and filtered IAP-enabled verification. Use existing-resource metadata only after checking ownership; no unrelated resource modification is implied.

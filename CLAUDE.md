@@ -12,7 +12,9 @@
 A command-line Python toolkit for budgets, financial reports, and reimbursement review.
 **Google Sheets holds the budget data**; a private local email archive and review bundle hold
 reimbursement evidence. It generates HTML reports, including a browser-readable review queue.
-There is no hosted web app, LLM dependency, or Apps Script; scheduled financial reports use GitHub Actions.
+An optional, separate comments-only web proof uses one packaged fictional request; its real
+Cloud Run acceptance remains pending. There is no LLM dependency or Apps Script; scheduled
+financial reports use GitHub Actions.
 
 ## 2. Stack
 
@@ -33,7 +35,7 @@ There is no hosted web app, LLM dependency, or Apps Script; scheduled financial 
 ## 3. Key commands
 
 ```bash
-uv sync --extra dev                 # install (add [pdf] for WeasyPrint; [slides] for the Windows-only native-parser foundation)
+uv sync --extra dev --extra web     # add [slides] for native-parser tests, [pdf] for WeasyPrint
 uv run pytest -q                    # test
 uv run ruff check .                 # lint
 uv run ruff format --check .        # format check
@@ -110,6 +112,20 @@ scripts/            identity guard + README screenshot capture and PowerPoint ex
 ```
 
 ## 5. Architecture
+
+- **Optional shared-comment proof** (`shared_workflow/`, `[web]`): separate FastAPI/Uvicorn
+  entry point, strict `PTA_WORKFLOW_CONFIG` JSON, verified IAP assertions, two pinned subjects,
+  and bounded Firestore transactions. It loads only its packaged fictional bundle through
+  the existing offline validator; it never discovers private CLI configuration or imports
+  the CLI/Sheet/Gmail clients. `identity` mode never creates a store; `comments` mode provides
+  a shared request and append-only plain-text comments, capped at 100 events. No decision,
+  completion, import, or reset route exists. Production rejects emulator/test settings.
+  `scripts/shared_workflow_smoke.py` is a nonpackaged local test factory using ephemeral keys,
+  a real loopback emulator, an installed wheel, and headless Chromium. Test modules requiring
+  the emulator fail when `web` is installed and `FIRESTORE_EMULATOR_HOST` is missing.
+  See [docs/shared-workflow-proof.md](docs/shared-workflow-proof.md) for all commands,
+  source staging, the fixed Cloud Build image-inspection recipe, and pending M6 acceptance.
+  Phase B is ineligible until M6 is verified and Step 33 marked DONE.
 
 - **Data layer** (`sheets.py`, `schema.py`, `models.py`, `ids.py`): one Google Spreadsheet.
   `schema.py` (column lists) and `ids.py` (ID formats) are **single sources of truth** — tests

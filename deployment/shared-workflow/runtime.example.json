@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "mode": "identity",
+  "project_id": "example-project",
+  "project_number": "123456789012",
+  "region": "us-central1",
+  "service_name": "pta-workflow-proof",
+  "origin": null,
+  "database": null,
+  "namespace": null,
+  "users": [
+    {"email": "reviewer@example.org", "subject": null, "role": "reviewer", "enabled": true},
+    {"email": "processor@example.org", "subject": null, "role": "processor", "enabled": true}
+  ]
+}
