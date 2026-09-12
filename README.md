@@ -173,8 +173,9 @@ The [slide plan](documentation/treasurer-summary-wave-1-plan.md) tracks the rema
 
 **Optional collaboration proof:** the `web` extra adds an authenticated, comments-only
 service for one fictional request. Local tests use signed test identities, real HTTP,
-Chromium, and the Firestore emulator. Real two-account Cloud Run acceptance (M6) is still
-pending; approval and completion controls remain a later phase. See the
+Chromium, and the Firestore emulator. Real two-account Cloud Run acceptance (M6) passed,
+including access safeguards and persistence across redeployment. Approval and completion
+controls are next. See the
 [shared-workflow runbook](docs/shared-workflow-proof.md) for startup, packaging, and M6.
 
 **Not built yet:** an admin web app, automatic reimbursement totals in the budget, or live

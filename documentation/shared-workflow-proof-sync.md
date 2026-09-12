@@ -51,3 +51,14 @@ The complete Windows suite passed in both the candidate and main checkout: 1,110
 Integration used a three-way Git merge so the earlier main documentation updates survived. The pre-existing `.gitignore` change remains local, unstaged and byte-identical. The R3 candidate, R4 patch, tests and independent review receipts remain preserved in the original worktree. Step 32/#63 is complete; umbrella #62 and Steps 33–35/#64–66 remain open.
 
 Stop boundary: the [M6 runbook](../docs/shared-workflow-proof.md) and root Manual UAT block are ready, but no attended M6 observation or cloud operation was performed. Phase B cannot begin until the private M6 record is checked and Step 33 is marked DONE.
+
+
+## M6 closeout — 2026-09-12 UTC
+
+Step 33/M6 passed the actual hosted comments proof and operator acceptance. The inspected immutable image, independent Google subjects, deployed access boundaries, exact revisions and detailed observations are recorded only in ignored `reports/output/shared-workflow/m6-acceptance.md` and its private receipts.
+
+Both roles read the same seven server-attributed comments at Version 7 after a fresh deployment to the same store and namespace. The measured repeat reached the second account within 10.05 seconds of revision readiness. Signed-out and disabled-roster requests disclosed no workflow data; the disabled roster entry was restored. All 18 authenticated request/retry cases, two actual Origin cases, five supported signed-token injections and four UI recovery cases passed. A lost successful response followed by retry produced one durable event. The operator's final screenshot and pass verdict corroborated both browser views; another manual reproduction was unnecessary.
+
+The source remains the Step 32 delivery; this closeout changes status documentation only. Existing full-suite, independent-review and CI evidence applies to that unchanged implementation. Cloud observations establish M6 separately from those local checks. Private receipts preserve earlier interrupted timing attempts without changing their outcomes. No real reimbursement, payment, mailbox or Sheet operation was performed.
+
+Step 33/#64 is complete; umbrella #62 and Steps 34–35/#65–66 remain open. The operator requested the next planned stage: implement reviewer approval/not-approval and processor administrative completion in Step 34, then run M7/Step 35. The same fictional request remains the planned fixture. Existing proof data and the user's unstaged `.gitignore` change are preserved.

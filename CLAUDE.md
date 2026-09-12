@@ -13,7 +13,7 @@ A command-line Python toolkit for budgets, financial reports, and reimbursement 
 **Google Sheets holds the budget data**; a private local email archive and review bundle hold
 reimbursement evidence. It generates HTML reports, including a browser-readable review queue.
 An optional, separate comments-only web proof uses one packaged fictional request; its real
-Cloud Run acceptance remains pending. There is no LLM dependency or Apps Script; scheduled
+Cloud Run comments acceptance (M6) has passed; the approval handoff is next. There is no LLM dependency or Apps Script; scheduled
 financial reports use GitHub Actions.
 
 ## 2. Stack
@@ -124,7 +124,7 @@ scripts/            identity guard + README screenshot capture and PowerPoint ex
   a real loopback emulator, an installed wheel, and headless Chromium. Test modules requiring
   the emulator fail when `web` is installed and `FIRESTORE_EMULATOR_HOST` is missing.
   See [docs/shared-workflow-proof.md](docs/shared-workflow-proof.md) for all commands,
-  source staging, the fixed Cloud Build image-inspection recipe, and pending M6 acceptance.
+  source staging, the fixed Cloud Build image-inspection recipe, and the repeatable M6 procedure.
   Phase B is ineligible until M6 is verified and Step 33 marked DONE.
 
 - **Data layer** (`sheets.py`, `schema.py`, `models.py`, `ids.py`): one Google Spreadsheet.
@@ -176,7 +176,7 @@ scripts/            identity guard + README screenshot capture and PowerPoint ex
 
 ## 6. Current state
 
-**Shared workflow Step 32 delivered (2026-09-12 UTC).** The optional comments-only service passed local HTTP/browser/emulator and installed-wheel checks, the complete main-checkout suite, six independent reviews, and feature CI. Step 33/M6 remains attended and unexecuted; Phase B remains ineligible. See the [delivery record](documentation/shared-workflow-proof-sync.md#step-32-delivery--2026-09-12-utc).
+**Shared workflow Step 32 delivered (2026-09-12 UTC).** The optional comments-only service passed local HTTP/browser/emulator and installed-wheel checks, the complete main-checkout suite, six independent reviews, and feature CI. Step 33/M6 subsequently passed actual cloud observations and operator acceptance on 2026-09-12. The private record satisfies the Phase B entry gate; Step 34 handoff implementation is next. See the [delivery record](documentation/shared-workflow-proof-sync.md#step-32-delivery--2026-09-12-utc).
 
 **README refresh accepted (2026-09-08).** Public examples show the real reimbursement renderer
 with fictional data and an editable native PowerPoint snapshot. The snapshot is a presentation

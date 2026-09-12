@@ -818,12 +818,12 @@ automated Steps 26–30 in #56–60, and attended Step 31 in #61. Implementation
 
 ---
 
-## Phase 7 — Shared reimbursement workflow proof — Step 32 delivered; M6 pending (Steps 32–35)
+## Phase 7 — Shared reimbursement workflow proof — M6 passed; handoff next (Steps 32–35)
 
 **Objective:** Explain and prove a small Google-hosted workflow in which two authenticated
 users share one fictional reimbursement request, comments, a decision, and the next owner.
 
-**Status: STEP 32 DONE; M6 PENDING.** The optional comments-only service, local browser/emulator proof, packaging and deployment runbook are delivered. Independent reviews, full local integration tests, and feature CI pass. Real Google/IAP identity, image inspection, cloud IAM and deployed durability remain attended Step 33/M6. The scoped source of truth is
+**Status: STEPS 32 AND 33 DONE; STEP 34 NEXT.** The optional comments-only service passed independent reviews, full local integration tests and feature CI. Attended M6 now passes actual image inspection, two independent Google identities, cloud access controls, request/retry safeguards, shared comments and fresh-revision durability. The operator accepted the proof on 2026-09-12. The scoped source of truth is
 [documentation/shared-workflow-proof-plan.md](documentation/shared-workflow-proof-plan.md).
 Reserve Steps 32–35 for this feature; it is independent of the pending Slides and monthly
 board-summary work.
@@ -835,7 +835,7 @@ Step 35/M7: reviewer approval/not-approval and processor completion. Phase B is 
 until Step 33/M6 is recorded DONE with deployed evidence; do not run the entire plan as
 one unattended span.
 
-The service is prepared for direct IAP on Cloud Run and separate Firestore workflow state; cloud acceptance remains pending.
+The comments proof passed Cloud Run IAP and Firestore acceptance; the reviewer-to-processor handoff remains to be built and accepted.
 Administrative completion does not record payment or mutate the private reimbursement
 bundle, Sheets ledger, or mailbox. Actual project, account, and billing configuration stays
 private. The independent plan review is recorded in
@@ -845,12 +845,13 @@ private. The independent plan review is recorded in
 
 ## Manual UAT
 
-*Prepared for attended execution after Step 32 delivery. Every M6 observation remains pending.*
+*M6 passed on 2026-09-12. The procedure below is retained for repeat execution; exact deployment and account evidence stays private.*
 
 ### M6: Prove two independent Google users share durable state on Cloud Run
 
 - **Source step:** Step 33 in [the shared workflow proof plan](documentation/shared-workflow-proof-plan.md); Phase A code ends at Step 32.
 - **Issue:** #64
+- **Status:** DONE — all deployed observations and operator acceptance recorded privately; see [M6 closeout](documentation/shared-workflow-proof-sync.md#m6-closeout--2026-09-12-utc).
 - **Commands to run:** Complete the ordered readiness, resource setup, and identity-binding instructions in [the attended runbook](docs/shared-workflow-proof.md). Supply its private variables before these commands. Each command must succeed before continuing; an unavailable prerequisite remains pending.
 
   ```powershell

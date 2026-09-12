@@ -5,9 +5,12 @@ request. The shipped modes are `identity` and `comments`. Approval and completio
 are not implemented. No request import, reset, email, Sheet write, or payment operation exists.
 
 The local proof uses actual signed ES256 assertions, HTTP, Chromium, an installed wheel,
-and Firestore emulator transactions. **M6 on Cloud Run is pending.** A local pass does not
-prove Google sign-in, cloud IAM, image inspection, deployment persistence, or adoption.
-Run M6 / Step 33 next; Phase B must wait until that acceptance record is verified.
+and Firestore emulator transactions. **M6 on Cloud Run passed on 2026-09-12.** Separate
+deployed checks proved Google sign-in, cloud IAM, image inspection and revision persistence;
+the operator accepted the proof. Exact identities, configuration and receipts remain private.
+This is a functional proof, not an adoption claim. Step 34 adds the approval handoff next;
+M7 will separately accept that new behavior on the hosted service. The M6 procedure below
+is retained for repeat execution.
 
 ## Local setup and verification
 
