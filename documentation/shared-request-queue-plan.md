@@ -2,7 +2,7 @@
 
 **Status:** PLANNED — implementation has not started. Steps 36–37 are reserved here.
 **Source baseline:** `5287796cf5be8f8ca88e262987858ddca2baf72d` (Step 34 delivered).
-**Prerequisite:** Step 35 / M7 in [the proof plan](shared-workflow-proof-plan.md#step-35-accept-the-two-role-handoff-on-the-deployed-service) remains pending. Finish its real-account conflict/read checks, final browser readback, and operator wording acknowledgment before building Step 36. Planning and review can proceed independently.
+**Prerequisite:** Step 35 / M7 is DONE with all deployed observations and operator wording acceptance; see [M7 closeout](shared-workflow-proof-sync.md#m7-closeout--2026-09-13-utc). Step 36 may start.
 **Decision provenance:** The operator accepted the fictional queue preview and asked to start making it a live shared system. This authorizes the bounded queue milestone described below; preview approval is not M7 acceptance.
 
 ## 1. What This Is
@@ -30,7 +30,7 @@ Reusing that stack keeps the tested sign-in, transaction, packaging and renderin
 - `config.py` has strict `identity`, `comments`, and `handoff` modes. `auth.py` verifies signatures, audience, issuer, expiry, enabled roster membership, email, and pinned subject. `identity` mode does not initialize storage.
 - `scripts/shared_workflow_smoke.py:137` is a nonpackaged test server factory. It runs actual HTTP, an installed wheel, synthetic signed identities, Chromium, and the local Firestore emulator. Production never enables this test trust. `deployment/shared-workflow/inspect_image.py` checks the actual built image against the allowlisted source inventory before deployment.
 
-Steps 32–34 are delivered. M6 is accepted. M7 has passed both terminal branches and their revision persistence, but remains incomplete. Its actual accounts, namespaces, operations, browser state, and configuration are only in ignored `reports/output/shared-workflow/` and `secrets/`. Do not infer completion from screenshots of the queue preview. The operator's unrelated `.gitignore` edit must remain byte-identical and unstaged.
+Steps 32–34 are delivered. M6 is accepted. M7 has passed all deployed observations and operator wording acceptance. Its actual accounts, namespaces, operations, browser state, and configuration are only in ignored `reports/output/shared-workflow/` and `secrets/`. Do not infer completion from screenshots of the queue preview. The operator's unrelated `.gitignore` edit must remain byte-identical and unstaged.
 
 ## 3. Scope
 
@@ -174,7 +174,7 @@ Retain the accepted queue namespace on success. If a queue deployment fails, red
 
 ### D8 — Ticket creation follows the accepted live queue
 
-The next product milestone lets the Processor create shared drafts, edit draft details, submit them to the Reviewer, and archive/restore eligible tickets without erasing history. Processor-only creation is the operator's choice. Draft locking, explicit withdrawal before correction, reversible archive and sequencing after M8 are proposed defaults in the [lifecycle design](shared-ticket-lifecycle-design.md). Both enabled roles see shared drafts and histories. These rules need a subsequent engineering plan against the implemented queue, including durable discovery, IDs, submitted revisions, API contracts and compatibility. Do not convert Step 36's fixed catalog into open ticket intake as an incidental edit.
+The next product milestone lets the Processor create shared drafts, edit draft details, submit them to the Reviewer, and archive/restore eligible tickets without erasing history. Processor-only creation is the operator's choice. Draft locking, explicit withdrawal before correction, reversible archive and sequencing after M8 are approved defaults in the [lifecycle design](shared-ticket-lifecycle-design.md). Both enabled roles see shared drafts and histories. These rules need a subsequent engineering plan against the implemented queue, including durable discovery, IDs, submitted revisions, API contracts and compatibility. Do not convert Step 36's fixed catalog into open ticket intake as an incidental edit.
 
 ## 7. Build Steps
 
@@ -215,7 +215,7 @@ M8 execution is delegated to the agent wherever mechanical checks and available 
 
 | Item | Risk | Mitigation |
 |---|---|---|
-| M7 still pending | Confusing preview approval with acceptance of the deployed handoff | Keep Step 35 dependency explicit and its private evidence intact. |
+| M7 preservation | Losing accepted handoff evidence when expanding the queue | Step 35 is DONE; keep its private evidence and original history intact. |
 | Existing source identity | Rebuilding the original fictional bundle could invalidate old receipts | Original file/projection/hash/path unchanged; compare full old-mode wire fixtures and installed-wheel upgrade/replay. |
 | Cross-request access/write routing | A guessed ID or selected row could route to another document | Fixed catalog membership after authentication; server selects the Store; independent versions/receipts and unknown-ID tests. |
 | List consistency and failure | Mixed read times or one corrupt request could be mistaken for a clean whole-system snapshot | Per-row version consistency, bounded shared deadline, no partial-success result, visible refresh time/failure state. |
@@ -271,13 +271,13 @@ Each command is sequential and must return zero before continuing; command failu
 | P4 | P | Use the accepted preview as the interface direction | Operator accepted preview |
 | P5 | P | Add ticket creation and explicit CRUD rules | Operator requested follow-up |
 | P6 | P | Only the Treasurer/Processor creates tickets in the first version | Operator selected |
-| D1 | D | Six fixed packaged sources, opt-in queue mode, old-mode compatibility | Proposed default |
-| D2 | D | Compose existing per-request stores; preserve original schema/receipts; seed no decisions | Proposed default |
-| D3 | D | Six bounded validated reads, summary-only output, per-row consistency | Proposed default |
-| D4 | D | Both existing roles see the whole fixed catalog; authenticate every route | Proposed default |
-| D5 | D | Refresh on entry/return/Reload; local filters reset when returning to the queue | Proposed default |
-| D6 | D | Existing authenticated local harness plus independent deep code reviews | Proposed default |
-| D7 | D | Finish M7, build one queue slice, then execute separate M8 with real decisions | Proposed default |
-| D8 | D | After M8, plan shared drafts, locked submissions, withdrawal for correction and reversible archive/restore | Proposed default; product rules recorded, engineering plan pending |
+| D1 | D | Six fixed packaged sources, opt-in queue mode, old-mode compatibility | Operator-approved default |
+| D2 | D | Compose existing per-request stores; preserve original schema/receipts; seed no decisions | Operator-approved default |
+| D3 | D | Six bounded validated reads, summary-only output, per-row consistency | Operator-approved default |
+| D4 | D | Both existing roles see the whole fixed catalog; authenticate every route | Operator-approved default |
+| D5 | D | Refresh on entry/return/Reload; local filters reset when returning to the queue | Operator-approved default |
+| D6 | D | Existing authenticated local harness plus independent deep code reviews | Operator-approved default |
+| D7 | D | Finish M7, build one queue slice, then execute separate M8 with real decisions | Operator-approved default |
+| D8 | D | After M8, plan shared drafts, locked submissions, withdrawal for correction and reversible archive/restore | Operator-approved default; product rules recorded, engineering plan pending |
 
-Plan preparation may proceed while M7 waits for browser availability and wording judgment. This plan does not grant unattended access to an actively used desktop or mark any remaining M7 observation as passed.
+M7 completed after coordinated browser execution and explicit wording acceptance. The operator approved building the queue and subsequent ticket lifecycle. Future attended browser work still requires coordinated desktop availability.

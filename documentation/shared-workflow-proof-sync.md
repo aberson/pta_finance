@@ -72,3 +72,12 @@ The complete Windows suite passed in both the isolated candidate and main checko
 Integration used Git's three-way merge. The pre-existing `.gitignore` change remains local, unstaged and byte-identical. Step 34/#65 is complete; umbrella #62 and Step 35/#66 remain open. The root Manual UAT section and the expanded runbook now point to M7.
 
 No M7 cloud build, deployment or acceptance occurred during this code delivery. The accepted seven-comment M6 proof remains preserved. M7 must inspect the new actual image and verify both outcomes, wrong-role denials, exact retries, real competing decisions, history and fresh-revision durability using the pinned accounts. Preserve the approval namespace and use fresh namespaces for not-approval and the race before restoring the approval example. Functional acceptance remains separate from adoption of a real reimbursement workflow.
+
+
+## M7 closeout — 2026-09-13 UTC
+
+All 15 required observations pass: the inspected deployed handoff image, original receipt preservation, both terminal outcomes, role denials, exact retries, stale/changed-operation rejection, an actual opposing two-tab decision race, bounded history reads, refresh behavior and final restoration. The operator confirmed role labels, authorship and administrative completion wording. Exact cloud, identity and observation receipts remain private in `reports/output/shared-workflow/m7-acceptance.md`.
+
+The restored original example remains completed. Its original eleven-event history is unchanged and an additional authenticated comment is preserved; both accounts read the same twelve events. The not-approved and race namespaces remain retained. No reset or deletion occurred. The initial CSP-blocked race helper was replaced by native form interactions without weakening application policy.
+
+Step 35/#66 and the proof umbrella #62 are complete. Step 36 is the approved next build: the live six-request queue, followed by hosted M8. Functional proof does not establish adoption of a real reimbursement workflow. The pre-existing unstaged `.gitignore` change remains byte-identical. This closeout changes documentation only; the application is the already verified Step 34 source with its existing full-suite and CI receipts.

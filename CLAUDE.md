@@ -14,7 +14,7 @@ A command-line Python toolkit for budgets, financial reports, and reimbursement 
 reimbursement evidence. It generates HTML reports, including a browser-readable review queue.
 An optional, separate web proof uses one packaged fictional request with shared comments and
 an administrative reviewer-to-processor handoff. Real Cloud Run comments acceptance (M6)
-has passed; hosted handoff acceptance (M7) is next. There is no LLM dependency or Apps Script; scheduled
+has passed; hosted handoff acceptance (M7) has also passed. There is no LLM dependency or Apps Script; scheduled
 financial reports use GitHub Actions.
 
 ## 2. Stack
@@ -129,7 +129,7 @@ scripts/            identity guard + README screenshot capture and PowerPoint ex
   the emulator fail when `web` is installed and `FIRESTORE_EMULATOR_HOST` is missing.
   See [docs/shared-workflow-proof.md](docs/shared-workflow-proof.md) for all commands,
   source staging, the fixed Cloud Build image-inspection recipe, and repeatable M6/M7 procedures.
-  M6 and Step 33 are verified DONE; M7 / Step 35 remains the hosted handoff acceptance gate.
+  M6 and M7 / Steps 33 and 35 are verified DONE; the approved live queue is Steps 36–37.
 
 - **Data layer** (`sheets.py`, `schema.py`, `models.py`, `ids.py`): one Google Spreadsheet.
   `schema.py` (column lists) and `ids.py` (ID formats) are **single sources of truth** — tests
@@ -180,7 +180,7 @@ scripts/            identity guard + README screenshot capture and PowerPoint ex
 
 ## 6. Current state
 
-**Shared workflow Step 32 delivered (2026-09-12 UTC).** The optional comments-only service passed local HTTP/browser/emulator and installed-wheel checks, the complete main-checkout suite, six independent reviews, and feature CI. Step 33/M6 subsequently passed actual cloud observations and operator acceptance on 2026-09-12. The private record satisfies the Phase B entry gate. Handoff behavior now has local implementation and automated coverage; M7 / Step 35 cloud acceptance remains pending. See the [delivery record](documentation/shared-workflow-proof-sync.md#step-32-delivery--2026-09-12-utc).
+**Shared workflow Step 32 delivered (2026-09-12 UTC).** The optional comments-only service passed local HTTP/browser/emulator and installed-wheel checks, the complete main-checkout suite, six independent reviews, and feature CI. Step 33/M6 subsequently passed actual cloud observations and operator acceptance on 2026-09-12. The private record satisfies the Phase B entry gate. Handoff behavior now has local implementation and automated coverage; M7 / Step 35 cloud acceptance now passes; all fifteen observations and the operator wording judgment are recorded privately. See the [delivery record](documentation/shared-workflow-proof-sync.md#step-32-delivery--2026-09-12-utc).
 
 **README refresh accepted (2026-09-08).** Public examples show the real reimbursement renderer
 with fictional data and an editable native PowerPoint snapshot. The snapshot is a presentation

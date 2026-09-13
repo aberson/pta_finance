@@ -1,6 +1,6 @@
 # Shared workflow proof plan
 
-**Status:** STEPS 32–34 DONE — M6 cloud acceptance and the reviewer-to-processor handoff code delivery pass. Next: M7 / Step 35, using the two pinned accounts and preserved fictional proof. See [the Step 34 delivery](shared-workflow-proof-sync.md#step-34-delivery--2026-09-13-utc).
+**Status:** DONE — Steps 32–35 and actual two-account M6/M7 acceptance pass. See [M7 closeout](shared-workflow-proof-sync.md#m7-closeout--2026-09-13-utc).
 
 **Reserved steps:** 32–35. A scan of `plan.md` and every `documentation/*plan.md` found the latest global span 26–31 in the monthly reimbursement board-summary plan; the slide plan owns 14–25. Older feature plans contain historical local numbering. No sibling currently claims 32–35. Recheck before issue synchronization; this feature neither completes nor renumbers existing work. The master-plan pointer is Phase 7 in `plan.md`.
 
@@ -82,7 +82,7 @@ New files use the components in §5. If implementation discovers an existing sha
 | `tests/test_shared_workflow_*.py` | Auth, routes, transactions, client behavior, startup invariants, packaging/privacy, and regression boundaries. |
 | `docs/shared-workflow-proof.md` | New command contracts, cloud setup sequence, identity binding, two attended acceptance scripts, retry/recovery behavior, resource shutdown instructions. Written by code steps before operator execution. |
 
-Steps 32 and 34 implement these components for identity, comments and handoff modes; hosted handoff acceptance remains M7 / Step 35. Keep module count small; avoid a generic workflow framework or dependency on the screenshot tool.
+Steps 32 and 34 implement these components for identity, comments and handoff modes; hosted handoff acceptance passed in M7 / Step 35. Keep module count small; avoid a generic workflow framework or dependency on the screenshot tool.
 
 ## 6. Design Decisions
 
@@ -347,7 +347,7 @@ Phase A ends after Step 32's code delivery with **run M6 / Step 33 next**. Any M
 - **Problem:** Demonstrate both terminal outcomes with the two real Google sessions using the shared cloud store.
 - **Type:** operator
 - **Issue:** #66
-- **Status:** PENDING
+- **Status:** DONE
 - **Files:** Execute prepared staging/build/deploy commands from `docs/shared-workflow-proof.md` without source edits; configure private `secrets/shared-workflow.runtime.json` / `shared-workflow.env.json`; record runtime evidence under `reports/output/shared-workflow/`.
 - **Produces:** Private M7 acceptance observations, final image/revision receipt, and a concise functional-proof verdict; no code artifacts.
 - **Done when:** Every M7 row passes with the two pinned real subjects. The existing namespace retains the earlier comments across deployment, approval transfers ownership, only processor completion succeeds, and terminal history remains after another fresh revision. A separate fresh namespace with the same single fictional request proves not-approval and denial of completion without resetting/deleting the first proof. Real-cloud duplicate/stale/concurrent API checks and bounded history checks create exactly the expected events. The operator confirms administrative completion wording and records functional proof separately from any adoption claim.

@@ -818,12 +818,12 @@ automated Steps 26–30 in #56–60, and attended Step 31 in #61. Implementation
 
 ---
 
-## Phase 7 — Shared reimbursement workflow proof — handoff built; M7 next (Steps 32–35)
+## Phase 7 — Shared reimbursement workflow proof — accepted (Steps 32–35)
 
 **Objective:** Explain and prove a small Google-hosted workflow in which two authenticated
 users share one fictional reimbursement request, comments, a decision, and the next owner.
 
-**Status: STEPS 32–34 DONE; STEP 35 / M7 NEXT.** The comments service passed actual two-account Cloud Run acceptance in M6. Reviewer approval/not-approval and processor administrative completion now pass the full candidate and main suites, independent reviews and feature CI. Hosted handoff acceptance remains M7. The scoped source of truth is
+**Status: STEPS 32–35 DONE.** The comments service passed actual two-account Cloud Run acceptance in M6. Reviewer approval/not-approval and processor administrative completion now pass the full candidate and main suites, independent reviews and feature CI. Hosted M7 acceptance and operator wording judgment pass. The scoped source of truth is
 [documentation/shared-workflow-proof-plan.md](documentation/shared-workflow-proof-plan.md).
 Reserve Steps 32–35 for this feature; it is independent of the pending Slides and monthly
 board-summary work.
@@ -835,7 +835,7 @@ Step 35/M7: reviewer approval/not-approval and processor completion. Phase B is 
 until Step 33/M6 is recorded DONE with deployed evidence; do not run the entire plan as
 one unattended span.
 
-The comments proof passed Cloud Run IAP and Firestore acceptance. The reviewer-to-processor handoff is delivered in code and awaits its separate deployed acceptance.
+The comments proof passed Cloud Run IAP and Firestore acceptance. The reviewer-to-processor handoff passed its separate deployed acceptance; see the [M7 closeout](documentation/shared-workflow-proof-sync.md#m7-closeout--2026-09-13-utc).
 Administrative completion does not record payment or mutate the private reimbursement
 bundle, Sheets ledger, or mailbox. Actual project, account, and billing configuration stays
 private. The independent plan review is recorded in
@@ -852,8 +852,7 @@ participants can find six fictional requests and work through each request's own
 queue preview. The scoped plan is
 [documentation/shared-request-queue-plan.md](documentation/shared-request-queue-plan.md).
 Reserve Steps 36–37: one application slice followed by separate hosted acceptance M8.
-Step 35 / M7 must finish before Step 36 builds on the accepted handoff. Planning can proceed
-while its remaining browser checks and operator wording acknowledgment are pending.
+Step 35 / M7 is DONE with actual hosted observations and operator acceptance. Step 36 may now build on the accepted handoff.
 
 The original request and receipts remain intact. Five additional packaged fictional requests
 start awaiting review; actual signed-in actions establish their decisions. Request intake,
@@ -906,7 +905,7 @@ its engineering plan follows acceptance of the live queue and does not expand St
 
 - **Source step:** Step 35 in [the shared workflow proof plan](documentation/shared-workflow-proof-plan.md); Step 34 code delivery is complete.
 - **Issue:** #66
-- **Status:** PENDING — hosted handoff observations have not run.
+- **Status:** DONE — all 15 observations and operator judgment pass; see the [M7 closeout](documentation/shared-workflow-proof-sync.md#m7-closeout--2026-09-13-utc).
 - **Commands to run:** Execute the ordered [M7 runbook](docs/shared-workflow-proof.md#m7-accept-the-deployed-handoff-step-35). Build and inspect a new immutable image, preserve the M6 configuration and namespace, and deploy in handoff mode with the existing two pinned accounts. Retain the approved proof, use fresh namespaces for not-approval and the opposing-decision race, then restore the approved namespace. Every command must pass before continuing.
 - **What you're looking for:**
 

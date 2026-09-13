@@ -176,7 +176,7 @@ fictional request, shared comments, and a reviewer-to-processor handoff. The rev
 or does not approve; only the processor can complete an approved handoff. Completion does
 not record a payment. Local checks use signed identities, real HTTP, Chromium, and Firestore
 emulator transactions. Real two-account comments acceptance (M6) passed; hosted handoff
-acceptance (M7) is next. See the [shared-workflow runbook](docs/shared-workflow-proof.md)
+acceptance (M7) has passed. The live shared queue is the next build. See the [shared-workflow runbook](docs/shared-workflow-proof.md)
 for startup, packaging, and both cloud acceptance procedures.
 
 **Not built yet:** an admin web app, automatic reimbursement totals in the budget, or live
