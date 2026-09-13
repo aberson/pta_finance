@@ -843,6 +843,24 @@ private. The independent plan review is recorded in
 
 ---
 
+## Phase 8 — Live shared request queue — planned (Steps 36–37)
+
+**Objective:** Connect the accepted queue design to shared storage so the same two signed-in
+participants can find six fictional requests and work through each request's own history.
+
+**Status: PLANNED.** The operator requested this next milestone after reviewing the fictional
+queue preview. The scoped plan is
+[documentation/shared-request-queue-plan.md](documentation/shared-request-queue-plan.md).
+Reserve Steps 36–37: one application slice followed by separate hosted acceptance M8.
+Step 35 / M7 must finish before Step 36 builds on the accepted handoff. Planning can proceed
+while its remaining browser checks and operator wording acknowledgment are pending.
+
+The original request and receipts remain intact. Five additional packaged fictional requests
+start awaiting review; actual signed-in actions establish their decisions. Request intake,
+private imports, more users, notifications and payment tracking remain future work.
+
+---
+
 ## Manual UAT
 
 *M6 passed on 2026-09-12. The procedure below is retained for repeat execution; exact deployment and account evidence stays private.*

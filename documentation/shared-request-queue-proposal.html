@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Live shared request queue — proposal</title>
+<style>
+:root{color-scheme:light dark;--bg:#f2f5f7;--paper:#fff;--ink:#1c3341;--muted:#526775;--line:#d9e3e8;--accent:#165a74;--soft:#eaf3f7;--default:#895610;--default-bg:#fff5df;--radius:14px}
+@media(prefers-color-scheme:dark){:root{--bg:#101a21;--paper:#192832;--ink:#e2edf2;--muted:#b1c6d0;--line:#3a505d;--accent:#98d4ee;--soft:#233c49;--default:#f2c77f;--default-bg:#3e3321}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}main{max-width:1080px;margin:auto;padding:52px 28px 60px}h1,h2,h3,p{margin-top:0}h1{font-size:clamp(2.3rem,5.3vw,4rem);line-height:1.08;letter-spacing:-.04em;max-width:850px;margin-bottom:24px}h2{font-size:1.8rem;line-height:1.2;letter-spacing:-.02em}h3{font-size:1.12rem;line-height:1.35;margin-bottom:10px}.eyebrow,.label{font-size:.76rem;text-transform:uppercase;letter-spacing:.13em;color:var(--muted);font-weight:700}.lede{font-size:1.18rem;max-width:810px;color:var(--muted)}.chips{display:flex;flex-wrap:wrap;gap:8px;margin:26px 0}.chip{background:var(--soft);border:1px solid var(--line);border-radius:30px;font-size:.8rem;padding:5px 11px}section{margin-top:46px}.card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:23px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.wide{grid-column:1/-1}.small,footer{font-size:.88rem;color:var(--muted)}a{color:var(--accent);text-underline-offset:3px}a:focus-visible{outline:3px solid var(--accent);outline-offset:4px}.heard{display:grid;grid-template-columns:210px 1fr;gap:20px;padding:14px 0;border-bottom:1px solid var(--line)}.heard:first-child{padding-top:0}.heard:last-child{border-bottom:0;padding-bottom:0}.heard span{color:var(--muted)}.timeline{list-style:none;padding:0;margin:0;display:grid;gap:14px}.timeline li{display:grid;grid-template-columns:62px 1fr;gap:18px;align-items:start}.number{display:grid;place-items:center;border-radius:50%;height:52px;width:52px;background:var(--soft);color:var(--accent);font-weight:800}.after{border-top:1px solid var(--line);padding-top:14px;margin-top:18px}.notice{background:var(--soft);border-left:4px solid var(--accent);padding:17px 20px;border-radius:0 10px 10px 0}.id{display:inline-block;font-size:.8rem;font-weight:800;color:var(--accent);margin-bottom:8px}.default .id{color:var(--default)}.default{border-top:3px solid var(--default)}.why,.tweak{font-size:.91rem;color:var(--muted);margin-bottom:8px}.tweak{padding-top:10px;border-top:1px solid var(--line)}pre,code{font-family:Consolas,"Liberation Mono",monospace}pre{background:var(--soft);padding:13px 15px;border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:.83rem;line-height:1.6}code{font-size:.9em}.scope{padding-left:22px}.scope li{margin-bottom:7px}.risk{margin-bottom:14px}.risk:last-child{margin-bottom:0}footer{border-top:1px solid var(--line);padding-top:22px;margin-top:42px}.links{display:flex;flex-wrap:wrap;gap:8px 20px}
+@media(max-width:680px){main{padding:30px 18px}.grid{grid-template-columns:1fr}.heard{grid-template-columns:1fr;gap:4px}.timeline li{grid-template-columns:42px 1fr;gap:10px}.number{width:38px;height:38px;font-size:.85rem}.card{padding:18px}section{margin-top:34px}}
+@media print{:root{color-scheme:light;--bg:#fff;--paper:#fff;--ink:#172c38;--muted:#405866;--line:#bdcbd3;--accent:#165a74;--soft:#edf4f7;--default:#75480c;--default-bg:#fff5df}@page{size:A4;margin:16mm}body{background:#fff;font-size:10pt;print-color-adjust:exact;-webkit-print-color-adjust:exact}main{max-width:none;padding:0}h1{font-size:30pt}h2{font-size:18pt}h3{font-size:12pt}section{margin-top:25px}.card,.notice,.timeline li,.heard,.risk{break-inside:avoid}h1,h2,h3,.label{break-after:avoid}.card{padding:14px}.grid{gap:10px}.lede{font-size:12pt}.chips{margin:16px 0}pre{font-size:8pt}a{color:var(--accent)}footer{margin-top:25px}}
+</style>
+</head>
+<body><main>
+<header>
+<p class="eyebrow">Example PTA · shared workflow · publication 1</p>
+<h1>See the whole queue.<br>Work through each request.</h1>
+<p class="lede">Connect the accepted queue layout to shared storage, so both participants can find work, see who acts next, and open the complete history of each fictional request.</p>
+<div class="chips"><span class="chip">Direction accepted</span><span class="chip">Plan reviewed</span><span class="chip">Implementation pending</span><span class="chip">Six fictional requests</span></div>
+</header>
+<section aria-labelledby="heard-title">
+<p class="label">What I heard</p><h2 id="heard-title">Make the system visible beyond one request.</h2>
+<div class="card">
+<div class="heard"><strong>A real shared list</strong><span>The queue should reflect saved activity in the hosted service.</span></div>
+<div class="heard"><strong>The same two participants</strong><span>Keep the reviewer and processor roles, comments, approval and completion.</span></div>
+<div class="heard"><strong>Transparency per request</strong><span>Open any row to see items, authors, timestamps, decisions and current ownership.</span></div>
+<div class="heard"><strong>The accepted visual direction</strong><span>Retain the preview’s status cards, search, filters and readable rows.</span></div>
+</div>
+</section>
+<section aria-labelledby="shape-title">
+<p class="label">Why this shape</p><h2 id="shape-title">One useful queue, built on the working handoff.</h2>
+<p>Keep the original request and its accepted history, then add five packaged fictional requests. Each new request starts awaiting review. Real actions by the two signed-in participants create the varied outcomes visible in the queue.</p>
+<p class="notice">The list refreshes when opened, when returning from a request, and when Reload is pressed. The first release has no automatic polling. Administrative completion still does not record a payment.</p>
+</section>
+<section aria-labelledby="timeline-title">
+<p class="label">Phase timeline</p><h2 id="timeline-title">Finish M7, build the queue, then verify it live.</h2>
+<ol class="timeline">
+<li><span class="number">M7</span><div class="card"><h3>Complete the current handoff acceptance</h3><p>The two terminal branches have passed. The remaining conflict/read checks, final browser readback and wording judgment must be recorded before queue implementation.</p><p class="small">Planning proceeds while browser time is pending. Existing histories and the restored accepted example remain preserved.</p><div class="after"><strong>Afterwards</strong><p>Prepare issue bodies from the reviewed plan, then start Step 36 once M7 is complete. Run the following in the project root:</p><pre>/plan-expedite --plan documentation/shared-request-queue-plan.md</pre></div></div></li>
+<li><span class="number">36</span><div class="card"><h3>Connect list, details and shared state</h3><p>Add the six-request catalog, authenticated list API, queue page and per-request navigation. Reuse the tested workflow and prove that requests cannot affect one another.</p><p class="small">Gate: installed-package browser/emulator checks, original-history and receipt compatibility, full repository checks and independent deep reviews.</p><div class="after"><strong>After preparation and M7 pass</strong><pre>/build-phase --plan documentation/shared-request-queue-plan.md</pre><p class="small">The build runner may defer attended acceptance. A deferred M8 is still pending.</p></div></div></li>
+<li><span class="number">M8</span><div class="card"><h3>Accept the deployed queue · Step 37</h3><p>Inspect the actual new image, deploy it with the same accounts and namespace, then use the five new requests for approval, not-approval, completion and comments. Both users verify the list and individual histories.</p><p class="small">Expected outcome after the exercise: 2 awaiting review, 1 approved, 2 completed, 1 not approved. The original accepted history remains unchanged.</p><div class="after"><strong>Afterwards</strong><p>Keep the accepted queue live and record the observations. If admission fails, restore the inspected handoff build and preserve every request and receipt.</p></div></div></li>
+</ol>
+</section>
+<section aria-labelledby="picked-title">
+<p class="label">Operator choices</p><h2 id="picked-title">The direction already accepted.</h2>
+<div class="grid">
+<article class="card" id="P1"><span class="id">P1</span><h3>Connect the queue</h3><p>Move the shared list concept into the live service.</p></article>
+<article class="card" id="P2"><span class="id">P2</span><h3>Retain the two-account workflow</h3><p>Keep role-based actions and a separate attributed history for each request.</p></article>
+<article class="card" id="P3"><span class="id">P3</span><h3>Use fictional examples first</h3><p>Demonstrate several requests before introducing real reimbursements.</p></article>
+<article class="card" id="P4"><span class="id">P4</span><h3>Use the accepted preview</h3><p>The preview establishes the interface direction for the working queue.</p></article>
+</div>
+</section>
+<section aria-labelledby="defaults-title">
+<p class="label">Agent defaults</p><h2 id="defaults-title">Concrete choices for the first live version.</h2>
+<p class="small">These implement the accepted direction. D1, D5 and D7 most affect scope and everyday use. They can be adjusted by ID without repeating approval of the whole plan.</p>
+<div class="grid">
+<article class="card default" id="D1"><span class="id">D1</span><h3>Six fixed requests</h3><p><strong>What:</strong> Enable queue mode with the original request plus five packaged fictional requests.</p><p class="why"><strong>Why:</strong> Enough variety to see the system while keeping setup and verification bounded.</p><p class="tweak"><strong>Tweak:</strong> Fixture subjects or count before building; real intake needs a later scope.</p></article>
+<article class="card default" id="D2"><span class="id">D2</span><h3>Keep each history intact</h3><p><strong>What:</strong> Reuse one existing store per request, preserve the original identity and receipts, and seed no decisions.</p><p class="why"><strong>Why:</strong> Existing accepted evidence remains a reliable comparison during the upgrade.</p><p class="tweak"><strong>Tweak:</strong> New fictional line items; preserving the original history remains required.</p></article>
+<article class="card default" id="D3"><span class="id">D3</span><h3>Summaries from verified state</h3><p><strong>What:</strong> Read six bounded histories and return their current summaries, ordered by latest activity.</p><p class="why"><strong>Why:</strong> Avoids a second copy of workflow state that could disagree with the detail page.</p><p class="tweak"><strong>Tweak:</strong> Visible summary labels or ordering; broader scale requires another storage review.</p></article>
+<article class="card default" id="D4"><span class="id">D4</span><h3>Both roles see the whole queue</h3><p><strong>What:</strong> The same two enabled, verified participants can see all six requests; existing role limits govern actions.</p><p class="why"><strong>Why:</strong> Provides shared transparency without adding team or assignment administration.</p><p class="tweak"><strong>Tweak:</strong> Per-request visibility would be a separate access-policy change.</p></article>
+<article class="card default" id="D5"><span class="id">D5</span><h3>Refresh on entry, return and Reload</h3><p><strong>What:</strong> Search and filter the latest loaded list. Returning from details shows all requests and fetches current state.</p><p class="why"><strong>Why:</strong> Makes freshness explicit without a background polling process or saved-filter complexity.</p><p class="tweak"><strong>Tweak:</strong> Retain filters on return, or consider automatic refresh in a later iteration.</p></article>
+<article class="card default" id="D6"><span class="id">D6</span><h3>Reuse the authenticated test harness</h3><p><strong>What:</strong> Test real local HTTP, storage and browser behavior, then obtain independent deep code reviews.</p><p class="why"><strong>Why:</strong> Repeatable code checks can exercise failures without exporting Google sessions or weakening production sign-in.</p><p class="tweak"><strong>Tweak:</strong> Additional realistic scenarios; real hosted acceptance remains separate.</p></article>
+<article class="card default wide" id="D7"><span class="id">D7</span><h3>M7 → queue build → M8</h3><p><strong>What:</strong> Finish the existing handoff acceptance, deliver one queue slice, then verify the inspected cloud build with both accounts.</p><p class="why"><strong>Why:</strong> Gives the upgrade an accepted starting point and proves the new deployment preserves it.</p><p class="tweak"><strong>Tweak:</strong> Browser scheduling and example walkthrough order; each recorded gate still needs its own evidence.</p></article>
+</div>
+</section>
+<section aria-labelledby="scope-title">
+<p class="label">Not in v1</p><h2 id="scope-title">The next milestone has a clear edge.</h2>
+<div class="card"><ul class="scope"><li>No request import, real reimbursements, uploads or receipt files.</li><li>No payments, email sending, notifications or Gmail/Drive/Sheets connection.</li><li>No additional users, organizations, assignment administration or reopening decisions.</li><li>No arbitrary catalog, pagination, analytics or automatic refresh process.</li></ul></div>
+</section>
+<section aria-labelledby="risk-title">
+<p class="label">Risks</p><h2 id="risk-title">What acceptance must establish.</h2>
+<div class="card"><p class="risk"><strong>Preservation:</strong> The original request and every receipt survive the upgrade and any rollback.</p><p class="risk"><strong>Isolation:</strong> A decision, comment, retry or event limit on one request cannot change another.</p><p class="risk"><strong>Freshness:</strong> Counts describe the loaded list. Each row is internally consistent; the six reads are not one instantaneous database snapshot.</p><p class="risk"><strong>Actual access:</strong> Hosted observations use the two real accounts. Local browser evidence alone cannot establish Google/IAP behavior.</p><p class="risk"><strong>Demonstration size:</strong> Six requests show the workflow. They do not establish unrestricted intake or large-scale performance.</p></div>
+</section>
+<section aria-labelledby="feedback-title">
+<p class="label">Feedback and source</p><h2 id="feedback-title">Change a choice by its ID.</h2>
+<p>For example: <code>D5 -&gt; retain filters when returning from a request</code>. The plan remains the source of truth; this page is its review view. No additional approval is needed for the listed defaults to stand.</p>
+<div class="links"><a href="shared-request-queue-plan.md">Technical plan</a><a href="../docs/examples/shared-request-queue-preview.html">Accepted fictional preview</a><a href="shared-request-queue-review.md">Technical review</a><a href="shared-request-queue-wrap.md">Readiness check</a></div>
+</section>
+<footer>Source: documentation/shared-request-queue-plan.md · Proposal: documentation/shared-request-queue-proposal.html · Publication 1. This proposal contains fictional examples only. The live queue is not implemented yet.</footer>
+</main></body></html>
