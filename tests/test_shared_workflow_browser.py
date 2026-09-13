@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -10,6 +13,7 @@ pytest.importorskip("fastapi")
 pytest.importorskip("google.cloud.firestore_v1")
 pytest.importorskip("cryptography")
 
+import httpx  # noqa: E402
 from playwright.sync_api import APIResponse, Route, expect, sync_playwright  # noqa: E402
 from test_shared_workflow_helpers import require_emulator, setup  # noqa: E402
 
@@ -21,6 +25,60 @@ pytestmark = pytest.mark.integration
 
 def test_00_installed_wheel_real_http_browser_smoke() -> None:
     run_smoke(os.environ["FIRESTORE_EMULATOR_HOST"], 60)
+
+
+@pytest.mark.parametrize("stall", ["readiness", "shutdown"])
+def test_stalled_restart_deadline_reaps_child_and_releases_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stall: str
+) -> None:
+    config, signer, _, _ = setup()
+    server = Server(
+        os.environ["FIRESTORE_EMULATOR_HOST"],
+        config.namespace,
+        {signer.kid: signer.public_pem()},
+        tmp_path,
+    )
+    stalled = False
+    with server:
+        original = server.process
+        assert original is not None
+        with monkeypatch.context() as patch:
+            if stall == "readiness":
+
+                async def hold_readiness(*args: Any, **kwargs: Any) -> httpx.Response:
+                    nonlocal stalled
+                    stalled = True
+                    await asyncio.sleep(10)
+                    raise AssertionError("Stalled readiness was not cancelled.")
+
+                patch.setattr(httpx.AsyncClient, "get", hold_readiness)
+            else:
+
+                def ignore_terminate() -> None:
+                    nonlocal stalled
+                    stalled = True
+
+                patch.setattr(original, "terminate", ignore_terminate)
+
+            async def restart() -> None:
+                # Windows loopback refusal takes about two seconds per free-port probe.
+                async with asyncio.timeout(5):
+                    await server.stop_async()
+                    await server.start_async()
+
+            started = time.monotonic()
+            with pytest.raises(TimeoutError):
+                asyncio.run(restart())
+            assert time.monotonic() - started < 6
+            assert stalled
+            interrupted = server.process
+            assert interrupted is not None and interrupted.poll() is None
+        # Restore termination before the owner's exit cleans up the cancelled operation.
+    assert time.monotonic() - started < 9
+    assert server.process is None
+    assert original.poll() is not None and interrupted.poll() is not None
+    with server:
+        assert httpx.get(ORIGIN + "/healthz", timeout=2).status_code == 200
 
 
 @pytest.mark.parametrize("old_response", ["success", "session_error"])
@@ -200,3 +258,111 @@ def test_runner_fails_if_owned_server_port_is_busy(tmp_path: Path) -> None:
         )
         with pytest.raises(RuntimeError, match="Port 8788 is occupied"):
             second.start()
+
+
+@pytest.mark.parametrize("kind,role", [("decision", "reviewer"), ("complete", "processor")])
+def test_handoff_browser_stale_deliberate_resubmit_and_lost_terminal_receipt(
+    tmp_path: Path, kind: str, role: str
+) -> None:
+    config, signer, _, _ = setup("handoff")
+    with Server(
+        os.environ["FIRESTORE_EMULATOR_HOST"],
+        config.namespace,
+        {signer.kid: signer.public_pem()},
+        tmp_path,
+        mode="handoff",
+    ):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            try:
+                context = browser.new_context(
+                    extra_http_headers={"X-Goog-IAP-JWT-Assertion": signer.token(config, role)}
+                )
+                endpoint = (
+                    ORIGIN
+                    + "/api/requests/"
+                    + context.request.get(ORIGIN + "/api/me").json()["request_id"]
+                )
+                headers = {"Origin": ORIGIN, "Content-Type": "application/json", "X-PTA-CSRF": "1"}
+                version = 0
+                if kind == "complete":
+                    approved = context.request.post(
+                        endpoint + "/decision",
+                        headers={**headers, "X-Goog-IAP-JWT-Assertion": signer.token(config)},
+                        data={
+                            "operation_id": str(uuid4()),
+                            "expected_version": 0,
+                            "decision": "approve",
+                            "body": "Fictional approval",
+                        },
+                    )
+                    assert approved.status == 200
+                    version = 1
+                page = context.new_page()
+                page.goto(ORIGIN)
+                expect(page.locator("#save-" + kind)).to_be_enabled()
+                if kind == "decision":
+                    assert page.get_by_role("radio", checked=True).count() == 0
+                    page.get_by_role("radio", name="Approve", exact=True).check()
+                    page.get_by_role("radio", name="Not approve", exact=True).check()
+                    assert page.get_by_role("radio", checked=True).count() == 1
+                draft = "Fictional retained <script>window.PROOF_XSS=1</script>"
+                page.locator("#" + kind + "-comment").fill(draft)
+                # A later shared comment changes the expected version. No automatic decision.
+                assert (
+                    context.request.post(
+                        endpoint + "/comments",
+                        headers=headers,
+                        data={
+                            "operation_id": str(uuid4()),
+                            "expected_version": version,
+                            "body": "Fictional intervening comment",
+                        },
+                    ).status
+                    == 200
+                )
+                page.locator("#save-" + kind).click()
+                expect(page.locator("#feedback")).to_contain_text("STALE_VERSION")
+                expect(page.locator("#" + kind + "-comment")).to_have_value(draft)
+                assert context.request.get(endpoint).json()["request"]["version"] == version + 1
+                # A login HTML response must retain the draft and show no successful save.
+                page.route(
+                    "**/" + kind,
+                    lambda route: route.fulfill(
+                        status=200, content_type="text/html", body="<html>Sign in</html>"
+                    ),
+                    times=1,
+                )
+                page.locator("#save-" + kind).click()
+                expect(page.locator("#session-refresh")).to_be_visible()
+                expect(page.locator("#feedback")).to_contain_text("Refresh your sign-in")
+                expect(page.locator("#" + kind + "-comment")).to_have_value(draft)
+                assert context.request.get(endpoint).json()["request"]["version"] == version + 1
+                page.locator("#reload").click()
+                expect(page.locator("#session-refresh")).to_be_hidden()
+                lost = []
+
+                def lose(route: Route) -> None:
+                    lost.append(route.request.post_data_json)
+                    assert route.fetch().status == 200
+                    route.abort("failed")
+
+                page.route("**/" + kind, lose, times=1)
+                page.locator("#retry").click()
+                expect(page.locator("#feedback")).to_contain_text("TEMPORARILY_UNAVAILABLE")
+                current = context.request.get(endpoint).json()
+                assert current["request"]["version"] == version + 2
+                page.locator("#reload").click()
+                expect(page.locator("#" + kind + "-form")).to_be_hidden()
+                # Retry remains usable even after reload discovers the terminal state.
+                with page.expect_request("**/" + kind) as retried:
+                    page.locator("#retry").click()
+                assert retried.value.post_data_json == lost[0]
+                expect(page.locator("#feedback")).to_contain_text(
+                    "Decision saved." if kind == "decision" else "Workflow handoff complete."
+                )
+                assert context.request.get(endpoint).json() == current
+                assert page.evaluate("window.PROOF_XSS") is None
+                assert page.locator("#history script").count() == 0
+            finally:
+                browser.close()

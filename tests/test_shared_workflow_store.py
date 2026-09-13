@@ -61,15 +61,20 @@ def test_colliding_changed_and_cross_actor_retries_fail_before_stale_check() -> 
     assert store.read(Deadline.after())["request"]["version"] == 1
 
 
-def test_event_cap_rejects_new_operation_but_accepts_identical_retry() -> None:
-    config, _, _, store = new_store()
+@pytest.mark.parametrize("mode", ["comments", "handoff"])
+def test_event_cap_rejects_new_operation_but_accepts_identical_retry(mode: str) -> None:
+    config, _, _, store = new_store(mode)
     first = body()
-    receipt = store.comment(actor(config), first, Deadline.after())
+    action = "approve" if mode == "handoff" else "comment"
+    receipt = store.mutate(actor(config), first, action, Deadline.after())
     for version in range(1, 100):
         store.comment(actor(config), body(version), Deadline.after())
     with pytest.raises(WorkflowError, match="EVENT_CAP_REACHED"):
         store.comment(actor(config), body(100), Deadline.after())
-    assert store.comment(actor(config), first, Deadline.after()) == receipt
+    assert store.mutate(actor(config), first, action, Deadline.after()) == receipt
+    if mode == "handoff":
+        with pytest.raises(WorkflowError, match="EVENT_CAP_REACHED"):
+            store.mutate(actor(config, "processor"), body(100), "complete", Deadline.after())
     result = store.read(Deadline.after())
     assert result["request"]["version"] == len(result["events"]) == 100
 

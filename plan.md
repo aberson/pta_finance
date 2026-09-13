@@ -818,12 +818,12 @@ automated Steps 26–30 in #56–60, and attended Step 31 in #61. Implementation
 
 ---
 
-## Phase 7 — Shared reimbursement workflow proof — M6 passed; handoff next (Steps 32–35)
+## Phase 7 — Shared reimbursement workflow proof — handoff built; M7 next (Steps 32–35)
 
 **Objective:** Explain and prove a small Google-hosted workflow in which two authenticated
 users share one fictional reimbursement request, comments, a decision, and the next owner.
 
-**Status: STEPS 32 AND 33 DONE; STEP 34 NEXT.** The optional comments-only service passed independent reviews, full local integration tests and feature CI. Attended M6 now passes actual image inspection, two independent Google identities, cloud access controls, request/retry safeguards, shared comments and fresh-revision durability. The operator accepted the proof on 2026-09-12. The scoped source of truth is
+**Status: STEPS 32–34 DONE; STEP 35 / M7 NEXT.** The comments service passed actual two-account Cloud Run acceptance in M6. Reviewer approval/not-approval and processor administrative completion now pass the full candidate and main suites, independent reviews and feature CI. Hosted handoff acceptance remains M7. The scoped source of truth is
 [documentation/shared-workflow-proof-plan.md](documentation/shared-workflow-proof-plan.md).
 Reserve Steps 32–35 for this feature; it is independent of the pending Slides and monthly
 board-summary work.
@@ -835,7 +835,7 @@ Step 35/M7: reviewer approval/not-approval and processor completion. Phase B is 
 until Step 33/M6 is recorded DONE with deployed evidence; do not run the entire plan as
 one unattended span.
 
-The comments proof passed Cloud Run IAP and Firestore acceptance; the reviewer-to-processor handoff remains to be built and accepted.
+The comments proof passed Cloud Run IAP and Firestore acceptance. The reviewer-to-processor handoff is delivered in code and awaits its separate deployed acceptance.
 Administrative completion does not record payment or mutate the private reimbursement
 bundle, Sheets ledger, or mailbox. Actual project, account, and billing configuration stays
 private. The independent plan review is recorded in
@@ -879,3 +879,23 @@ private. The independent plan review is recorded in
   | IAM and storage | IAP is enabled, invocation is private, only the two intended users have effective admission, the dedicated runtime identity is attached, and database access has the intended boundary. |
   | Error and portability behavior | No false saved message follows an uncertain error; hosted comments still work with the local development server stopped. |
   | Evidence and phase gate | The private record names checked revisions, digest and each outcome. Step 33 remains pending until every required observation is verified; Step 34/Phase B cannot begin before that. |
+
+### M7: Accept the two-role handoff on the deployed service
+
+- **Source step:** Step 35 in [the shared workflow proof plan](documentation/shared-workflow-proof-plan.md); Step 34 code delivery is complete.
+- **Issue:** #66
+- **Status:** PENDING — hosted handoff observations have not run.
+- **Commands to run:** Execute the ordered [M7 runbook](docs/shared-workflow-proof.md#m7-accept-the-deployed-handoff-step-35). Build and inspect a new immutable image, preserve the M6 configuration and namespace, and deploy in handoff mode with the existing two pinned accounts. Retain the approved proof, use fresh namespaces for not-approval and the opposing-decision race, then restore the approved namespace. Every command must pass before continuing.
+- **What you're looking for:**
+
+  | Check | Expected outcome |
+  |---|---|
+  | Upgrade and image | New actual image inspection passes before deployment; the original comments and receipts survive the handoff upgrade. |
+  | Approval and ownership | Reviewer approval requires a comment, transfers ownership to processor, and enables processor completion. Direct wrong-role calls return 403 without adding an event. |
+  | Completion and durability | Both users read administrative completion, null next owner and correct event attribution after another fresh revision. Earlier history survives. |
+  | Not-approval | A fresh namespace proves terminal not-approval; completion and changed decisions fail without altering either proof. |
+  | Comments after outcomes | Both roles can comment after each terminal outcome while the decision and owner remain unchanged. |
+  | Retries and races | Identical operations return their original receipts. Changed payloads, stale versions and competing decisions cannot overwrite the winner or add rejected events. |
+  | Reads | Both users read complete bounded history and later comments; unexpected query parameters and unknown IDs fail safely. The 100-event cap remains mandatory emulator coverage. |
+  | Restoration and explanation | Restore the original approved namespace and retain both branch histories. Both users identify the decision, next owner and comment authors without interpreting completion as payment. |
+  | Evidence | Record the exact image, revisions, namespace configuration backups and all 15 runbook observations privately in `reports/output/shared-workflow/m7-acceptance.md`. Mark Step 35 DONE only after every required row passes. |

@@ -44,13 +44,20 @@ def test_signed_subject_and_normalized_email_are_both_required() -> None:
         {"sub": " "},
         {"email": ""},
         {"email": ["reviewer@example.org"]},
-        {"iat": int(time.time()) + 60},
-        {"exp": int(time.time()) + 1000},
         {"exp": 0, "iat": 0},
     ],
 )
 def test_rejects_malformed_claims(changes: dict[str, object]) -> None:
     config, signer, verifier, _ = setup()
+    with pytest.raises(WorkflowError, match="UNAUTHENTICATED"):
+        verifier.verify(signer.token(config, **changes), Deadline.after())
+
+
+@pytest.mark.parametrize("claim,offset", [("iat", 60), ("exp", 1000)])
+def test_rejects_future_issued_or_overlong_token(claim: str, offset: int) -> None:
+    config, signer, verifier, _ = setup()
+    # Evaluate relative claims when the test runs; collection may precede it by minutes.
+    changes = {claim: int(time.time()) + offset}
     with pytest.raises(WorkflowError, match="UNAUTHENTICATED"):
         verifier.verify(signer.token(config, **changes), Deadline.after())
 

@@ -21,6 +21,17 @@ COMMENT_LIMIT = 2000
 INITIAL_STATE = "AWAITING_REVIEW"
 INITIAL_OWNER = "reviewer"
 ROLES = ("reviewer", "processor")
+STATE_OWNERS = {
+    INITIAL_STATE: INITIAL_OWNER,
+    "APPROVED": "processor",
+    "NOT_APPROVED": None,
+    "COMPLETED": None,
+}
+TRANSITIONS = {
+    "approve": ("reviewer", INITIAL_STATE, "APPROVED"),
+    "not_approve": ("reviewer", INITIAL_STATE, "NOT_APPROVED"),
+    "complete": ("processor", "APPROVED", "COMPLETED"),
+}
 REQUEST_FIELDS = frozenset(
     {
         "schema_version",
@@ -70,6 +81,7 @@ ERRORS: dict[str, tuple[int, str]] = {
     "INVALID_INPUT": (400, "Check the submitted request."),
     "BODY_TOO_LARGE": (413, "The submitted request is too large."),
     "STALE_VERSION": (409, "Reload and deliberately submit against the latest version."),
+    "INVALID_TRANSITION": (409, "This action is unavailable in the current workflow state."),
     "OPERATION_CONFLICT": (409, "This operation ID was already used. Reload before submitting."),
     "EVENT_CAP_REACHED": (409, "This demonstration has reached its event limit."),
     "RETRY_CONFLICT": (409, "The store is busy. Retry the same operation."),
@@ -152,7 +164,9 @@ def is_uuid4(value: object) -> bool:
         return False
 
 
-def comment_input(value: Any) -> dict[str, Any]:
+def mutation_input(value: Any, action: str) -> dict[str, Any]:
+    if action != "comment" and action not in TRANSITIONS:
+        raise WorkflowError("INVALID_INPUT")
     if not isinstance(value, dict) or set(value) != {"operation_id", "expected_version", "body"}:
         raise WorkflowError("INVALID_INPUT")
     if not is_uuid4(value["operation_id"]):
@@ -160,7 +174,11 @@ def comment_input(value: Any) -> dict[str, Any]:
     if type(value["expected_version"]) is not int or value["expected_version"] < 0:
         raise WorkflowError("INVALID_INPUT")
     body = value["body"]
-    if not isinstance(body, str) or not 1 <= len(body) <= COMMENT_LIMIT or not body.strip():
+    if (
+        not isinstance(body, str)
+        or len(body) > COMMENT_LIMIT
+        or (action != "complete" and not body.strip())
+    ):
         raise WorkflowError("INVALID_INPUT")
     try:
         body.encode("utf-8", errors="strict")
@@ -169,11 +187,43 @@ def comment_input(value: Any) -> dict[str, Any]:
     return value
 
 
-def payload_hash(source: dict[str, Any], data: dict[str, Any]) -> str:
+def comment_input(value: Any) -> dict[str, Any]:
+    return mutation_input(value, "comment")
+
+
+def decision_input(value: Any) -> tuple[str, dict[str, Any]]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"operation_id", "expected_version", "body", "decision"}
+        or value["decision"] not in ("approve", "not_approve")
+    ):
+        raise WorkflowError("INVALID_INPUT")
+    action = str(value["decision"])
+    return action, mutation_input(
+        {key: item for key, item in value.items() if key != "decision"}, action
+    )
+
+
+def transition(state: str, role: str, action: str) -> tuple[str, str | None]:
+    if role not in ROLES:
+        raise WorkflowError("FORBIDDEN")
+    if action == "comment" and state in STATE_OWNERS:
+        return state, STATE_OWNERS[state]
+    rule = TRANSITIONS.get(action)
+    if rule is None:
+        raise WorkflowError("INVALID_INPUT")
+    if role != rule[0]:
+        raise WorkflowError("FORBIDDEN")
+    if state != rule[1]:
+        raise WorkflowError("INVALID_TRANSITION")
+    return rule[2], STATE_OWNERS[rule[2]]
+
+
+def payload_hash(source: dict[str, Any], data: dict[str, Any], action: str = "comment") -> str:
     payload = {
         "request_id": source["request_id"],
         "source_sha256": source["source_sha256"],
-        "action": "comment",
+        "action": action,
         **data,
     }
     raw = json.dumps(

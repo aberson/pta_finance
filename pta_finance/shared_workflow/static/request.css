@@ -14,3 +14,8 @@ button:disabled { opacity: .6; cursor: wait; }
 #feedback { min-height: 1.5rem; font-weight: 600; }
 dd { margin-left: 0; overflow-wrap: anywhere; }
 @media (max-width: 600px) { main { margin: 0; padding: 1rem; } }
+
+fieldset { margin-top: 1.5rem; border: 1px solid #d9e2e9; }
+input[type="radio"] { appearance: none; width: 1.2rem; height: 1.2rem; border: 2px solid #164e6b; border-radius: .15rem; vertical-align: middle; }
+input[type="radio"]:checked { background: #164e6b; box-shadow: inset 0 0 0 3px white; }
+form button { margin-top: .7rem; }

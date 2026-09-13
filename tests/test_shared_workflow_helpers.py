@@ -23,15 +23,15 @@ from scripts.shared_workflow_smoke import (  # noqa: E402
 )
 
 
-def setup() -> tuple[Config, Signer, IAPVerifier, CertificateTransport]:
-    config = fixture_config("proof_" + str(uuid4()))
+def setup(mode: str = "comments") -> tuple[Config, Signer, IAPVerifier, CertificateTransport]:
+    config = fixture_config("proof_" + str(uuid4()), mode)
     signer = Signer()
     transport = CertificateTransport({signer.kid: signer.public_pem()})
     return config, signer, IAPVerifier(config, KeyCache(transport)), transport
 
 
-def new_store() -> tuple[Config, Signer, IAPVerifier, Store]:
-    config, signer, verifier, transport = setup()
+def new_store(mode: str = "comments") -> tuple[Config, Signer, IAPVerifier, Store]:
+    config, signer, verifier, transport = setup(mode)
     host = os.environ.get("FIRESTORE_EMULATOR_HOST")
     if not host:
         raise pytest.UsageError(

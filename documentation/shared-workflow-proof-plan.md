@@ -1,6 +1,6 @@
 # Shared workflow proof plan
 
-**Status:** STEPS 32 AND 33 DONE — the authenticated comments service and attended M6 cloud proof pass. The operator accepted the proof on 2026-09-12 and requested the next planned stage. Next: Step 34 reviewer-to-processor handoff, then M7/Step 35 hosted acceptance. See [the M6 closeout](shared-workflow-proof-sync.md#m6-closeout--2026-09-12-utc).
+**Status:** STEPS 32–34 DONE — M6 cloud acceptance and the reviewer-to-processor handoff code delivery pass. Next: M7 / Step 35, using the two pinned accounts and preserved fictional proof. See [the Step 34 delivery](shared-workflow-proof-sync.md#step-34-delivery--2026-09-13-utc).
 
 **Reserved steps:** 32–35. A scan of `plan.md` and every `documentation/*plan.md` found the latest global span 26–31 in the monthly reimbursement board-summary plan; the slide plan owns 14–25. Older feature plans contain historical local numbering. No sibling currently claims 32–35. Recheck before issue synchronization; this feature neither completes nor renumbers existing work. The master-plan pointer is Phase 7 in `plan.md`.
 
@@ -82,7 +82,7 @@ New files use the components in §5. If implementation discovers an existing sha
 | `tests/test_shared_workflow_*.py` | Auth, routes, transactions, client behavior, startup invariants, packaging/privacy, and regression boundaries. |
 | `docs/shared-workflow-proof.md` | New command contracts, cloud setup sequence, identity binding, two attended acceptance scripts, retry/recovery behavior, resource shutdown instructions. Written by code steps before operator execution. |
 
-Step 32 has implemented these components for identity and comments modes; handoff behavior remains Step 34. Keep module count small; avoid a generic workflow framework or dependency on the screenshot tool.
+Steps 32 and 34 implement these components for identity, comments and handoff modes; hosted handoff acceptance remains M7 / Step 35. Keep module count small; avoid a generic workflow framework or dependency on the screenshot tool.
 
 ## 6. Design Decisions
 
@@ -332,11 +332,12 @@ Phase A ends after Step 32's code delivery with **run M6 / Step 33 next**. Any M
 - **Type:** code
 - **Issue:** #65
 - **Flags:** --reviewers deep --isolation worktree
-- **Status:** PENDING
+- **Status:** DONE
 - **Files:** `pta_finance/shared_workflow/config.py`, `models.py`, `store.py`, `app.py`, `templates/request.html.j2`, and `static/request.js`; `tests/test_shared_workflow_*.py`, `scripts/shared_workflow_smoke.py`, and `docs/shared-workflow-proof.md`; update `README.md` and `CLAUDE.md` only for the delivered optional behavior. Keep private reimbursement modules unchanged.
 - **Produces:** Decision/completion endpoints and minimal controls, D7 transition enforcement using the existing transaction lane, handoff mode, role-specific next-action wording, full lifecycle/denial/retry/concurrency tests, and prepared M7 runbook/browser checks.
 - **Done when:** Through the production HTTP routes with actual Firestore emulator transactions, reviewer approval transfers ownership and only processor completion closes the workflow; not-approval is terminal and cannot be completed; comments never change decisions. Same-operation retries produce one event, conflicting/stale decisions do not overwrite each other, and direct wrong-role requests fail even when browser controls are bypassed. Local browser tests show escaped comments, accessible outcomes, refresh after version conflict, and safe session/network errors. All §9 repository gates pass. M6 is already recorded DONE; no human cloud acceptance is hidden in this code gate.
 - **Depends on:** 33
+- **Delivery:** Complete candidate and main repository gates and six fresh independent review lenses passed on 2026-09-13 UTC. Actual cloud image inspection and the two-account handoff observations remain Step 35/M7. See [delivery evidence](shared-workflow-proof-sync.md#step-34-delivery--2026-09-13-utc).
 
 #### Manual acceptance B — M7
 

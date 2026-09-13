@@ -40,16 +40,17 @@ def test_identity_and_comments_config_are_explicit() -> None:
     assert config.port == 8788 and config.origin == "https://example.run.app"
 
 
-@pytest.mark.parametrize("mode", ["identity", "comments"])
+@pytest.mark.parametrize("mode", ["identity", "comments", "handoff"])
 @pytest.mark.parametrize("origin", ["https://example.org", "https://[::1]"])
 def test_supported_origin_is_returned_unchanged(mode: str, origin: str) -> None:
     value = runtime() if mode == "identity" else comments()
+    value["mode"] = mode
     value["origin"] = origin
     config = load_config({"PTA_WORKFLOW_CONFIG": json.dumps(value)})
     assert config.mode == mode and config.origin == origin
 
 
-@pytest.mark.parametrize("mode", ["identity", "comments"])
+@pytest.mark.parametrize("mode", ["identity", "comments", "handoff"])
 @pytest.mark.parametrize(
     "origin",
     [
@@ -65,6 +66,7 @@ def test_supported_origin_is_returned_unchanged(mode: str, origin: str) -> None:
 )
 def test_config_rejects_unsupported_origin_spellings(mode: str, origin: str) -> None:
     value = runtime() if mode == "identity" else comments()
+    value["mode"] = mode
     value["origin"] = origin
     with pytest.raises(WorkflowError, match="ORIGIN_INVALID"):
         load_config({"PTA_WORKFLOW_CONFIG": json.dumps(value)})
@@ -92,7 +94,7 @@ def test_strict_json_rejects_ambiguous_nonfinite_and_invalid_unicode(raw: str | 
     [
         ({"schema_version": True}, "CONFIG_INVALID"),
         ({"extra": True}, "CONFIG_INVALID"),
-        ({"mode": "handoff"}, "CONFIG_INVALID"),
+        ({"mode": "unknown"}, "CONFIG_INVALID"),
         ({"project_id": "../private"}, "CONFIG_INVALID"),
         ({"origin": "http://example.org"}, "ORIGIN_INVALID"),
         ({"origin": "https://example.org/"}, "ORIGIN_INVALID"),
@@ -159,3 +161,16 @@ def test_fixture_projection_uses_only_source_fields() -> None:
     assert source["source_sha256"] == bundle.tickets[0].source_evidence_sha256
     assert source["display"]["total"] == "184.50"
     assert "payment" not in json.dumps(source) and "requestor" not in json.dumps(source)
+
+
+@pytest.mark.parametrize("field", ["origin", "database", "namespace", "subject"])
+def test_handoff_requires_complete_data_bindings(field: str) -> None:
+    value = comments()
+    value["mode"] = "handoff"
+    assert load_config({"PTA_WORKFLOW_CONFIG": json.dumps(value)}).mode == "handoff"
+    if field == "subject":
+        value["users"][0][field] = None
+    else:
+        value[field] = None
+    with pytest.raises(WorkflowError):
+        load_config({"PTA_WORKFLOW_CONFIG": json.dumps(value)})
