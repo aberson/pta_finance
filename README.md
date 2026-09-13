@@ -171,12 +171,13 @@ mapping, and the reimbursement review queue.
 **In progress:** turning the treasurer snapshot prototype into an automatic slide workflow.
 The [slide plan](documentation/treasurer-summary-wave-1-plan.md) tracks the remaining work.
 
-**Optional collaboration proof:** the `web` extra adds an authenticated, comments-only
-service for one fictional request. Local tests use signed test identities, real HTTP,
-Chromium, and the Firestore emulator. Real two-account Cloud Run acceptance (M6) passed,
-including access safeguards and persistence across redeployment. Approval and completion
-controls are next. See the
-[shared-workflow runbook](docs/shared-workflow-proof.md) for startup, packaging, and M6.
+**Optional collaboration proof:** the `web` extra adds an authenticated service for one
+fictional request, shared comments, and a reviewer-to-processor handoff. The reviewer approves
+or does not approve; only the processor can complete an approved handoff. Completion does
+not record a payment. Local checks use signed identities, real HTTP, Chromium, and Firestore
+emulator transactions. Real two-account comments acceptance (M6) passed; hosted handoff
+acceptance (M7) is next. See the [shared-workflow runbook](docs/shared-workflow-proof.md)
+for startup, packaging, and both cloud acceptance procedures.
 
 **Not built yet:** an admin web app, automatic reimbursement totals in the budget, or live
 Drive receipt retrieval and report upload. Existing spreadsheet dashboards are specific to the

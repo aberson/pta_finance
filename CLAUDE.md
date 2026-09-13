@@ -12,8 +12,9 @@
 A command-line Python toolkit for budgets, financial reports, and reimbursement review.
 **Google Sheets holds the budget data**; a private local email archive and review bundle hold
 reimbursement evidence. It generates HTML reports, including a browser-readable review queue.
-An optional, separate comments-only web proof uses one packaged fictional request; its real
-Cloud Run comments acceptance (M6) has passed; the approval handoff is next. There is no LLM dependency or Apps Script; scheduled
+An optional, separate web proof uses one packaged fictional request with shared comments and
+an administrative reviewer-to-processor handoff. Real Cloud Run comments acceptance (M6)
+has passed; hosted handoff acceptance (M7) is next. There is no LLM dependency or Apps Script; scheduled
 financial reports use GitHub Actions.
 
 ## 2. Stack
@@ -113,19 +114,22 @@ scripts/            identity guard + README screenshot capture and PowerPoint ex
 
 ## 5. Architecture
 
-- **Optional shared-comment proof** (`shared_workflow/`, `[web]`): separate FastAPI/Uvicorn
+- **Optional shared-workflow proof** (`shared_workflow/`, `[web]`): separate FastAPI/Uvicorn
   entry point, strict `PTA_WORKFLOW_CONFIG` JSON, verified IAP assertions, two pinned subjects,
   and bounded Firestore transactions. It loads only its packaged fictional bundle through
   the existing offline validator; it never discovers private CLI configuration or imports
   the CLI/Sheet/Gmail clients. `identity` mode never creates a store; `comments` mode provides
-  a shared request and append-only plain-text comments, capped at 100 events. No decision,
-  completion, import, or reset route exists. Production rejects emulator/test settings.
+  a shared request and append-only plain-text comments, capped at 100 events. `handoff` mode
+  adds reviewer approve/not-approve and processor administrative completion through the same
+  transaction lane. Both outcomes are final; comments preserve state/owner in every state.
+  Role checks precede receipt retries, which precede cap/state/version checks. There is no
+  import, reset, or payment route. Production rejects emulator/test settings.
   `scripts/shared_workflow_smoke.py` is a nonpackaged local test factory using ephemeral keys,
   a real loopback emulator, an installed wheel, and headless Chromium. Test modules requiring
   the emulator fail when `web` is installed and `FIRESTORE_EMULATOR_HOST` is missing.
   See [docs/shared-workflow-proof.md](docs/shared-workflow-proof.md) for all commands,
-  source staging, the fixed Cloud Build image-inspection recipe, and the repeatable M6 procedure.
-  Phase B is ineligible until M6 is verified and Step 33 marked DONE.
+  source staging, the fixed Cloud Build image-inspection recipe, and repeatable M6/M7 procedures.
+  M6 and Step 33 are verified DONE; M7 / Step 35 remains the hosted handoff acceptance gate.
 
 - **Data layer** (`sheets.py`, `schema.py`, `models.py`, `ids.py`): one Google Spreadsheet.
   `schema.py` (column lists) and `ids.py` (ID formats) are **single sources of truth** — tests
@@ -176,7 +180,7 @@ scripts/            identity guard + README screenshot capture and PowerPoint ex
 
 ## 6. Current state
 
-**Shared workflow Step 32 delivered (2026-09-12 UTC).** The optional comments-only service passed local HTTP/browser/emulator and installed-wheel checks, the complete main-checkout suite, six independent reviews, and feature CI. Step 33/M6 subsequently passed actual cloud observations and operator acceptance on 2026-09-12. The private record satisfies the Phase B entry gate; Step 34 handoff implementation is next. See the [delivery record](documentation/shared-workflow-proof-sync.md#step-32-delivery--2026-09-12-utc).
+**Shared workflow Step 32 delivered (2026-09-12 UTC).** The optional comments-only service passed local HTTP/browser/emulator and installed-wheel checks, the complete main-checkout suite, six independent reviews, and feature CI. Step 33/M6 subsequently passed actual cloud observations and operator acceptance on 2026-09-12. The private record satisfies the Phase B entry gate. Handoff behavior now has local implementation and automated coverage; M7 / Step 35 cloud acceptance remains pending. See the [delivery record](documentation/shared-workflow-proof-sync.md#step-32-delivery--2026-09-12-utc).
 
 **README refresh accepted (2026-09-08).** Public examples show the real reimbursement renderer
 with fictional data and an editable native PowerPoint snapshot. The snapshot is a presentation
@@ -219,8 +223,8 @@ changes or disappears. Neither command sends mail or writes Sheets. **Strict pay
 (`01f7bff`, merge `aa9b1b1`): schema-v2 anchors carry `payment_links` (two exact Zelle grammars,
 per-ticket reference-digest bindings, atomic quarantine) and `operator_payments`; three fail-closed
 majors from the landing review remain open as the next fix step (see
-`documentation/reimbursement-refresh-plan.md` § 2026-09-06 amendment). The current repository gate
-has **1,110 collected tests** with dev/slides/web installed and the local Firestore emulator running: 1,107 passed and three unchanged existing skips; all 160 web cases pass without skips. The optional PyYAML supplement passes all nine workflow checks. Strict package mypy and Ruff pass, as do all three feature CI jobs.
+`documentation/reimbursement-refresh-plan.md` § 2026-09-06 amendment). The M6 closeout baseline
+had **1,110 collected tests** with dev/slides/web installed and the local Firestore emulator running: 1,107 passed and three unchanged existing skips; all 160 web cases pass without skips. The optional PyYAML supplement passes all nine workflow checks. Strict package mypy and Ruff pass, as do all three feature CI jobs.
 **The Gmail read-only ingest connector has also shipped** (`documentation/gmail-ingest-plan.md`,
 tracking span #15–#22; deferred #18 and its umbrella #22 remain open): `gmail_source.py` + the
 `fetch-mail` CLI replace the manual Google Takeout export —

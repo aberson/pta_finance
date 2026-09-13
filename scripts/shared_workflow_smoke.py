@@ -167,11 +167,42 @@ class Server:
     process: subprocess.Popen[str] | None = None
 
     def start(self, timeout: float = 25) -> None:
+        asyncio.run(self.start_async(timeout))
+
+    @staticmethod
+    async def _port_occupied() -> bool:
         with socket.socket() as probe:
-            if probe.connect_ex(("127.0.0.1", 8788)) == 0:
+            probe.setblocking(False)
+            try:
+                await asyncio.get_running_loop().sock_connect(probe, ("127.0.0.1", 8788))
+            except ConnectionRefusedError:
+                return False
+        return True
+
+    async def start_async(self, timeout: float = 25) -> None:
+        async with asyncio.timeout(timeout):
+            if await self._port_occupied():
                 raise RuntimeError(
                     "Port 8788 is occupied; stop its owner before running the smoke."
                 )
+            self._launch()
+            assert self.process is not None
+            async with httpx.AsyncClient(timeout=1, trust_env=False) as client:
+                while True:
+                    if self.process.poll() is not None:
+                        assert self.process.stderr is not None
+                        details = self.process.stderr.read()
+                        raise RuntimeError(
+                            "The synthetic app process failed before readiness: " + details
+                        )
+                    try:
+                        if (await client.get(ORIGIN + "/healthz")).status_code == 200:
+                            return
+                    except httpx.HTTPError:
+                        pass
+                    await asyncio.sleep(0.1)
+
+    def _launch(self) -> None:
         launcher = Path(__file__).resolve()
         bootstrap = "import runpy,sys; "
         if self.package_path is not None:
@@ -202,40 +233,32 @@ class Server:
             + "\n"
         )
         self.process.stdin.close()
-        until = time.monotonic() + timeout
-        while time.monotonic() < until:
-            if self.process.poll() is not None:
-                assert self.process.stderr is not None
-                details = self.process.stderr.read()
-                raise RuntimeError("The synthetic app process failed before readiness: " + details)
-            try:
-                if (
-                    httpx.get(
-                        ORIGIN + "/healthz", timeout=min(1, max(0.01, until - time.monotonic()))
-                    ).status_code
-                    == 200
-                ):
-                    return
-            except httpx.HTTPError:
-                pass
-            time.sleep(0.1)
-        raise RuntimeError("The synthetic app did not become ready.")
 
     def stop(self) -> None:
+        asyncio.run(self.stop_async())
+
+    async def _wait_for_exit(self) -> None:
+        assert self.process is not None
+        async with asyncio.timeout(5):
+            while self.process.poll() is None:
+                await asyncio.sleep(0.05)
+
+    async def stop_async(self) -> None:
         if self.process is not None:
-            self.process.terminate()
+            if self.process.poll() is None:
+                self.process.terminate()
             try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
+                await self._wait_for_exit()
+            except TimeoutError:
                 self.process.kill()
-                self.process.wait(timeout=5)
+                await self._wait_for_exit()
+            # Cancellation leaves the handle owned by Server for __exit__ to reap.
+            if self.process.stderr is not None:
+                self.process.stderr.close()
             self.process = None
-            until = time.monotonic() + 5
-            while time.monotonic() < until:
-                with socket.socket() as probe:
-                    if probe.connect_ex(("127.0.0.1", 8788)) != 0:
-                        return
-                time.sleep(0.05)
+            async with asyncio.timeout(5):
+                while await self._port_occupied():
+                    await asyncio.sleep(0.05)
 
     def __enter__(self) -> Server:
         try:
@@ -329,13 +352,15 @@ def run_smoke(host: str, deadline_seconds: int) -> None:
             started = time.monotonic()
 
             async def exercise() -> None:
-                async with asyncio.timeout(deadline_seconds - (time.monotonic() - started)):
-                    async with async_playwright() as playwright:
-                        browser = await playwright.chromium.launch(headless=True)
-                        try:
+                async with async_playwright() as playwright:
+                    browser = await playwright.chromium.launch(headless=True)
+                    try:
+                        async with asyncio.timeout(deadline_seconds - (time.monotonic() - started)):
                             await cycle(browser)
-                        finally:
-                            await browser.close()
+                        async with asyncio.timeout(90):
+                            await handoff_cycle(browser)
+                    finally:
+                        await browser.close()
 
             async def cycle(browser: Any) -> None:
                 contexts = [
@@ -352,6 +377,16 @@ def run_smoke(host: str, deadline_seconds: int) -> None:
                 for page in pages:
                     await page.goto(ORIGIN)
                     await expect(page.locator("#save")).to_be_enabled()
+                    await expect(
+                        page.get_by_text(
+                            "This fictional request is for shared comments.", exact=False
+                        )
+                    ).to_be_visible()
+                    await expect(
+                        page.get_by_text(
+                            "This fictional workflow is an administrative handoff.", exact=False
+                        )
+                    ).to_have_count(0)
                 me = await (await contexts[0].request.get(ORIGIN + "/api/me")).json()
                 assert set(me) == {"mode", "actor", "request_id"}
                 assert set(me["actor"]) == {"subject", "email", "label", "role"}
@@ -383,11 +418,8 @@ def run_smoke(host: str, deadline_seconds: int) -> None:
                 denied_data = await denied.json()
                 assert denied.status == 404 and set(denied_data) == {"error"}
                 assert set(denied_data["error"]) == {"code", "message", "correlation_id"}
-                server.stop()
-                remaining = deadline_seconds - (time.monotonic() - started)
-                if remaining <= 0:
-                    raise TimeoutError("Smoke deadline exhausted before app restart.")
-                server.start(timeout=min(25, remaining))
+                await server.stop_async()
+                await server.start_async()
                 assert await (await contexts[0].request.get(endpoint)).json() == before
                 await pages[1].reload()
                 await expect(pages[1].locator("#history li")).to_have_count(2)
@@ -396,6 +428,114 @@ def run_smoke(host: str, deadline_seconds: int) -> None:
                 print(
                     "SMOKE PASS: installed wheel; two signed actors; "
                     f"restart durable; {elapsed:.2f}s",
+                    flush=True,
+                )
+
+            async def handoff_cycle(browser: Any) -> None:
+                # Upgrade the preserved comments namespace using the installed wheel.
+                await server.stop_async()
+                server.mode = "handoff"
+                await server.start_async()
+                contexts = [
+                    await browser.new_context(
+                        extra_http_headers={"X-Goog-IAP-JWT-Assertion": signer.token(config, role)}
+                    )
+                    for role in ("reviewer", "processor")
+                ]
+                reviewer, processor = [await context.new_page() for context in contexts]
+                for page in (reviewer, processor):
+                    await page.goto(ORIGIN)
+                    await expect(page.locator("#save")).to_be_enabled()
+                    await expect(page.locator("#history li")).to_have_count(2)
+                    await expect(
+                        page.get_by_text(
+                            "This fictional workflow is an administrative handoff.", exact=False
+                        )
+                    ).to_be_visible()
+                    await expect(
+                        page.get_by_text(
+                            "This fictional request is for shared comments.", exact=False
+                        )
+                    ).to_have_count(0)
+                await expect(
+                    reviewer.get_by_role("group", name="Review outcome (choose one)")
+                ).to_be_visible()
+                assert await reviewer.get_by_role("radio", checked=True).count() == 0
+                await expect(processor.locator("#next-action")).to_contain_text(
+                    "Waiting for the reviewer"
+                )
+                await reviewer.get_by_role("radio", name="Approve", exact=True).check()
+                await reviewer.locator("#decision-comment").fill(
+                    "Fictional approval <img src=x onerror=alert(1)>"
+                )
+                await reviewer.get_by_role("button", name="Save decision", exact=True).click()
+                await expect(reviewer.locator("#feedback")).to_have_text("Decision saved.")
+                await processor.locator("#reload").click()
+                await expect(processor.locator("#request-state")).to_contain_text("APPROVED")
+                assert await processor.locator("#history img").count() == 0
+                await processor.get_by_role("button", name="Mark workflow handoff complete").click()
+                await expect(processor.locator("#feedback")).to_contain_text(
+                    "does not record a payment"
+                )
+                me = await (await contexts[0].request.get(ORIGIN + "/api/me")).json()
+                assert me["mode"] == "handoff"
+                endpoint = ORIGIN + "/api/requests/" + me["request_id"]
+                approved = await (await contexts[0].request.get(endpoint)).json()
+                assert_shapes(approved)
+                assert approved["request"]["state"] == "COMPLETED"
+                assert approved["request"]["next_owner_role"] is None
+                assert [event["action"] for event in approved["events"]] == [
+                    "comment",
+                    "comment",
+                    "approve",
+                    "complete",
+                ]
+                original_namespace = server.namespace
+                await server.stop_async()
+                await server.start_async()
+                assert await (await contexts[0].request.get(endpoint)).json() == approved
+                await server.stop_async()
+                server.namespace = "proof_" + str(uuid4())
+                await server.start_async()
+                for page in (reviewer, processor):
+                    await page.reload()
+                    await expect(page.locator("#history li")).to_have_count(0)
+                    await expect(page.locator("#save")).to_be_enabled()
+                await reviewer.get_by_role("radio", name="Not approve", exact=True).check()
+                await reviewer.locator("#decision-comment").fill(
+                    "Fictional reason for not approving"
+                )
+                await reviewer.locator("#save-decision").click()
+                await expect(reviewer.locator("#feedback")).to_have_text("Decision saved.")
+                await processor.locator("#reload").click()
+                await expect(processor.locator("#request-state")).to_contain_text("NOT_APPROVED")
+                await expect(processor.locator("#complete-form")).to_be_hidden()
+                denied = await contexts[1].request.post(
+                    endpoint + "/complete",
+                    headers={
+                        "Origin": ORIGIN,
+                        "Content-Type": "application/json",
+                        "X-PTA-CSRF": "1",
+                    },
+                    data={"operation_id": str(uuid4()), "expected_version": 1, "body": ""},
+                )
+                assert (
+                    denied.status == 409
+                    and (await denied.json())["error"]["code"] == "INVALID_TRANSITION"
+                )
+                rejected = await (await contexts[0].request.get(endpoint)).json()
+                assert_shapes(rejected)
+                assert len(rejected["events"]) == 1
+                await server.stop_async()
+                await server.start_async()
+                assert await (await contexts[0].request.get(endpoint)).json() == rejected
+                await server.stop_async()
+                server.namespace = original_namespace
+                await server.start_async()
+                assert await (await contexts[0].request.get(endpoint)).json() == approved
+                print(
+                    "HANDOFF PASS: installed wheel; approve/complete and not-approve; "
+                    "both namespaces durable",
                     flush=True,
                 )
 

@@ -28,11 +28,14 @@ from .models import (
     REQUEST_FIELDS,
     ROLES,
     SCHEMA_VERSION,
+    STATE_OWNERS,
+    TRANSITIONS,
     Actor,
     Deadline,
     WorkflowError,
-    comment_input,
+    mutation_input,
     payload_hash,
+    transition,
 )
 
 T = TypeVar("T")
@@ -170,8 +173,9 @@ class Store:
             set(request) != REQUEST_FIELDS
             or type(request["version"]) is not int
             or not 0 <= request["version"] <= EVENT_CAP
-            or request["state"] != INITIAL_STATE
-            or request["next_owner_role"] != INITIAL_OWNER
+            or not isinstance(request["state"], str)
+            or request["state"] not in STATE_OWNERS
+            or request["next_owner_role"] != STATE_OWNERS[request["state"]]
             or not isinstance(request["created_at"], datetime)
             or not isinstance(request["updated_at"], datetime)
         ):
@@ -184,10 +188,8 @@ class Store:
             or set(event) != EVENT_FIELDS
             or event["request_id"] != self.source["request_id"]
             or event["source_sha256"] != self.source["source_sha256"]
-            or event["action"] != "comment"
-            or event["previous_state"] != INITIAL_STATE
-            or event["result_state"] != INITIAL_STATE
-            or event["next_owner_role"] != INITIAL_OWNER
+            or not isinstance(event["action"], str)
+            or not isinstance(event["previous_state"], str)
             or type(event["result_version"]) is not int
             or not 1 <= event["result_version"] <= EVENT_CAP
             or not isinstance(event["created_at"], datetime)
@@ -199,12 +201,16 @@ class Store:
             raise WorkflowError("STORE_INCONSISTENT")
         data = {key: event[key] for key in ("operation_id", "expected_version", "body")}
         try:
-            comment_input(data)
+            mutation_input(data, event["action"])
+            state, owner = transition(event["previous_state"], event["actor_role"], event["action"])
         except WorkflowError as exc:
             raise WorkflowError("STORE_INCONSISTENT") from exc
-        if event["result_version"] != data["expected_version"] + 1 or event[
-            "payload_sha256"
-        ] != payload_hash(self.source, data):
+        if (
+            event["result_state"] != state
+            or event["next_owner_role"] != owner
+            or event["result_version"] != data["expected_version"] + 1
+            or event["payload_sha256"] != payload_hash(self.source, data, event["action"])
+        ):
             raise WorkflowError("STORE_INCONSISTENT")
         return event
 
@@ -272,11 +278,23 @@ class Store:
                 range(1, request["version"] + 1)
             ):
                 raise WorkflowError("STORE_INCONSISTENT")
+            state = INITIAL_STATE
+            for event in events:
+                if event["previous_state"] != state:
+                    raise WorkflowError("STORE_INCONSISTENT")
+                state = event["result_state"]
+            if request["state"] != state:
+                raise WorkflowError("STORE_INCONSISTENT")
             return {"request": request, "events": events, "event_cap": EVENT_CAP}
         except GoogleAPICallError as exc:
             raise WorkflowError("TEMPORARILY_UNAVAILABLE") from exc
 
     def comment(self, actor: Actor, data: dict[str, Any], deadline: Deadline) -> dict[str, Any]:
+        return self.mutate(actor, data, "comment", deadline)
+
+    def mutate(
+        self, actor: Actor, data: dict[str, Any], action: str, deadline: Deadline
+    ) -> dict[str, Any]:
         # Defense at the database boundary, including previously committed-operation retries.
         if not any(
             user.enabled
@@ -286,8 +304,16 @@ class Store:
             for user in self.config.users
         ):
             raise WorkflowError("FORBIDDEN")
-        comment_input(data)
-        digest = payload_hash(self.source, data)
+        if self.config.mode == "identity" or (
+            action != "comment" and self.config.mode != "handoff"
+        ):
+            raise WorkflowError("NOT_FOUND")
+        mutation_input(data, action)
+        # Role authorization precedes lookup even for a previously committed operation.
+        if action != "comment":
+            if actor.role != TRANSITIONS[action][0]:
+                raise WorkflowError("FORBIDDEN")
+        digest = payload_hash(self.source, data, action)
         event_path = f"{self.path}/events/{data['operation_id']}"
 
         def mutate(transaction: bytes) -> tuple[None, list[Write]]:
@@ -305,6 +331,7 @@ class Store:
                 raise WorkflowError("EVENT_CAP_REACHED")
             if data["expected_version"] != request["version"]:
                 raise WorkflowError("STALE_VERSION")
+            state, owner = transition(request["state"], actor.role, action)
             event = {
                 **data,
                 "payload_sha256": digest,
@@ -313,13 +340,18 @@ class Store:
                 "actor_role": actor.role,
                 "request_id": self.source["request_id"],
                 "source_sha256": self.source["source_sha256"],
-                "action": "comment",
+                "action": action,
                 "previous_state": request["state"],
-                "result_state": request["state"],
+                "result_state": state,
                 "result_version": request["version"] + 1,
-                "next_owner_role": request["next_owner_role"],
+                "next_owner_role": owner,
             }
-            updated = {**request, "version": event["result_version"]}
+            updated = {
+                **request,
+                "version": event["result_version"],
+                "state": state,
+                "next_owner_role": owner,
+            }
             del updated["updated_at"]
             return None, [
                 self._write(self.path, updated, ("updated_at",)),

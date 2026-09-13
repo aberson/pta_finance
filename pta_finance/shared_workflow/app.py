@@ -24,7 +24,9 @@ from .models import (
     Deadline,
     WorkflowError,
     comment_input,
+    decision_input,
     load_source,
+    mutation_input,
     strict_json,
     wire,
 )
@@ -42,7 +44,7 @@ def create_app(config: Config, verifier: IAPVerifier, store: Store | None) -> Fa
     source = load_source()
     if config.mode == "identity" and store is not None:
         raise WorkflowError("CONFIG_INVALID")
-    if config.mode == "comments" and store is None:
+    if config.mode != "identity" and store is None:
         raise WorkflowError("STORE_UNAVAILABLE")
     if store is not None:
         store.seed()
@@ -166,9 +168,7 @@ def create_app(config: Config, verifier: IAPVerifier, store: Store | None) -> Fa
         result = await run_in_threadpool(data_store(request_id).read, request.state.deadline)
         return JSONResponse(wire(result))
 
-    @app.post("/api/requests/{request_id}/comments")
-    async def comment(request_id: str, request: Request) -> JSONResponse:
-        target = data_store(request_id)
+    async def body(request: Request) -> Any:
         if (
             request.headers.getlist("origin") != [config.origin]
             or request.headers.getlist("content-type") != ["application/json"]
@@ -187,10 +187,39 @@ def create_app(config: Config, verifier: IAPVerifier, store: Store | None) -> Fa
             chunks.extend(chunk)
             if len(chunks) > BODY_LIMIT:
                 raise WorkflowError("BODY_TOO_LARGE")
-        data = comment_input(strict_json(bytes(chunks)))
+        return strict_json(bytes(chunks))
+
+    @app.post("/api/requests/{request_id}/comments")
+    async def comment(request_id: str, request: Request) -> JSONResponse:
+        target = data_store(request_id)
+        data = comment_input(await body(request))
         receipt = await run_in_threadpool(
             target.comment, request.state.actor, data, request.state.deadline
         )
         return JSONResponse({"receipt": wire(receipt)})
+
+    if config.mode == "handoff":
+
+        @app.post("/api/requests/{request_id}/decision")
+        async def decision(request_id: str, request: Request) -> JSONResponse:
+            target = data_store(request_id)
+            if request.state.actor.role != "reviewer":
+                raise WorkflowError("FORBIDDEN")
+            action, data = decision_input(await body(request))
+            receipt = await run_in_threadpool(
+                target.mutate, request.state.actor, data, action, request.state.deadline
+            )
+            return JSONResponse({"receipt": wire(receipt)})
+
+        @app.post("/api/requests/{request_id}/complete")
+        async def complete(request_id: str, request: Request) -> JSONResponse:
+            target = data_store(request_id)
+            if request.state.actor.role != "processor":
+                raise WorkflowError("FORBIDDEN")
+            data = mutation_input(await body(request), "complete")
+            receipt = await run_in_threadpool(
+                target.mutate, request.state.actor, data, "complete", request.state.deadline
+            )
+            return JSONResponse({"receipt": wire(receipt)})
 
     return app

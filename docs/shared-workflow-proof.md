@@ -1,16 +1,18 @@
-# Shared comments proof
+# Shared workflow proof
 
 The optional `web` service lets two configured Google accounts comment on one fictional
-request. The shipped modes are `identity` and `comments`. Approval and completion controls
-are not implemented. No request import, reset, email, Sheet write, or payment operation exists.
+request. Modes are `identity`, `comments`, and `handoff`. In handoff mode the reviewer approves
+or does not approve with a comment; only the processor can complete an approved handoff.
+Completion is administrative and does not record a payment. No request import, reset, email,
+Sheet write, or payment operation exists.
 
 The local proof uses actual signed ES256 assertions, HTTP, Chromium, an installed wheel,
 and Firestore emulator transactions. **M6 on Cloud Run passed on 2026-09-12.** Separate
 deployed checks proved Google sign-in, cloud IAM, image inspection and revision persistence;
 the operator accepted the proof. Exact identities, configuration and receipts remain private.
-This is a functional proof, not an adoption claim. Step 34 adds the approval handoff next;
-M7 will separately accept that new behavior on the hosted service. The M6 procedure below
-is retained for repeat execution.
+This is a functional proof, not an adoption claim. Handoff code has local automated coverage;
+**M7 / Step 35 hosted acceptance remains pending.** Run the prepared M7 procedure below next.
+The M6 procedure is retained for repeat execution.
 
 ## Local setup and verification
 
@@ -47,7 +49,9 @@ Stop the emulator with Ctrl+C in its original terminal. The smoke runner stops i
 server and browser on success, failure, or interruption, leaving the emulator running.
 It builds a wheel into a temporary directory, installs it there, launches outside the
 checkout, and uses synthetic project `example-workflow-test`, database `workflow-test`,
-and a new namespace. It rejects non-loopback emulator targets and any supplied private
+and a new namespace. After the comments smoke (at most 60 seconds after readiness), a separate
+90-second handoff check upgrades that same namespace, proves approve/complete, and proves
+not-approve in a fresh namespace; app restarts preserve both. It rejects non-loopback emulator targets and any supplied private
 `PTA_WORKFLOW_CONFIG`; its anonymous gRPC transport never discovers ADC.
 
 The full suite needs Windows for the native statement-parser checks. Existing Linux CI
@@ -79,7 +83,7 @@ the configured signed email remains the discovery authorization. The operator pr
 binds both distinct observed subjects before enabling `comments`. There is no first-visitor
 enrollment. Disabled entries remain structurally present and are denied.
 
-For `comments`, supply both pinned subjects, the exact HTTPS service origin from deployment
+For `comments` or `handoff`, supply both pinned subjects, the exact HTTPS service origin from deployment
 metadata (no trailing slash, explicit default port, path, query, or fragment), a named database,
 and namespace `proof_` followed by a lowercase UUIDv4 generated once. Do not reuse a namespace
 to reset a proof. Restarting with the same source/database/namespace preserves history.
@@ -102,11 +106,13 @@ real signed IAP assertions; this command is not an alternate login.
 | `GET /` and `/static/request.js`, `/static/request.css` | Verified user; same-origin page/resources with no-store and CSP. |
 | `GET /api/me` | `{mode, actor: {subject, email, label, role}, request_id}`; request ID is null in identity mode. |
 | `GET /api/requests/{request_id}` | `{request, events, event_cap: 100}`; complete ordered history at request.version. |
-| `POST /api/requests/{request_id}/comments` | Exactly `{operation_id, expected_version, body}`; success `{receipt: Event}`. |
+| `POST /api/requests/{request_id}/comments` | Both roles, any state; exactly `{operation_id, expected_version, body}`; success `{receipt: Event}`. |
+| `POST /api/requests/{request_id}/decision` | Handoff mode, reviewer only; exactly `{operation_id, expected_version, decision, body}`. Decision is `approve` or `not_approve`; a nonblank comment is required. |
+| `POST /api/requests/{request_id}/complete` | Handoff mode, processor only; exactly `{operation_id, expected_version, body}`. Body may be blank; success `{receipt: Event}`. |
 
 All data routes authenticate before accessing the request. Only the configured request ID
 (SHA-256 of its review key) is accepted; clients cannot choose a namespace. Unknown IDs return
-404. Query parameters are rejected. There are no decision/completion routes in this delivery.
+404. Query parameters are rejected. Decision/completion routes are absent in identity/comments modes.
 
 Mutations require exact configured `Origin`, `Content-Type: application/json`,
 `X-PTA-CSRF: 1`, and any supplied `Sec-Fetch-Site` must be `same-origin`. No CORS permissions
@@ -117,11 +123,23 @@ Text is stored exactly and rendered through autoescaping/textContent.
 Every event records server-owned subject/role/label, the immutable source digest, operation ID,
 canonical payload hash, previous/result state, version, next owner, and server timestamp.
 Money is a two-decimal string; API timestamps are UTC RFC3339 with six fractional digits and Z.
-Comments preserve `AWAITING_REVIEW` and reviewer ownership. This workflow state does not use
+Comments preserve the current state and owner in every state. This workflow state does not use
 private reimbursement recommendations or payment status.
 
+| State | Allowed transition | Result / next owner |
+|---|---|---|
+| `AWAITING_REVIEW` | Reviewer approves with comment | `APPROVED` / processor |
+| `AWAITING_REVIEW` | Reviewer does not approve with reason | `NOT_APPROVED` / null |
+| `APPROVED` | Processor completes the handoff | `COMPLETED` / null |
+
+Not-approved and completed outcomes are final. New invalid transitions return
+`409 INVALID_TRANSITION`; direct wrong-role requests return `403 FORBIDDEN`. Role controls
+never substitute for server authorization. Checkbox-shaped native radios form one accessible
+review outcome group, initially unselected. Both participants can still comment after a final
+outcome. The initial schema/version remains 1/0; existing M6 comments need no migration.
+
 The client creates a UUIDv4 operation ID and expected version. An identical retry by the same
-authorized subject returns its original receipt, including timestamp, before cap/version checks.
+authorized subject returns its original receipt, including timestamp, before cap/state/version checks.
 Reusing the ID with different data/subject returns `409 OPERATION_CONFLICT`. A new operation
 at version 100 returns `409 EVENT_CAP_REACHED`; identical retries still work. History is
 append-only through this API; database administrators can still alter it.
@@ -446,6 +464,303 @@ if ($LASTEXITCODE -ne 0) { throw 'The previous command failed; stop this procedu
 ```
 
 Database/image/source retention and any resource deletion are separate operator decisions.
-Minimum-zero scaling does not guarantee zero cost. A future M7 reuses the existing namespace
-to prove preserved comments and uses a fresh namespace for its alternative terminal branch;
-its controls and detailed acceptance script will be delivered only after M6 passes.
+Minimum-zero scaling does not guarantee zero cost. M7 below preserves existing evidence and
+uses fresh namespaces for alternative outcomes. Never reset or delete a workflow document.
+
+
+## M7: accept the deployed handoff (Step 35)
+
+Run this attended procedure only after Step 34's code gate passes. M6 is already accepted;
+its namespace, pinned subjects, dedicated identities/database, and IAP boundary remain the
+starting point. Use the same two isolated real Google profiles. Local test identities and
+emulator receipts cannot satisfy these rows. Use fictional text only and retain all actual
+metadata, browser observations, and receipts under ignored `reports/output/shared-workflow/`.
+No source edits or database document edits are needed.
+
+### 1. Build the handoff image and preserve the original configuration
+
+Keep the M6 receipt files intact. Create a new private M7 evidence directory, stage path and
+unique image tag. Repeat **M6 section 3: Stage, build and inspect the actual image**, directing
+its `build-submit.json` and `build-receipt.json` redirects into the new M7 evidence directory.
+The source allowlist, fixed Cloud Build recipe, source manifest, actual image-inspection log,
+and immutable digest checks are mandatory again. Use that section's checked `$PtaImageDigest`;
+never use an unchecked tag or M6's old comments-only image.
+
+Before changing runtime values, privately preserve the existing file with an exclusive copy
+(the destination must not exist). No secrets are printed:
+
+```powershell
+[IO.File]::Copy((Resolve-Path -LiteralPath 'secrets/shared-workflow.runtime.json'), (Join-Path (Resolve-Path -LiteralPath 'secrets') 'shared-workflow.m7-original.runtime.json'), $false)
+```
+
+Privately change only `mode` to `handoff`. Keep the M6 namespace, both pinned subjects, database,
+origin, service, project and region. Verify those against the private M6 record. Before deployment,
+each profile saves the current bounded request/history JSON privately as the upgrade baseline.
+
+### 2. Deploy and verify every M7 revision
+
+Use this block for the initial handoff, durability, alternative-branch and restore revisions.
+For each run choose a new private `$PtaM7Receipt` path for filtered metadata, regenerate the
+environment file from the current private runtime JSON, and use a fresh suffix:
+
+```powershell
+$PtaRuntimeJson = [IO.File]::ReadAllText((Resolve-Path -LiteralPath 'secrets/shared-workflow.runtime.json'))
+$PtaEnvJson = @{ PTA_WORKFLOW_CONFIG = $PtaRuntimeJson } | ConvertTo-Json -Compress
+[IO.File]::WriteAllText((Join-Path (Resolve-Path -LiteralPath 'secrets') 'shared-workflow.env.json'), $PtaEnvJson, [Text.UTF8Encoding]::new($false))
+$PtaRevision = 'proof-' + [Guid]::NewGuid().ToString('N').Substring(0,12)
+gcloud run deploy $PtaService --project=$PtaProject --region=$PtaRegion --image=$PtaImageDigest --service-account=$PtaRuntimeIdentity --env-vars-file=secrets/shared-workflow.env.json --no-allow-unauthenticated --iap --revision-suffix=$PtaRevision --cpu=1 --memory=512Mi --min-instances=0 --max-instances=2 --concurrency=20 --timeout=30s
+if ($LASTEXITCODE -ne 0) { throw 'Deployment failed; stop M7.' }
+gcloud run services describe $PtaService --project=$PtaProject --region=$PtaRegion --format='json(status.url,status.latestReadyRevisionName,spec.template.spec.serviceAccountName,spec.template.spec.containers.image)' > $PtaM7Receipt
+if ($LASTEXITCODE -ne 0) { throw 'Revision verification failed; stop M7.' }
+gcloud run services describe $PtaService --project=$PtaProject --region=$PtaRegion --format='value(metadata.annotations[run.googleapis.com/iap-enabled])'
+if ($LASTEXITCODE -ne 0) { throw 'IAP verification failed; stop M7.' }
+gcloud run services get-iam-policy $PtaService --project=$PtaProject --region=$PtaRegion
+if ($LASTEXITCODE -ne 0) { throw 'Invocation policy verification failed; stop M7.' }
+gcloud iap web get-iam-policy --project=$PtaProject --region=$PtaRegion --resource-type=cloud-run --service=$PtaService
+if ($LASTEXITCODE -ne 0) { throw 'IAP policy verification failed; stop M7.' }
+```
+
+Privately verify each changed ready revision, checked image digest, intended runtime identity,
+IAP enabled and private invocation. Recheck the exact two-user admission and inherited grants
+as in M6. Both profiles fully refresh the page after a mode/namespace deployment, then inspect
+`/api/me`: mode is `handoff`, their subjects remain distinct and their roles remain correct.
+The first handoff revision must return the exact baseline comments, timestamps and versions.
+
+### 3. Authenticated browser helpers and approved handoff
+
+Run these helpers separately in each signed-in profile's developer console. They use the
+browser's current session and same-origin headers; never copy authentication cookies or IAP
+assertions into another tool. Do not publish console results containing subjects or cloud IDs.
+Rerun the helpers after each namespace change. `wf.check` throws on a failed observation;
+stop that row and investigate instead of continuing through a failed assertion.
+
+```javascript
+var wf = {};
+wf.check = (condition, message) => { if (!condition) throw new Error(message); };
+wf.sort = value => Array.isArray(value) ? value.map(wf.sort) :
+  value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(k => [k, wf.sort(value[k])])) : value;
+wf.same = (a, b) => JSON.stringify(wf.sort(a)) === JSON.stringify(wf.sort(b));
+wf.get = async path => {
+  const response = await fetch(path, {cache:'no-store', credentials:'same-origin'});
+  wf.check(!response.redirected && (response.headers.get('content-type') || '').includes('application/json'), 'Refresh sign-in and rerun this read');
+  const data = await response.json();
+  wf.check(response.ok, 'Read failed; record status and safe error');
+  return data;
+};
+wf.me = await wf.get('/api/me');
+wf.check(wf.me.mode === 'handoff', 'Wrong deployed mode');
+wf.path = `/api/requests/${wf.me.request_id}`;
+wf.read = async () => {
+  const data = await wf.get(wf.path);
+  wf.check(data.event_cap === 100 && data.events.length === data.request.version, 'Incomplete bounded history');
+  wf.check(data.events.every((e,i) => e.result_version === i+1 && e.expected_version === i), 'History version ordering failed');
+  return data;
+};
+wf.post = async (route, operation) => {
+  const response = await fetch(wf.path + '/' + route, {method:'POST', credentials:'same-origin',
+    headers:{'Content-Type':'application/json','X-PTA-CSRF':'1'}, body:JSON.stringify(operation)});
+  wf.check(!response.redirected && (response.headers.get('content-type') || '').includes('application/json'), 'Uncertain save: preserve operation, refresh sign-in, then retry the same operation');
+  return {status:response.status, data:await response.json()};
+};
+wf.operation = (version, body = 'Fictional M7 observation') =>
+  ({operation_id:crypto.randomUUID(), expected_version:version, body});
+wf.fromReceipt = receipt => ({operation_id:receipt.operation_id, expected_version:receipt.expected_version,
+  body:receipt.body, ...(['approve','not_approve'].includes(receipt.action) ? {decision:receipt.action} : {})});
+wf.denied = async (route, operation, status, code) => {
+  const before = await wf.read();
+  const result = await wf.post(route, operation);
+  wf.check(result.status === status && result.data.error.code === code, 'Unexpected denial');
+  wf.check(wf.same(before, await wf.read()), 'Rejected operation changed history');
+  return result;
+};
+wf.baseline = await wf.read();
+```
+
+Before any decision, reviewer runs:
+
+```javascript
+wf.check(wf.me.actor.role === 'reviewer', 'Use the reviewer profile');
+await wf.denied('complete', wf.operation(wf.baseline.request.version), 403, 'FORBIDDEN');
+```
+
+Processor independently runs:
+
+```javascript
+wf.check(wf.me.actor.role === 'processor', 'Use the processor profile');
+await wf.denied('decision', {...wf.operation(wf.baseline.request.version), decision:'approve'}, 403, 'FORBIDDEN');
+await wf.denied('complete', wf.operation(wf.baseline.request.version), 409, 'INVALID_TRANSITION');
+```
+
+Reviewer uses the page: neither outcome is initially selected; keyboard focus reaches the
+single-choice outcome group, comment label, and Save decision. Select **Approve**, enter a
+fictional comment, and save once. Processor clicks **Reload**, sees `APPROVED`, processor
+ownership, the reviewer's exact comment and actor/time, and the completion control. Reviewer
+reloads and sees that the processor owns the next action. Record both views privately.
+
+In the reviewer console, preserve the actual UI receipt and exercise duplicate/stale/conflict
+checks. These new rejected operations must add no events:
+
+```javascript
+wf.afterDecision = await wf.read();
+wf.approval = wf.afterDecision.events.find(e => e.action === 'approve');
+wf.check(wf.approval && wf.approval.actor_sub === wf.me.actor.subject, 'Missing attributed approval');
+wf.approvalOperation = wf.fromReceipt(wf.approval);
+wf.replay = await wf.post('decision', wf.approvalOperation);
+wf.check(wf.replay.status === 200 && wf.same(wf.replay.data.receipt, wf.approval), 'Retry changed original receipt');
+wf.check(wf.same(wf.afterDecision, await wf.read()), 'Retry added an event');
+await wf.denied('decision', {...wf.approvalOperation, body:'Changed fictional reason'}, 409, 'OPERATION_CONFLICT');
+await wf.denied('decision', {...wf.approvalOperation, decision:'not_approve'}, 409, 'OPERATION_CONFLICT');
+await wf.denied('decision', {...wf.approvalOperation, operation_id:crypto.randomUUID()}, 409, 'STALE_VERSION');
+await wf.denied('decision', {...wf.operation(wf.afterDecision.request.version), decision:'not_approve'}, 409, 'INVALID_TRANSITION');
+```
+
+Processor uses **Mark workflow handoff complete**, optionally adding a fictional comment.
+Both profiles reload and see `COMPLETED`, no next owner, and text explicitly stating that
+completion does not record a payment. In the processor console:
+
+```javascript
+wf.completed = await wf.read();
+wf.completion = wf.completed.events.find(e => e.action === 'complete');
+wf.check(wf.completed.request.state === 'COMPLETED' && wf.completed.request.next_owner_role === null, 'Completion state/owner failed');
+wf.check(wf.completion.actor_sub === wf.me.actor.subject, 'Wrong completion actor');
+wf.completionOperation = wf.fromReceipt(wf.completion);
+wf.replay = await wf.post('complete', wf.completionOperation);
+wf.check(wf.replay.status === 200 && wf.same(wf.replay.data.receipt, wf.completion), 'Completion retry changed receipt');
+await wf.denied('complete', wf.operation(wf.completed.request.version, ''), 409, 'INVALID_TRANSITION');
+```
+
+Each role adds one fictional comment after completion, taking turns and reloading first.
+Both must read those attributed comments without any state/owner change. Save the complete
+JSON privately, redeploy the same image/config through M7 section 2 with a new suffix, then
+prove the exact final history, original M6 comments and completion remain. Privately preserve
+this handoff runtime file as `secrets/shared-workflow.m7-approved.runtime.json` using the same
+exclusive-copy pattern as section 1. Keep the original and approved namespace receipts.
+
+### 4. Not-approved branch in a fresh namespace
+
+Privately change only `namespace` to `'proof_' + [Guid]::NewGuid().ToString()` in the handoff
+runtime JSON, record it, regenerate env and deploy with M7 section 2. Do not alter the earlier
+request or delete its events. Same image, same two accounts, same packaged fictional request.
+Both profiles fully refresh and rerun the browser helpers; require version 0 and empty history.
+
+Reviewer selects **Not approve** with a fictional reason in the page. Processor reloads and
+sees `NOT_APPROVED`, no next owner, and no completion control. Reviewer sees a final outcome
+with no decision control. In the reviewer console:
+
+```javascript
+wf.rejected = await wf.read();
+wf.check(wf.rejected.request.state === 'NOT_APPROVED' && wf.rejected.request.next_owner_role === null, 'Not-approved state/owner failed');
+wf.rejection = wf.rejected.events.find(e => e.action === 'not_approve');
+wf.replay = await wf.post('decision', wf.fromReceipt(wf.rejection));
+wf.check(wf.replay.status === 200 && wf.same(wf.replay.data.receipt, wf.rejection), 'Not-approve retry changed receipt');
+await wf.denied('decision', {...wf.operation(wf.rejected.request.version), decision:'approve'}, 409, 'INVALID_TRANSITION');
+```
+
+Processor runs `await wf.denied('complete', wf.operation((await wf.read()).request.version, ''),
+409, 'INVALID_TRANSITION');`. Both roles may still comment; state and owner remain unchanged.
+Save the final JSON and privately preserve this runtime file as
+`secrets/shared-workflow.m7-not-approved.runtime.json`. Redeploy once with the same config and
+new suffix; compare exact history in both profiles. Nothing has reset the original namespace.
+
+### 5. Real concurrent opposing decisions, read boundaries and recovery
+
+Use one additional fresh namespace for this small race so neither accepted terminal branch
+can be changed by a nondeterministic winner. Preserve its runtime configuration and evidence
+too. It still contains only the same single packaged fictional request. Deploy with section 2,
+then open two tabs of the reviewer's real signed-in profile. Rerun the helper block in each tab
+and verify empty history. Keep the processor's independent profile for the resulting read.
+
+Choose the same future UTC epoch time in milliseconds for both tabs, at least 30 seconds away,
+and place it in `wf.startAt`. In the first tab use decision `approve`; in the second use
+`not_approve`. Each tab creates a distinct operation ID against version 0. Execute both snippets
+before that time; each fires exactly once (no polling or repeated automatic decision):
+
+```javascript
+wf.raceOperation = {...wf.operation(0, 'Fictional competing review'), decision:'approve'}; // second tab: not_approve
+wf.startAt = Date.parse('YYYY-MM-DDTHH:MM:SSZ'); // same future instant in BOTH tabs
+wf.check(Number.isFinite(wf.startAt) && wf.startAt > Date.now(), 'Set a shared future instant');
+await new Promise(resolve => setTimeout(resolve, wf.startAt - Date.now()));
+wf.raceResult = await wf.post('decision', wf.raceOperation);
+```
+
+Preserve each result and operation. At most one competing transition commits. The other returns
+`STALE_VERSION` or a bounded retryable conflict/unavailable result. On `RETRY_CONFLICT`, network
+loss or unavailable response, deliberately replay that tab's **same** `wf.raceOperation` through
+`wf.post`. Do not change its ID, expected version, or body. Resolve both: winner returns its
+original receipt, loser returns `409 STALE_VERSION`, and the shared history has exactly one
+decision event at version 1. Processor reads the winning decision/owner. Record request timings,
+both distinct operation IDs, both results, final JSON and matching receipt from the winning
+retry. This is cloud contention evidence; emulator contention alone is insufficient.
+
+In both profiles check complete bounded reads and negative routes using the current namespace:
+
+```javascript
+wf.boundary = await wf.read();
+wf.check(wf.boundary.events.length === wf.boundary.request.version, 'Incomplete history');
+for (const [path, status, code] of [[wf.path + '?limit=1', 400, 'INVALID_INPUT'],
+  ['/api/requests/unknown', 404, 'NOT_FOUND']]) {
+  const response = await fetch(path, {cache:'no-store'});
+  const data = await response.json();
+  wf.check(response.status === status && data.error.code === code, 'Unsafe read boundary');
+}
+```
+
+One role retains its existing view while the other adds a single fictional comment. Each GET
+must contain exactly versions 1 through its own returned request.version; a later reload shows
+the additional comment, with unchanged decision/owner. The 100-event cap and exact retry at
+that cap are mandatory emulator gates, not a reason to manufacture 100 cloud comments.
+
+If a save response is lost or a login/error page appears, retain the original operation/draft,
+reload current history and use **Retry same operation**. A successful durable receipt is required
+before claiming a save. `STALE_VERSION` reloads history and requires deliberate resubmission;
+it must never silently approve a newer version. Local browser tests cover injected loss/login
+responses; record unsupported cloud injection as local-only coverage, not a fabricated cloud pass.
+
+Finally restore the privately saved approved runtime configuration to the active runtime file,
+regenerate env and redeploy the same checked digest with another new suffix. Both profiles
+refresh and verify the original M6 comments and full completed history match the saved approved
+JSON exactly. The not-approved and race namespace configurations/evidence remain preserved.
+Record this final served namespace/revision. If acceptance fails, keep M7 pending, retain the
+operation IDs and evidence, and repair the fault without resetting any workflow.
+
+### 6. Private M7 acceptance record
+
+Create `reports/output/shared-workflow/m7-acceptance.md` privately. Mark all required rows with
+actual observation/time; leave unsupported or unexecuted checks explicit. Use M6's access
+shutdown commands only when the operator is ready to close this proof, retaining all evidence.
+
+```markdown
+# M7 private acceptance
+Date/operator:
+M6 acceptance reference and original database/namespace:
+Step 34 code revision / source manifest / Cloud Build ID:
+Actual image-inspection log / immutable image digest:
+Pinned reviewer and processor subjects (private; distinct confirmed):
+Approved namespace / initial handoff revision / durability revision / final restored revision:
+Not-approved namespace / revision / durability revision:
+Race namespace / revision / two operation IDs / request timestamps:
+Runtime/build identities, region, IAP/private-invocation and inherited-policy checks:
+
+| Observation | PASS / FAIL / PENDING | Evidence and timestamp |
+|---|---|---|
+| New actual image inspected before admission; preserved M6 configuration | PENDING | |
+| Original comments and exact receipts survive upgrade to handoff | PENDING | |
+| Reviewer approves with comment; processor sees ownership and may complete | PENDING | |
+| Direct reviewer-completion and processor-decision requests are 403 with no event | PENDING | |
+| Completion is administrative, terminal, null owner, correctly attributed | PENDING | |
+| Fresh revision preserves completion, earlier comments and exact final history | PENDING | |
+| Fresh namespace: not-approve is final; completion/change denied, no event added | PENDING | |
+| Both roles comment after each final outcome without altering decision/owner | PENDING | |
+| Original decision/completion retries return identical receipts without new events | PENDING | |
+| Changed ID payload and stale new operations rejected without overwriting | PENDING | |
+| Opposing real reviewer-tab race resolves to one event and original winner receipt | PENDING | |
+| Both users read complete bounded history; later comments appear on reload | PENDING | |
+| Query parameters and unknown IDs fail safely | PENDING | |
+| Original approval namespace restored; both branch histories retained | PENDING | |
+| Both users identify decision, next owner and comment authors; no payment claim | PENDING | |
+
+Local-only loss/session/cap-injection coverage and any unsupported cloud observations:
+Functional proof verdict (separate from adoption):
+Retention owner / namespace configuration backups / intended retention:
+Next: mark Step 35 DONE only after all required M7 observations pass.
+```

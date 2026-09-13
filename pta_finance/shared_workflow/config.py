@@ -76,7 +76,7 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
         raise WorkflowError("CONFIG_INVALID")
     if type(data["schema_version"]) is not int or data["schema_version"] != 1:
         raise WorkflowError("CONFIG_INVALID")
-    if data["mode"] not in ("identity", "comments"):
+    if data["mode"] not in ("identity", "comments", "handoff"):
         raise WorkflowError("CONFIG_INVALID")
     patterns = {
         "project_id": r"[a-z][a-z0-9-]{4,28}[a-z0-9]",
@@ -145,7 +145,7 @@ def load_config(environment: Mapping[str, str] | None = None) -> Config:
         or not is_uuid4(namespace[6:])
     ):
         raise WorkflowError("CONFIG_INVALID")
-    if data["mode"] == "comments":
+    if data["mode"] in ("comments", "handoff"):
         if any(user.subject is None for user in roster):
             raise WorkflowError("IDENTITY_BINDING_REQUIRED")
         if origin is None:
