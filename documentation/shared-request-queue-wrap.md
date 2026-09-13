@@ -2,7 +2,7 @@ Completion gate: no consistent completion markers found -- running full check (f
 
 # Live shared request queue readiness check
 
-Target: [shared-request-queue-plan.md](shared-request-queue-plan.md), following [technical review](shared-request-queue-review.md) and [proposal publication 1](shared-request-queue-proposal.html). Both build units are PENDING. This full forward check ran in-session, independently of the technical checklist but not through an independent reviewer agent.
+Target: [shared-request-queue-plan.md](shared-request-queue-plan.md), following [technical review](shared-request-queue-review.md) and [proposal publication 2](shared-request-queue-proposal.html). Both build units are PENDING. This full forward check ran in-session, independently of the technical checklist but not through an independent reviewer agent. All thirteen checks were rerun after adding the ticket-lifecycle follow-up. Its separate product design is not an engineering plan and is not certified build-ready by this verdict; it does not expand Steps 36–37.
 
 §1 Schemas and data structures — pass
 
@@ -38,6 +38,7 @@ Target: [shared-request-queue-plan.md](shared-request-queue-plan.md), following 
 - **Development and quickstart:** §9 gives install/configure/first-run, all six toolchain activities, cleanup, candidate/integration/CI gates and the independent review sequence. The existing smoke parser supplies the cited flags; the new test files and added queue phase are explicitly future deliverables. M8 authors its deployment procedure in Step 36, before Step 37 executes it.
 - **References and scope:** §4 distinguishes existing source paths from §5's new files; the accepted preview is now included beside the repository's other public examples. Private runtime inputs are named by mechanism and purpose, with no embedded identities or values. §3 excludes intake, money movement, notifications and larger-team features. The root roadmap includes the discoverable goal and phase pointer.
 - **Step integrity and live evidence:** Step 36 is code with automated Done-when criteria and prepared M8 artifacts. Step 37 is operator execution with private observations and judgment only. Its exact-image, real-account, request-isolation, original-history preservation and fresh-revision requirements satisfy the deployment-seam check. No conditional predicate is needed. M7 remains an external dependency, not an implicitly completed step.
+- **Follow-up boundary:** D8 and the included [ticket lifecycle design](shared-ticket-lifecycle-design.md) distinguish the operator's Processor-only creator choice from proposed draft/edit/submit/withdraw/archive behavior. The design records permission and state rules, and names the storage/API/capacity contracts still needed before a later build. It is an input to subsequent planning, not a hidden third build step or a claim of shipped CRUD behavior.
 
 ## Blocker
 
@@ -55,7 +56,9 @@ None.
 
 Planning-artifact mechanical verification is recorded separately in ignored `reports/output/shared-workflow/queue-plan/verification.json`. No application test, cloud deployment, M7 observation or M8 acceptance pass is inferred from this document-readiness verdict. No wrap autofixes were required.
 
-The mechanical check passed: two correctly shaped pending steps, all eleven stable decision IDs, existing local publication/source links, an identical copy of the accepted preview, and an unchanged user `.gitignore`. Headless Chromium rendered desktop light/dark and narrow layouts without script errors or horizontal overflow; print emulation retained a light background and produced a PDF. The desktop rendering was visually inspected. This used a separate local browser and did not touch the attended Google sessions. Print pagination was not visually inspected.
+Publication 1's mechanical check passed with two correctly shaped pending steps, eleven stable decision IDs, existing local links, an identical preview copy and an unchanged user `.gitignore`. Its light/dark/mobile rendering and print-background/PDF checks passed; the desktop rendering was visually inspected. Publication 2 adds P5/P6/D8 without renumbering any ID. Its mechanical verification is recorded separately in ignored `reports/output/shared-workflow/ticket-lifecycle-design/verification.json`. Local verification does not touch the attended Google sessions. Print pagination was not visually inspected.
+
+Publication 2's check passed: all fourteen decision IDs match the plan, the linked lifecycle document exists, both pending step contracts remain intact, and desktop light/dark/mobile layouts render without script errors or horizontal overflow. Print-background/PDF generation, preview-byte equality and user-ignore preservation also pass. No application test pass is claimed for this documentation-only amendment.
 
 Next: synchronize the reviewed plan's issue bodies before build dispatch. Finish the outstanding Step 35/M7 evidence and operator judgment before Step 36. No repeated approval of the bounded queue defaults is required.
 

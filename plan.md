@@ -859,6 +859,10 @@ The original request and receipts remain intact. Five additional packaged fictio
 start awaiting review; actual signed-in actions establish their decisions. Request intake,
 private imports, more users, notifications and payment tracking remain future work.
 
+The requested follow-up is [ticket creation and lifecycle rules](documentation/shared-ticket-lifecycle-design.md):
+Processor-only creation, shared drafts, review submission and reversible archive. Product rules are recorded;
+its engineering plan follows acceptance of the live queue and does not expand Steps 36–37.
+
 ---
 
 ## Manual UAT

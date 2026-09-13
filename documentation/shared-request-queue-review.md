@@ -6,6 +6,8 @@ Reviewed and rechecked against repository baseline `5287796cf5be8f8ca88e26298785
 
 The final plan has no remaining technical defects identified by this review. Step 35 / M7 is an explicit, still-open execution prerequisite. Plan readiness does not complete that prerequisite.
 
+**Ticket-lifecycle amendment recheck:** At planning HEAD `240679a6e3801fbea0f4839b8d183a1764f8d40e`, the operator requested ticket creation/CRUD and selected Processor-only creation. All numbered checks below were reconsidered against the amended queue plan. New P5/P6 and D8 record the [product rules](shared-ticket-lifecycle-design.md) as a separate follow-up after M8. Steps 36–37, their fixed catalog, API shapes and gates are unchanged. The follow-up is explicitly not a build-ready engineering plan: new durable discovery, source revisions, ID/API contracts and bounds must be specified against the implemented queue before its own build. The READY finding here applies only to the fixed-queue plan, not to CRUD implementation readiness.
+
 ## Blockers
 
 None.
@@ -27,6 +29,7 @@ None.
 - M8 creates new actions only on the five new requests. Reading or exactly replaying an existing receipt on the original must not add events. This makes the original-history preservation criterion and the acceptance procedure agree.
 - Unexpected existing events stop the first-run baseline check. A resumed acceptance run uses preserved operation evidence instead of resetting a fixture or pretending it is new.
 - The plan explains the tooling and the build/review/integration sequence inline. The summary read loop has a shared incoming deadline and runs outside the asynchronous web event loop.
+- The follow-up's role policy is explicit: Processor creates shared drafts; Reviewer cannot edit them. Draft correction, submission locking, a competing withdrawal/decision, archive eligibility and restore semantics are stated without changing current source checks or claiming those behaviors exist. `rg` of `load_source`, `Store`, `create_app`, source hashes and transition consumers corroborates that this needs a subsequent lifecycle/storage design.
 
 These were author clarifications during review, not the skill's mechanical step-autofix classes. Rechecking the revised plan found no further defect.
 

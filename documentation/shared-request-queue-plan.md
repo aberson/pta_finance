@@ -47,6 +47,8 @@ Steps 32–34 are delivered. M6 is accepted. M7 has passed both terminal branche
 
 Request creation/import, private reimbursements, uploads, receipt files, Gmail/Drive/Sheets integration, payments, email sending, notifications, more users, per-request assignees, multiple organizations, reopening/reassignment, deletion, exports, analytics, arbitrary catalog configuration, and pagination beyond this fixed six-request demonstration. No private data discovery or credential changes accompany queue setup.
 
+**Requested next milestone:** The operator has requested ticket creation and CRUD (create/read/update/delete) rules, and explicitly selected Processor-only creation. The [ticket lifecycle design](shared-ticket-lifecycle-design.md) records that choice and proposed draft/submit/withdraw/archive rules. D8 places its implementation after this live queue is accepted; it is not part of the fixed six-request Step 36 contract.
+
 There is no automatic refresh interval, subscription, background job, or unattended workflow. Reads occur on page entry/return and explicit Reload. Filtering is local to the most recently fetched authorized list. The autonomous-behavior observation trigger does not apply; actual hosted acceptance still does.
 
 ## 4. Impact Analysis
@@ -170,6 +172,10 @@ M8 loads the same six IDs in both accounts and compares the original M7 history 
 
 Retain the accepted queue namespace on success. If a queue deployment fails, redeploy the previously inspected handoff image with the preserved M7 runtime/env, verify the original history, and retain all five extra documents and receipts. Never reset/delete them. Later retry reuses the intended stored state; a deliberately fresh rehearsal namespace must be named and recorded separately. No unattended browser focus takeover: use the already-authorized sessions only when desktop time is coordinated; never export cookies/assertions or retry Google's rejected automated-login method.
 
+### D8 — Ticket creation follows the accepted live queue
+
+The next product milestone lets the Processor create shared drafts, edit draft details, submit them to the Reviewer, and archive/restore eligible tickets without erasing history. Processor-only creation is the operator's choice. Draft locking, explicit withdrawal before correction, reversible archive and sequencing after M8 are proposed defaults in the [lifecycle design](shared-ticket-lifecycle-design.md). Both enabled roles see shared drafts and histories. These rules need a subsequent engineering plan against the implemented queue, including durable discovery, IDs, submitted revisions, API contracts and compatibility. Do not convert Step 36's fixed catalog into open ticket intake as an incidental edit.
+
 ## 7. Build Steps
 
 ### Automated build
@@ -218,7 +224,7 @@ M8 execution is delegated to the agent wherever mechanical checks and available 
 | Finite demonstration | A six-request summary scan does not prove arbitrary-scale intake | Keep count fixed, no pagination/scale claim, no private import. Revisit query/index design when expanding scope. |
 | Parallel work / user files | Shared docs or staging could include another task's changes | Recheck Git/worktrees; isolated code worktree; scope all staging/commits; preserve `.gitignore` and all private state. |
 
-No unresolved product choice blocks this bounded plan. Six requests, refresh behavior, catalog mode and implementation seams are defaults D1–D7, not statements that the operator personally selected those details. Actual IDs/account/billing values stay in the already configured private runtime. Further intake/team/notification scope needs a later plan.
+No unresolved product choice blocks this bounded plan. Six requests, refresh behavior, catalog mode and implementation seams are defaults D1–D7, not statements that the operator personally selected those details. D8 records the requested ticket-creation follow-up and its separate planning boundary. Actual IDs/account/billing values stay in the already configured private runtime. Further team/notification scope needs a later plan.
 
 ## 9. Testing Strategy and Quickstart
 
@@ -263,6 +269,8 @@ Each command is sequential and must return zero before continuing; command failu
 | P2 | P | Retain the same two-account workflow with individual request histories | Operator accepted milestone |
 | P3 | P | Use several fictional requests before real reimbursements | Operator accepted milestone |
 | P4 | P | Use the accepted preview as the interface direction | Operator accepted preview |
+| P5 | P | Add ticket creation and explicit CRUD rules | Operator requested follow-up |
+| P6 | P | Only the Treasurer/Processor creates tickets in the first version | Operator selected |
 | D1 | D | Six fixed packaged sources, opt-in queue mode, old-mode compatibility | Proposed default |
 | D2 | D | Compose existing per-request stores; preserve original schema/receipts; seed no decisions | Proposed default |
 | D3 | D | Six bounded validated reads, summary-only output, per-row consistency | Proposed default |
@@ -270,5 +278,6 @@ Each command is sequential and must return zero before continuing; command failu
 | D5 | D | Refresh on entry/return/Reload; local filters reset when returning to the queue | Proposed default |
 | D6 | D | Existing authenticated local harness plus independent deep code reviews | Proposed default |
 | D7 | D | Finish M7, build one queue slice, then execute separate M8 with real decisions | Proposed default |
+| D8 | D | After M8, plan shared drafts, locked submissions, withdrawal for correction and reversible archive/restore | Proposed default; product rules recorded, engineering plan pending |
 
 Plan preparation may proceed while M7 waits for browser availability and wording judgment. This plan does not grant unattended access to an actively used desktop or mark any remaining M7 observation as passed.
