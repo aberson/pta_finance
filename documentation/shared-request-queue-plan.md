@@ -1,6 +1,6 @@
 # Phase 8 — Live shared request queue
 
-**Status:** PLANNED — implementation has not started. Steps 36–37 are reserved here.
+**Status:** STEP 36 DONE — fixed queue code delivery passes. Step 37 / M8 hosted acceptance remains PENDING. See [delivery evidence](shared-request-queue-sync.md).
 **Source baseline:** `5287796cf5be8f8ca88e262987858ddca2baf72d` (Step 34 delivered).
 **Prerequisite:** Step 35 / M7 is DONE with all deployed observations and operator wording acceptance; see [M7 closeout](shared-workflow-proof-sync.md#m7-closeout--2026-09-13-utc). Step 36 may start.
 **Decision provenance:** The operator accepted the fictional queue preview and asked to start making it a live shared system. This authorizes the bounded queue milestone described below; preview approval is not M7 acceptance.
@@ -184,8 +184,9 @@ The next product milestone lets the Processor create shared drafts, edit draft d
 
 - **Problem:** Make the six-request queue reflect each authenticated request's durable workflow.
 - **Type:** code
-- **Status:** PENDING
+- **Status:** DONE
 - **Issue:** #68
+- **Delivery:** `7656e406eaf5e4ef89b2daac557f5465fc55f61c`; complete candidate/main gates, six fresh independent lenses and feature CI passed. [Evidence](shared-request-queue-sync.md). Hosted M8 remains separate.
 - **Flags:** --reviewers deep --isolation worktree
 - **Files:** Existing files in §4; new catalog, five example bundles, queue template/assets and two test files in §5; extend `docs/shared-workflow-proof.md` with the M8 procedure.
 - **Existing context:** `Store` already isolates a source's transaction/history path; `create_app` admits one ID, and `load_source()` is the immutable original source. Extend their composition while preserving old modes, schema and receipts.

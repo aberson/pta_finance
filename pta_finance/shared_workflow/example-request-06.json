@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "report": {
+    "title": "Reimbursement Review",
+    "eyebrow": "Example PTA / Treasurer",
+    "subtitle": "Receipts, decisions, and next steps / Fictional example data",
+    "organization": "Example PTA",
+    "email_signoff": [
+      "Thank you!",
+      "Example PTA Treasurer"
+    ],
+    "logo_data_uri": "",
+    "confirmed_outstanding": "0.00",
+    "cutoff_date": "2026-07-01",
+    "policy_version": "example-v1",
+    "as_of_date": "2026-08-15"
+  },
+  "provenance": {
+    "mapped_sha256": "ca637d16b98bf9811448c57f091aa88bc1dcda36a1647afe12449a283bd04891",
+    "policy_sha256": "fbb7e9ece02d4759d0175e05dc6b1bb75b3e52b42f27dd5b0a0cceca8659e351",
+    "source_snapshot_sha256": "c4a7a9513fe9a78ec2fa6b5675ba5a5f21b70ad3ba0dd15d2b930b86fc2e1919",
+    "accounted_review_keys": [
+      "submission:v1:0b343ed8c85e7aaf8ff4f52b62a1458de8ff8172962c8b52b0ee522d69d0c9d6"
+    ]
+  },
+  "source_summary": {
+    "mapped_rows": 2,
+    "mapped_submissions": 1,
+    "mapped_total": "63.40",
+    "first_received": "2026-08-12",
+    "last_received": "2026-08-12"
+  },
+  "tickets": [
+    {
+      "review_key": "submission:v1:0b343ed8c85e7aaf8ff4f52b62a1458de8ff8172962c8b52b0ee522d69d0c9d6",
+      "ref": "DEMO-06",
+      "form_label": "",
+      "origin": "submission",
+      "display_order": 1,
+      "requestor_name": "Example Volunteer",
+      "form_type": "Example Reimbursement Form",
+      "submitted": "2026-08-12",
+      "submitted_label": "",
+      "payment_method": "Zelle",
+      "source_evidence_sha256": "43f842d511f5fb9796f9b2e490aa0c12b7160911486433bee3a59d1046ae2c57",
+      "source": {
+        "stated_total": "63.40",
+        "mapped_total": "63.40",
+        "categories": [
+          "Art Display"
+        ],
+        "flags": []
+      },
+      "live": {
+        "workflow_state": "ACTIVE",
+        "decision": "UNREVIEWED",
+        "payment_status": "NOT_PAID",
+        "payment_date": "",
+        "confirmations": []
+      },
+      "review": {
+        "status": "A",
+        "action": "Review fictional line items",
+        "block": "Review fictional line items.",
+        "asks": [],
+        "note": "Fictional fixed queue source. No decision or payment has been recorded.",
+        "email_questions": [],
+        "email_context": ""
+      },
+      "items": [
+        {
+          "item_key": "DEMO-06:line:1",
+          "source_index": 1,
+          "source_date": "2026-08-10",
+          "source_description": "Mounting boards",
+          "source_amount": "43.40",
+          "canonical_category": "Art Display",
+          "display_date": "",
+          "display_item": "",
+          "reviewed_amount": "",
+          "status": "A",
+          "why": "Fictional line item awaiting reviewer decision."
+        },
+        {
+          "item_key": "DEMO-06:line:2",
+          "source_index": 2,
+          "source_date": "2026-08-10",
+          "source_description": "Display tape",
+          "source_amount": "20.00",
+          "canonical_category": "Art Display",
+          "display_date": "",
+          "display_item": "",
+          "reviewed_amount": "",
+          "status": "A",
+          "why": "Fictional line item awaiting reviewer decision."
+        }
+      ],
+      "messages": [
+        {
+          "kind": "draft",
+          "date": "",
+          "mode": "generated",
+          "body": ""
+        }
+      ],
+      "archive_note": ""
+    }
+  ],
+  "supplemental": {
+    "anchors_sha256": "7cf328132c108ce0db03308b2c409c569e1a8a211b4c5f4cfab3bc3913789f8a",
+    "evidence": [],
+    "events": [],
+    "unmatched": []
+  },
+  "appendix": {
+    "amendments": [],
+    "cfo_checks": [],
+    "excluded": [],
+    "defects": []
+  }
+}

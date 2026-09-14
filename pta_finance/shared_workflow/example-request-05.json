@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "report": {
+    "title": "Reimbursement Review",
+    "eyebrow": "Example PTA / Treasurer",
+    "subtitle": "Receipts, decisions, and next steps / Fictional example data",
+    "organization": "Example PTA",
+    "email_signoff": [
+      "Thank you!",
+      "Example PTA Treasurer"
+    ],
+    "logo_data_uri": "",
+    "confirmed_outstanding": "0.00",
+    "cutoff_date": "2026-07-01",
+    "policy_version": "example-v1",
+    "as_of_date": "2026-08-15"
+  },
+  "provenance": {
+    "mapped_sha256": "6b3b3ecd60d8c9b963eaaff374c635aa97e9d71f9bc8bbc246451a734a2c5d35",
+    "policy_sha256": "e7d52c8d0a556620f8795f9659a2167dabc884a9c4004acf7020cd5a2e2b332f",
+    "source_snapshot_sha256": "be077c6ea6fcec91ff830a6417b901dfdb2640eae14729e35762e320649ae92a",
+    "accounted_review_keys": [
+      "submission:v1:dce7a63e65f2340041f4656b1be9733d7761ac6aa547ecd45f0305720628357e"
+    ]
+  },
+  "source_summary": {
+    "mapped_rows": 2,
+    "mapped_submissions": 1,
+    "mapped_total": "225.00",
+    "first_received": "2026-08-12",
+    "last_received": "2026-08-12"
+  },
+  "tickets": [
+    {
+      "review_key": "submission:v1:dce7a63e65f2340041f4656b1be9733d7761ac6aa547ecd45f0305720628357e",
+      "ref": "DEMO-05",
+      "form_label": "",
+      "origin": "submission",
+      "display_order": 1,
+      "requestor_name": "Example Volunteer",
+      "form_type": "Example Reimbursement Form",
+      "submitted": "2026-08-12",
+      "submitted_label": "",
+      "payment_method": "Zelle",
+      "source_evidence_sha256": "40ffc60314a51faf8443655461fa5e6e277e88466d466f247a329cd8362a275f",
+      "source": {
+        "stated_total": "225.00",
+        "mapped_total": "225.00",
+        "categories": [
+          "Field Day"
+        ],
+        "flags": []
+      },
+      "live": {
+        "workflow_state": "ACTIVE",
+        "decision": "UNREVIEWED",
+        "payment_status": "NOT_PAID",
+        "payment_date": "",
+        "confirmations": []
+      },
+      "review": {
+        "status": "A",
+        "action": "Review fictional line items",
+        "block": "Review fictional line items.",
+        "asks": [],
+        "note": "Fictional fixed queue source. No decision or payment has been recorded.",
+        "email_questions": [],
+        "email_context": ""
+      },
+      "items": [
+        {
+          "item_key": "DEMO-05:line:1",
+          "source_index": 1,
+          "source_date": "2026-08-10",
+          "source_description": "Activity cones",
+          "source_amount": "150.00",
+          "canonical_category": "Field Day",
+          "display_date": "",
+          "display_item": "",
+          "reviewed_amount": "",
+          "status": "A",
+          "why": "Fictional line item awaiting reviewer decision."
+        },
+        {
+          "item_key": "DEMO-05:line:2",
+          "source_index": 2,
+          "source_date": "2026-08-10",
+          "source_description": "Team ribbons",
+          "source_amount": "75.00",
+          "canonical_category": "Field Day",
+          "display_date": "",
+          "display_item": "",
+          "reviewed_amount": "",
+          "status": "A",
+          "why": "Fictional line item awaiting reviewer decision."
+        }
+      ],
+      "messages": [
+        {
+          "kind": "draft",
+          "date": "",
+          "mode": "generated",
+          "body": ""
+        }
+      ],
+      "archive_note": ""
+    }
+  ],
+  "supplemental": {
+    "anchors_sha256": "55e46e3d29db2d68502c79142765248c6a6ec692ecacf8305089d7eb7d9af2af",
+    "evidence": [],
+    "events": [],
+    "unmatched": []
+  },
+  "appendix": {
+    "amendments": [],
+    "cfo_checks": [],
+    "excluded": [],
+    "defects": []
+  }
+}

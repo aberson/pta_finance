@@ -40,7 +40,7 @@ def test_identity_and_comments_config_are_explicit() -> None:
     assert config.port == 8788 and config.origin == "https://example.run.app"
 
 
-@pytest.mark.parametrize("mode", ["identity", "comments", "handoff"])
+@pytest.mark.parametrize("mode", ["identity", "comments", "handoff", "queue"])
 @pytest.mark.parametrize("origin", ["https://example.org", "https://[::1]"])
 def test_supported_origin_is_returned_unchanged(mode: str, origin: str) -> None:
     value = runtime() if mode == "identity" else comments()
@@ -50,7 +50,7 @@ def test_supported_origin_is_returned_unchanged(mode: str, origin: str) -> None:
     assert config.mode == mode and config.origin == origin
 
 
-@pytest.mark.parametrize("mode", ["identity", "comments", "handoff"])
+@pytest.mark.parametrize("mode", ["identity", "comments", "handoff", "queue"])
 @pytest.mark.parametrize(
     "origin",
     [
@@ -164,10 +164,11 @@ def test_fixture_projection_uses_only_source_fields() -> None:
 
 
 @pytest.mark.parametrize("field", ["origin", "database", "namespace", "subject"])
-def test_handoff_requires_complete_data_bindings(field: str) -> None:
+@pytest.mark.parametrize("mode", ["handoff", "queue"])
+def test_handoff_and_queue_require_complete_data_bindings(field: str, mode: str) -> None:
     value = comments()
-    value["mode"] = "handoff"
-    assert load_config({"PTA_WORKFLOW_CONFIG": json.dumps(value)}).mode == "handoff"
+    value["mode"] = mode
+    assert load_config({"PTA_WORKFLOW_CONFIG": json.dumps(value)}).mode == mode
     if field == "subject":
         value["users"][0][field] = None
     else:

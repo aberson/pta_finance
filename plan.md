@@ -843,16 +843,16 @@ private. The independent plan review is recorded in
 
 ---
 
-## Phase 8 — Live shared request queue — planned (Steps 36–37)
+## Phase 8 — Live shared request queue — built; M8 next (Steps 36–37)
 
 **Objective:** Connect the accepted queue design to shared storage so the same two signed-in
 participants can find six fictional requests and work through each request's own history.
 
-**Status: PLANNED.** The operator requested this next milestone after reviewing the fictional
-queue preview. The scoped plan is
+**Status: STEP 36 DONE; STEP 37 / M8 NEXT.** The fixed six-request queue passes the complete
+candidate/main suites, independent reviews and feature CI. The scoped plan is
 [documentation/shared-request-queue-plan.md](documentation/shared-request-queue-plan.md).
-Reserve Steps 36–37: one application slice followed by separate hosted acceptance M8.
-Step 35 / M7 is DONE with actual hosted observations and operator acceptance. Step 36 may now build on the accepted handoff.
+Step 36 delivers the application slice; Step 37 separately verifies its hosted behavior as M8.
+Step 35 / M7 is DONE. See [queue delivery evidence](documentation/shared-request-queue-sync.md).
 
 The original request and receipts remain intact. Five additional packaged fictional requests
 start awaiting review; actual signed-in actions establish their decisions. Request intake,
@@ -920,3 +920,12 @@ its engineering plan follows acceptance of the live queue and does not expand St
   | Reads | Both users read complete bounded history and later comments; unexpected query parameters and unknown IDs fail safely. The 100-event cap remains mandatory emulator coverage. |
   | Restoration and explanation | Restore the original approved namespace and retain both branch histories. Both users identify the decision, next owner and comment authors without interpreting completion as payment. |
   | Evidence | Record the exact image, revisions, namespace configuration backups and all 15 runbook observations privately in `reports/output/shared-workflow/m7-acceptance.md`. Mark Step 35 DONE only after every required row passes. |
+
+### M8: Accept the live shared queue with both accounts
+
+- **Source step:** Step 37 in [the queue plan](documentation/shared-request-queue-plan.md); Step 36 code delivery is complete.
+- **Issue:** #69
+- **Status:** PENDING — actual queue cloud/image and two-account observations have not run.
+- **Commands to run:** Execute the ordered [M8 runbook](docs/shared-workflow-proof.md#m8-accept-the-deployed-shared-queue-step-37-prepared-not-executed). Preserve the accepted M7 runtime, checked image and full original history; stage the delivered allowlist, build and inspect the actual six-source image, and admit queue mode in the same namespace with the same two subjects. Keep every private receipt.
+- **What you're looking for:** Both users see the same six requests and current counts, can search/filter/open each history, and correctly identify the next owner. Real controls approve DEMO-03, do not approve DEMO-04, approve and complete DEMO-06, and add comments to DEMO-02 and DEMO-05. Each action changes only its selected history; the original M7 request and exact receipts remain intact. Wrong-role, unknown/query and disabled-account reads/writes/replays fail safely. Restore the disabled user even after an interrupted test, verify both enabled identities, and prove all six full histories survive a fresh revision. The operator confirms finding work, ownership/history and administrative nonpayment wording.
+- **Completion boundary:** Record every required row privately and mark Step 37 DONE only after actual observations and operator judgment pass. Ticket lifecycle engineering and build follow this accepted queue.

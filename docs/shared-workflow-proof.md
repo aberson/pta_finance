@@ -1,7 +1,7 @@
 # Shared workflow proof
 
-The optional `web` service lets two configured Google accounts comment on one fictional
-request. Modes are `identity`, `comments`, and `handoff`. In handoff mode the reviewer approves
+The optional `web` service lets two configured Google accounts work on fictional
+requests. Modes are `identity`, `comments`, `handoff`, and `queue`. In handoff or queue mode the reviewer approves
 or does not approve with a comment; only the processor can complete an approved handoff.
 Completion is administrative and does not record a payment. No request import, reset, email,
 Sheet write, or payment operation exists.
@@ -10,8 +10,9 @@ The local proof uses actual signed ES256 assertions, HTTP, Chromium, an installe
 and Firestore emulator transactions. **M6 on Cloud Run passed on 2026-09-12.** Separate
 deployed checks proved Google sign-in, cloud IAM, image inspection and revision persistence;
 the operator accepted the proof. Exact identities, configuration and receipts remain private.
-This is a functional proof, not an adoption claim. Handoff code has local automated coverage;
-**M7 / Step 35 hosted acceptance remains pending.** Run the prepared M7 procedure below next.
+This is a functional proof, not an adoption claim. **M7 / Step 35 hosted acceptance passed**;
+see the [M7 closeout](../documentation/shared-workflow-proof-sync.md#m7-closeout--2026-09-13-utc).
+Queue code has local verification; **M8 / Step 37 remains pending**. Its prepared procedure is below.
 The M6 procedure is retained for repeat execution.
 
 ## Local setup and verification
@@ -51,7 +52,12 @@ It builds a wheel into a temporary directory, installs it there, launches outsid
 checkout, and uses synthetic project `example-workflow-test`, database `workflow-test`,
 and a new namespace. After the comments smoke (at most 60 seconds after readiness), a separate
 90-second handoff check upgrades that same namespace, proves approve/complete, and proves
-not-approve in a fresh namespace; app restarts preserve both. It rejects non-loopback emulator targets and any supplied private
+not-approve in a fresh namespace; app restarts preserve both. A separate queue phase then upgrades
+the original namespace, validates six installed sources, replays an original receipt, uses
+real queue/detail controls to mutate new requests, and compares all histories after restart.
+The queue phase has its own 60-second deadline after readiness; queue/detail screenshots go
+to ignored `.build-step/queue-smoke/`. Queue browser tests add desktop/mobile/error evidence
+under `.build-step/queue-browser/`. It rejects non-loopback emulator targets and any supplied private
 `PTA_WORKFLOW_CONFIG`; its anonymous gRPC transport never discovers ADC.
 
 The full suite needs Windows for the native statement-parser checks. Existing Linux CI
@@ -68,6 +74,23 @@ a separate acceptance observation. [Emulator limitations](https://docs.cloud.goo
 
 ## Configuration and behavior
 
+`queue` serves the six fixed packaged sources at `/`, with per-request details at
+`/requests/{request_id}` and authenticated summaries at `/api/requests`. Both enabled roles
+see the same catalog. The original `NEW-01` source/path and every receipt are retained;
+the five `DEMO-02` through `DEMO-06` sources start awaiting review with zero events when first
+admitted. No decision is seeded. Each request has its own version, 100-event cap and exact
+operation retries. `/api/me` has `request_id: null` in queue mode. Old modes retain their
+one-request contracts and return 404 for the queue/list paths and queue-only assets.
+
+The list reads six bounded validated histories under the existing 20-second deadline,
+returns summary fields only, and fails as a whole if any history is unavailable/inconsistent.
+Rows are ordered by update time descending, with request ID ascending for ties. It is a
+per-row consistent view, not a simultaneous snapshot of all activity. Counts use all six
+states; title/reference search and status/next-owner filters affect only visible rows.
+Reload refreshes the list; entering or returning to the queue resets filters and loads
+current data. A failed refresh keeps the prior list visibly marked stale. There is no polling,
+local storage, query-string filtering, request creation or payment operation.
+
 Copy `deployment/shared-workflow/runtime.example.json` to ignored
 `secrets/shared-workflow.runtime.json`, then edit actual values privately. The example's
 project, users, and region are fictional examples, not deployment defaults.
@@ -83,7 +106,7 @@ the configured signed email remains the discovery authorization. The operator pr
 binds both distinct observed subjects before enabling `comments`. There is no first-visitor
 enrollment. Disabled entries remain structurally present and are denied.
 
-For `comments` or `handoff`, supply both pinned subjects, the exact HTTPS service origin from deployment
+For `comments`, `handoff`, or `queue`, supply both pinned subjects, the exact HTTPS service origin from deployment
 metadata (no trailing slash, explicit default port, path, query, or fragment), a named database,
 and namespace `proof_` followed by a lowercase UUIDv4 generated once. Do not reuse a namespace
 to reset a proof. Restarting with the same source/database/namespace preserves history.
@@ -764,3 +787,215 @@ Functional proof verdict (separate from adoption):
 Retention owner / namespace configuration backups / intended retention:
 Next: mark Step 35 DONE only after all required M7 observations pass.
 ```
+
+## M8: accept the deployed shared queue (Step 37; prepared, not executed)
+
+Start only after M7 is accepted and Step 36's delivered source passes its independent code
+gates. Use that delivered commit and the same two enabled, pinned Google subjects. Coordinate
+desktop time before using their already-authorized browser sessions. Keep cookies/assertions
+inside those sessions; do not export them or retry an automated Google login. The operator
+provides sign-in availability and the final functional judgment; the agent performs mechanical
+checks wherever tools permit. All account/cloud values, histories and screenshots stay private.
+
+### 1. Preserve the accepted handoff and inspect the new image
+
+Create a uniquely named ignored `reports/output/shared-workflow/m8-<run>/` directory and set
+`$PtaM8Evidence` to its absolute path. Record M7 acceptance, Step 36 commit, the currently served
+namespace, exact two subjects, immutable handoff image digest and ready revision. Set
+`$PtaM8HandoffDigest` from M7's inspected digest receipt; never infer it from a mutable tag.
+Before changing mode, use both signed-in profiles to save the full original detail JSON,
+including all source/display fields, timestamps, version and events. Preserve exact M7
+operation payloads/receipts as well. This baseline must describe the accepted completed request.
+
+Preserve the active M7 files using exclusive copies to new names; never overwrite a prior run:
+
+```powershell
+[IO.File]::Copy((Resolve-Path -LiteralPath 'secrets/shared-workflow.runtime.json'), (Join-Path $PtaM8Evidence 'm7.runtime.json'), $false)
+[IO.File]::Copy((Resolve-Path -LiteralPath 'secrets/shared-workflow.env.json'), (Join-Path $PtaM8Evidence 'm7.env.json'), $false)
+```
+
+Repeat **M6 section 3: Stage, build and inspect the actual image**, with a new `$PtaStage`, a
+unique `$PtaImageTag`, and all build receipts redirected into `$PtaM8Evidence`. Stage only the
+explicit manifest; never upload the checkout. The manifest now includes `catalog.py`, five
+additional bundles, and the queue template/CSS/JS. Require the fixed Cloud Build recipe to
+succeed, including the actual-image `IMAGE INSPECTION PASS` confirming the **six-source
+catalog**. Save that log, source-content manifest, build receipt and checked immutable
+`$PtaImageDigest`. Local wheel/catalog tests do not replace actual-image inspection.
+
+Privately change **only** `mode` from `handoff` to `queue` in the active runtime. Compare all
+other fields against `m7.runtime.json`, including namespace, database, origin, both users,
+enabled flags, subjects, service, project and region. Stop on any unexpected difference.
+Keep the original M7 backup unchanged. No document reset, source change or migration is needed.
+
+### 2. Deploy the checked digest and capture every revision
+
+Use this block for initial admission and the same-image persistence revision. Choose a new
+`$PtaM8RevisionReceipt` in the evidence directory each time. Existing `$PtaService`, `$PtaProject`,
+`$PtaRegion`, `$PtaRuntimeIdentity` and other cloud variables come from M7's private record.
+
+```powershell
+$PtaRuntimeJson = [IO.File]::ReadAllText((Resolve-Path -LiteralPath 'secrets/shared-workflow.runtime.json'))
+$PtaEnvJson = @{ PTA_WORKFLOW_CONFIG = $PtaRuntimeJson } | ConvertTo-Json -Compress
+[IO.File]::WriteAllText((Join-Path (Resolve-Path -LiteralPath 'secrets') 'shared-workflow.env.json'), $PtaEnvJson, [Text.UTF8Encoding]::new($false))
+$PtaRevision = 'queue-' + [Guid]::NewGuid().ToString('N').Substring(0,12)
+gcloud run deploy $PtaService --project=$PtaProject --region=$PtaRegion --image=$PtaImageDigest --service-account=$PtaRuntimeIdentity --env-vars-file=secrets/shared-workflow.env.json --no-allow-unauthenticated --iap --revision-suffix=$PtaRevision --cpu=1 --memory=512Mi --min-instances=0 --max-instances=2 --concurrency=20 --timeout=30s
+if ($LASTEXITCODE -ne 0) { throw 'Queue deployment failed; preserve evidence and use the recovery procedure.' }
+gcloud run services describe $PtaService --project=$PtaProject --region=$PtaRegion --format='json(status.url,status.latestReadyRevisionName,spec.template.spec.serviceAccountName,spec.template.spec.containers.image)' > $PtaM8RevisionReceipt
+if ($LASTEXITCODE -ne 0) { throw 'Revision verification failed; stop M8.' }
+```
+
+Repeat M6 section 4's filtered IAP-enabled and private IAM receipts into uniquely named M8
+files. Verify the checked digest is the ready image, runtime identity/resource limits are
+unchanged, IAP remains enabled, there is no public invocation grant, and the exact two-user
+admission/inherited policy boundary still holds. Never dump the runtime environment into the
+public transcript. Fully refresh both profiles after each deployment; `/api/me` must show
+`queue`, `request_id: null`, and each profile's original subject and role.
+
+### 3. Capture the six-request baseline before any new action
+
+Reuse M7's `wf.check`, `wf.sort`, `wf.same`, and `wf.get` browser helpers, then define this
+queue reader in each signed-in profile. It performs finite reads only:
+
+```javascript
+wf.me = await wf.get('/api/me');
+wf.check(wf.me.mode === 'queue' && wf.me.request_id === null, 'Wrong queue mode');
+wf.readQueue = async () => {
+  const list = await wf.get('/api/requests');
+  wf.check(list.request_count === 6 && list.request_cap === 6 && list.requests.length === 6, 'Wrong catalog size');
+  wf.check(new Set(list.requests.map(row => row.request_id)).size === 6, 'Duplicate request ID');
+  const histories = {};
+  for (const row of list.requests) {
+    const detail = await wf.get('/api/requests/' + row.request_id);
+    wf.check(detail.request.request_id === row.request_id && detail.event_cap === 100, 'Wrong detail');
+    wf.check(detail.events.length === detail.request.version, 'Incomplete history');
+    wf.check(detail.events.every((event, index) => event.result_version === index + 1 && event.expected_version === index && event.request_id === row.request_id), 'History version/request mismatch');
+    histories[row.display.ref] = detail;
+  }
+  wf.check(Object.keys(histories).sort().join(',') === 'DEMO-02,DEMO-03,DEMO-04,DEMO-05,DEMO-06,NEW-01', 'Wrong catalog refs');
+  return {list, histories};
+};
+wf.initial = await wf.readQueue();
+wf.check(wf.initial.histories['NEW-01'].request.state === 'COMPLETED', 'Original M7 state changed');
+for (const ref of ['DEMO-02','DEMO-03','DEMO-04','DEMO-05','DEMO-06']) {
+  const detail = wf.initial.histories[ref];
+  wf.check(detail.request.version === 0 && detail.events.length === 0 && detail.request.state === 'AWAITING_REVIEW' && detail.request.next_owner_role === 'reviewer', 'Unexpected existing state: stop the first-admission baseline');
+}
+```
+
+Privately compare both profiles' six IDs and complete original `NEW-01` detail to the preserved
+M7 baseline, including all events and exact receipts. Save both initial queue snapshots. A
+retry after earlier queue work may legitimately contain events: stop the fresh-baseline row,
+locate the preserved operations/evidence and resume their intended state. Never clear histories
+to make this check pass. A deliberately fresh rehearsal namespace must be separately named
+and recorded; it does not replace acceptance in the original M7 namespace.
+
+Page navigation clears developer-console variables. Rerun the queue read helpers after
+navigating, and restore `wf.initial` from the privately saved first-admission JSON before
+running the final comparison below. Do not replace that baseline with a current read. Keep
+these JSON transfers in the authorized private session; no cookies/assertions or browser
+local-storage persistence are needed.
+
+The original request is read-only throughout M8, except optional exact replay of its saved
+M7 operations by their original actor. Reuse the original operation ID/version/body/decision
+and route, compare the returned receipt exactly, then assert full original detail is unchanged.
+Never create a fresh original-request operation merely to demonstrate a button.
+
+### 4. Use the actual controls and verify each isolated history
+
+Execute these actions sequentially through the queue and detail pages. Read/save all six
+details before and after each action, and verify only the selected request gains one event:
+
+| Actor | Request | Actual page action | Result |
+|---|---|---|---|
+| Reviewer | DEMO-03 | Approve with a fictional reason | APPROVED, next owner processor; leave unfinished |
+| Reviewer | DEMO-04 | Not approve with a fictional reason | NOT_APPROVED, no next owner |
+| Reviewer | DEMO-06 | Approve with a fictional reason | APPROVED, next owner processor |
+| Processor | DEMO-06 | Reload, then Mark workflow handoff complete | COMPLETED, no next owner; no payment recorded |
+| Reviewer | DEMO-02 | Add one fictional comment | AWAITING_REVIEW, reviewer ownership retained |
+| Processor | DEMO-05 | Add one fictional comment | AWAITING_REVIEW, reviewer ownership retained |
+
+After each action the other profile refreshes its queue, follows the selected detail link,
+and reads the exact actor subject/role/label, body, timestamp, previous/result state and version.
+The summary's latest event must match that detail's final event without exposing its body or
+subject in the list. Save receipts and all six histories privately. Preserve a pending draft
+and original operation ID on ambiguous responses; use **Retry same operation** on the same
+detail page, never a new operation against another request. A stale version requires deliberate
+reload/resubmission. Record any interrupted observation explicitly and resume from saved state.
+
+In each profile test title/reference search (case-insensitive, trimmed), every status card,
+status select and next-owner select including No further action. Counts still describe all
+six requests while the visible count reports matches. An unmatched search provides Reset
+filters. Keyboard traversal reaches real detail links. Use direct links, browser Back and
+All requests; return resets filters and loads the latest data. Reload is disabled while pending
+and freshness is visible. Compare desktop and narrow layout; no workflow status implies payment.
+Injected network/non-JSON/stale-response UI errors and cap behavior are local automated evidence;
+do not invent hosted observations for injections that were not actually performed.
+
+With no concurrent activity, compute counts from observed states (not fixture flags):
+
+```javascript
+wf.final = await wf.readQueue();
+wf.counts = Object.fromEntries(['AWAITING_REVIEW','APPROVED','COMPLETED','NOT_APPROVED'].map(state =>
+  [state, Object.values(wf.final.histories).filter(detail => detail.request.state === state).length]));
+wf.check(wf.same(wf.counts, {AWAITING_REVIEW:2, APPROVED:1, COMPLETED:2, NOT_APPROVED:1}), 'Unexpected observed counts');
+wf.check(wf.same(wf.initial.histories['NEW-01'], wf.final.histories['NEW-01']), 'Original history changed');
+```
+
+Compare every untouched request after each earlier action, not only the final count. In both
+profiles request a valid but unadmitted 64-hex ID and a malformed ID through detail HTML, detail
+API and mutation paths; expect 404 with no exposed history. Query parameters must return 400.
+Wrong-role decision/completion attempts on a new request return 403 and add no event. Record
+only safe error envelopes publicly; subjects/history remain private.
+
+### 5. Disabled-user denial, persistence and recovery
+
+Preserve the enabled queue runtime/env to new private backup files before the negative test.
+Temporarily disable one configured user (`enabled: false`), retaining both roster entries;
+deploy the same checked digest with section 2. In that user's existing profile, verify queue
+HTML, list, detail HTML/API, static assets, a new mutation and exact receipt replay all return
+403. The enabled user can still read. Save denial results and verify no histories changed.
+Restore the saved enabled queue runtime in a **finally** recovery step even if a negative
+observation fails, regenerate env, redeploy, and verify `/api/me` plus queue/detail reads in
+both accounts. Do not call the negative-test row complete until both enabled roles are read
+back successfully. If restoration fails, stop acceptance, retain the backup and repair it.
+
+Save all six final detail JSONs and the enabled queue config, then deploy the **same checked
+image digest**, mode, namespace and subjects with another fresh revision suffix using section 2.
+Verify a new ready revision and unchanged security/runtime policy. Both profiles reload,
+rerun `wf.readQueue()`, and compare all six full histories and exact original M7 receipts
+against the saved final snapshot. On success keep this accepted queue namespace active.
+
+If queue deployment or acceptance fails, preserve all evidence and extra documents. Restore
+the exact preserved M7 runtime and env without editing their namespace or subjects, and redeploy
+the previously inspected `$PtaM8HandoffDigest` with the same Cloud Run/IAP/resource flags and
+a fresh suffix. Verify handoff mode, the ready digest/revision, both users' access and the
+original complete history against M7. Retain the five added documents and their receipts.
+Retry the queue later against their intended stored state; rollback never deletes/resets them.
+
+### 6. Private acceptance record
+
+Create `m8-acceptance.md` under the private evidence directory. Record source commit, manifest,
+build ID, actual-image catalog-inspection log, immutable queue and rollback digests, M7 baseline,
+namespace/config backups, both pinned subjects, each revision/policy receipt, operation IDs,
+timestamps, screenshots and comparisons. Leave unexecuted rows PENDING:
+
+| Observation | PASS / FAIL / PENDING | Evidence/time |
+|---|---|---|
+| Preserved M7 runtime/env, immutable image, full original history and receipts | PENDING | |
+| Declared source staged; actual six-source image inspection passed before deploy | PENDING | |
+| Same namespace/subjects/security boundary; both users see identical six-ID baseline | PENDING | |
+| Original unchanged; five new sources initially zero-event awaiting review | PENDING | |
+| Real controls establish DEMO-03 approval, DEMO-04 rejection and DEMO-06 completion | PENDING | |
+| Both roles comment on different new requests; exact attribution/versions retained | PENDING | |
+| Every action changes only its selected history; original receipts replay exactly | PENDING | |
+| Summary ordering/latest event/counts match observed details; final counts 2/1/2/1 | PENDING | |
+| Search/status/owner filters, no-match reset, keyboard/direct links and mobile layout | PENDING | |
+| Reload/Back/All requests show current data with reset filters and visible freshness | PENDING | |
+| Unknown IDs/query/wrong-role denial; disabled reads/mutations/replays denied | PENDING | |
+| Disabled entry restored and both enabled identities verified even after failure | PENDING | |
+| Same-image fresh revision preserves all six full histories and original M7 receipts | PENDING | |
+| Operator finds work/next owner/history and understands completion is not payment | PENDING | |
+
+Record local-only injected-failure coverage separately. Step 37 becomes DONE only after all
+required actual observations and the operator's functional judgment pass. Ticket creation,
+shared drafts and later lifecycle work remain a subsequent engineering plan after M8.

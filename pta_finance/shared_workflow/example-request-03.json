@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "report": {
+    "title": "Reimbursement Review",
+    "eyebrow": "Example PTA / Treasurer",
+    "subtitle": "Receipts, decisions, and next steps / Fictional example data",
+    "organization": "Example PTA",
+    "email_signoff": [
+      "Thank you!",
+      "Example PTA Treasurer"
+    ],
+    "logo_data_uri": "",
+    "confirmed_outstanding": "0.00",
+    "cutoff_date": "2026-07-01",
+    "policy_version": "example-v1",
+    "as_of_date": "2026-08-15"
+  },
+  "provenance": {
+    "mapped_sha256": "18b0e05219c6d810c41f12de0dffb0b56b04a4a9da122aaafacda112615fd5f8",
+    "policy_sha256": "9b533df9201a1045238d8e5f1bd4eef15e03abd025e1c4ceb5f7353b8070767f",
+    "source_snapshot_sha256": "1f2951d11d181a20d3db3fe2bdb6b71b18ea7225b11d0d60fd622e6f7f17173c",
+    "accounted_review_keys": [
+      "submission:v1:d82d0d6054faa3ca1c429d970c60b0e2767fc21cfdf58c28d09e2a5c9f3a6720"
+    ]
+  },
+  "source_summary": {
+    "mapped_rows": 2,
+    "mapped_submissions": 1,
+    "mapped_total": "142.75",
+    "first_received": "2026-08-12",
+    "last_received": "2026-08-12"
+  },
+  "tickets": [
+    {
+      "review_key": "submission:v1:d82d0d6054faa3ca1c429d970c60b0e2767fc21cfdf58c28d09e2a5c9f3a6720",
+      "ref": "DEMO-03",
+      "form_label": "",
+      "origin": "submission",
+      "display_order": 1,
+      "requestor_name": "Example Volunteer",
+      "form_type": "Example Reimbursement Form",
+      "submitted": "2026-08-12",
+      "submitted_label": "",
+      "payment_method": "Zelle",
+      "source_evidence_sha256": "80033f2feb8b8e36eb025a23a6473634190db3002e472bf53b7bdbee14dba80c",
+      "source": {
+        "stated_total": "142.75",
+        "mapped_total": "142.75",
+        "categories": [
+          "Garden Club"
+        ],
+        "flags": []
+      },
+      "live": {
+        "workflow_state": "ACTIVE",
+        "decision": "UNREVIEWED",
+        "payment_status": "NOT_PAID",
+        "payment_date": "",
+        "confirmations": []
+      },
+      "review": {
+        "status": "A",
+        "action": "Review fictional line items",
+        "block": "Review fictional line items.",
+        "asks": [],
+        "note": "Fictional fixed queue source. No decision or payment has been recorded.",
+        "email_questions": [],
+        "email_context": ""
+      },
+      "items": [
+        {
+          "item_key": "DEMO-03:line:1",
+          "source_index": 1,
+          "source_date": "2026-08-10",
+          "source_description": "Seed packets",
+          "source_amount": "82.75",
+          "canonical_category": "Garden Club",
+          "display_date": "",
+          "display_item": "",
+          "reviewed_amount": "",
+          "status": "A",
+          "why": "Fictional line item awaiting reviewer decision."
+        },
+        {
+          "item_key": "DEMO-03:line:2",
+          "source_index": 2,
+          "source_date": "2026-08-10",
+          "source_description": "Planting trays",
+          "source_amount": "60.00",
+          "canonical_category": "Garden Club",
+          "display_date": "",
+          "display_item": "",
+          "reviewed_amount": "",
+          "status": "A",
+          "why": "Fictional line item awaiting reviewer decision."
+        }
+      ],
+      "messages": [
+        {
+          "kind": "draft",
+          "date": "",
+          "mode": "generated",
+          "body": ""
+        }
+      ],
+      "archive_note": ""
+    }
+  ],
+  "supplemental": {
+    "anchors_sha256": "4f6a297c81817951b2afa0526b6c0195268a3f14025a36d18e80f0c4ec67acfc",
+    "evidence": [],
+    "events": [],
+    "unmatched": []
+  },
+  "appendix": {
+    "amendments": [],
+    "cfo_checks": [],
+    "excluded": [],
+    "defects": []
+  }
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Mapping
 from importlib.resources import files
 from typing import Any
 from urllib.parse import urlsplit
@@ -17,10 +18,13 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException
 from starlette.middleware.base import RequestResponseEndpoint
 
+from . import models
 from .auth import IAPVerifier
+from .catalog import REQUEST_CAP, load_catalog
 from .config import Config
 from .models import (
     BODY_LIMIT,
+    EVENT_CAP,
     Deadline,
     WorkflowError,
     comment_input,
@@ -39,22 +43,104 @@ CSP = (
 )
 
 
-def create_app(config: Config, verifier: IAPVerifier, store: Store | None) -> FastAPI:
+def _queue_workflow() -> dict[str, Any]:
+    # These overrides control presentation only. Accepted keys and owner relations
+    # always come from the workflow authority, including entries without overrides.
+    state_styles = {
+        "AWAITING_REVIEW": ("Needs review", "awaiting"),
+        "APPROVED": ("Approved", "approved"),
+        "COMPLETED": ("Completed", "completed"),
+        "NOT_APPROVED": ("Not approved", "rejected"),
+    }
+    order = {state: index for index, state in enumerate(state_styles)}
+    states = {}
+    for state in sorted(models.STATE_OWNERS, key=lambda state: order.get(state, len(order))):
+        label, css = state_styles.get(state, (state.replace("_", " ").capitalize(), ""))
+        states[state] = {
+            "owner": models.STATE_OWNERS[state],
+            "label": label,
+            "css": css,
+            "card_label": "Ready for completion" if state == "APPROVED" else label,
+            "option_label": "Approved · ready for completion" if state == "APPROVED" else label,
+        }
+    action_labels = {
+        "comment": "added a comment",
+        "approve": "approved",
+        "not_approve": "did not approve",
+        "complete": "completed the handoff",
+    }
+    return {
+        "states": states,
+        "owners": {role: role.capitalize() for role in models.ROLES}
+        | {"none": "No further action"},
+        "actions": {
+            action: action_labels.get(action, action.replace("_", " "))
+            for action in ("comment", *models.TRANSITIONS)
+        },
+    }
+
+
+def create_app(
+    config: Config,
+    verifier: IAPVerifier,
+    store: Store | None,
+    *,
+    catalog_stores: Mapping[str, Store] | None = None,
+) -> FastAPI:
     """Explicit dependencies; only the strict __main__ constructs production dependencies."""
     source = load_source()
+    admitted: dict[str, Store] = {}
+    if config.mode == "queue":
+        catalog = load_catalog()
+        if catalog_stores is None or store is None:
+            raise WorkflowError("CONFIG_INVALID")
+        admitted = dict(catalog_stores)
+        if (
+            set(admitted) != set(catalog)
+            or admitted.get(source["request_id"]) is not store
+            or any(
+                not isinstance(target, Store)
+                or target.source != catalog[request_id]
+                or target.config != config
+                or target.database != f"projects/{config.project_id}/databases/{config.database}"
+                or target.path
+                != (
+                    f"projects/{config.project_id}/databases/{config.database}/documents/"
+                    f"workflow_proofs/{config.namespace}/requests/{request_id}"
+                )
+                for request_id, target in admitted.items()
+            )
+        ):
+            raise WorkflowError("CONFIG_INVALID")
+    elif catalog_stores is not None:
+        raise WorkflowError("CONFIG_INVALID")
     if config.mode == "identity" and store is not None:
         raise WorkflowError("CONFIG_INVALID")
     if config.mode != "identity" and store is None:
         raise WorkflowError("STORE_UNAVAILABLE")
-    if store is not None:
-        store.seed()
+    if config.mode != "queue" and store is not None:
+        admitted[source["request_id"]] = store
+    # Every dependency and packaged source is admitted before any create-if-absent write.
+    for target in admitted.values():
+        target.seed()
     resources = files("pta_finance.shared_workflow")
     template = Environment(autoescape=True, undefined=StrictUndefined).from_string(
         resources.joinpath("templates/request.html.j2").read_text(encoding="utf-8")
     )
+    queue_template = (
+        Environment(autoescape=True, undefined=StrictUndefined).from_string(
+            resources.joinpath("templates/queue.html.j2").read_text(encoding="utf-8")
+        )
+        if config.mode == "queue"
+        else None
+    )
     static = {
         name: resources.joinpath(f"static/{name}").read_text(encoding="utf-8")
-        for name in ("request.js", "request.css")
+        for name in (
+            ("request.js", "request.css", "queue.js", "queue.css")
+            if config.mode == "queue"
+            else ("request.js", "request.css")
+        )
     }
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -128,9 +214,9 @@ def create_app(config: Config, verifier: IAPVerifier, store: Store | None) -> Fa
         return response
 
     def data_store(request_id: str) -> Store:
-        if store is None or request_id != source["request_id"]:
+        if request_id not in admitted:
             raise WorkflowError("NOT_FOUND")
-        return store
+        return admitted[request_id]
 
     @app.get("/healthz")
     async def health() -> dict[str, str]:
@@ -139,11 +225,28 @@ def create_app(config: Config, verifier: IAPVerifier, store: Store | None) -> Fa
     @app.get("/")
     async def page(request: Request) -> HTMLResponse:
         return HTMLResponse(
-            template.render(
+            (queue_template or template).render(
                 actor=request.state.actor,
                 mode=config.mode,
                 request_id=source["request_id"] if store is not None else "",
+                event_cap=EVENT_CAP,
+                request_cap=REQUEST_CAP,
                 origin=config.origin or "/",
+                workflow=_queue_workflow() if queue_template is not None else None,
+            )
+        )
+
+    @app.get("/requests/{request_id}")
+    async def detail_page(request_id: str, request: Request) -> HTMLResponse:
+        if config.mode != "queue":
+            raise WorkflowError("NOT_FOUND")
+        data_store(request_id)
+        return HTMLResponse(
+            template.render(
+                actor=request.state.actor,
+                mode=config.mode,
+                request_id=request_id,
+                origin=config.origin,
             )
         )
 
@@ -160,8 +263,54 @@ def create_app(config: Config, verifier: IAPVerifier, store: Store | None) -> Fa
         return {
             "mode": config.mode,
             "actor": request.state.actor.public(),
-            "request_id": source["request_id"] if store is not None else None,
+            "request_id": (
+                source["request_id"] if store is not None and config.mode != "queue" else None
+            ),
         }
+
+    def summaries(deadline: Deadline) -> dict[str, Any]:
+        rows = []
+        for target in admitted.values():
+            deadline.remaining()
+            result = target.read(deadline)
+            request = result["request"]
+            latest = result["events"][-1] if result["events"] else None
+            rows.append(
+                {
+                    **{
+                        key: request[key]
+                        for key in (
+                            "request_id",
+                            "state",
+                            "next_owner_role",
+                            "version",
+                            "updated_at",
+                        )
+                    },
+                    "display": {
+                        key: request["display"][key]
+                        for key in ("ref", "title", "submitted_on", "total")
+                    },
+                    "latest_event": (
+                        {
+                            key: latest[key]
+                            for key in ("action", "actor_label", "actor_role", "created_at")
+                        }
+                        if latest
+                        else None
+                    ),
+                }
+            )
+        rows.sort(key=lambda row: row["request_id"])
+        rows.sort(key=lambda row: row["updated_at"], reverse=True)
+        return {"requests": rows, "request_count": len(rows), "request_cap": REQUEST_CAP}
+
+    @app.get("/api/requests")
+    async def listing(request: Request) -> JSONResponse:
+        if config.mode != "queue":
+            raise WorkflowError("NOT_FOUND")
+        result = await run_in_threadpool(summaries, request.state.deadline)
+        return JSONResponse(wire(result))
 
     @app.get("/api/requests/{request_id}")
     async def read(request_id: str, request: Request) -> JSONResponse:
@@ -198,7 +347,7 @@ def create_app(config: Config, verifier: IAPVerifier, store: Store | None) -> Fa
         )
         return JSONResponse({"receipt": wire(receipt)})
 
-    if config.mode == "handoff":
+    if config.mode in ("handoff", "queue"):
 
         @app.post("/api/requests/{request_id}/decision")
         async def decision(request_id: str, request: Request) -> JSONResponse:

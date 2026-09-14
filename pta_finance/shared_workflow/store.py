@@ -305,7 +305,7 @@ class Store:
         ):
             raise WorkflowError("FORBIDDEN")
         if self.config.mode == "identity" or (
-            action != "comment" and self.config.mode != "handoff"
+            action != "comment" and self.config.mode not in ("handoff", "queue")
         ):
             raise WorkflowError("NOT_FOUND")
         mutation_input(data, action)

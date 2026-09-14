@@ -12,8 +12,8 @@
 A command-line Python toolkit for budgets, financial reports, and reimbursement review.
 **Google Sheets holds the budget data**; a private local email archive and review bundle hold
 reimbursement evidence. It generates HTML reports, including a browser-readable review queue.
-An optional, separate web proof uses one packaged fictional request with shared comments and
-an administrative reviewer-to-processor handoff. Real Cloud Run comments acceptance (M6)
+An optional, separate web proof offers a fixed six-request fictional queue with shared comments and
+an administrative reviewer-to-processor handoff, while retaining its single-request modes. Real Cloud Run comments acceptance (M6)
 has passed; hosted handoff acceptance (M7) has also passed. There is no LLM dependency or Apps Script; scheduled
 financial reports use GitHub Actions.
 
@@ -116,12 +116,16 @@ scripts/            identity guard + README screenshot capture and PowerPoint ex
 
 - **Optional shared-workflow proof** (`shared_workflow/`, `[web]`): separate FastAPI/Uvicorn
   entry point, strict `PTA_WORKFLOW_CONFIG` JSON, verified IAP assertions, two pinned subjects,
-  and bounded Firestore transactions. It loads only its packaged fictional bundle through
+  and bounded Firestore transactions. It loads only its packaged fictional bundles through
   the existing offline validator; it never discovers private CLI configuration or imports
   the CLI/Sheet/Gmail clients. `identity` mode never creates a store; `comments` mode provides
   a shared request and append-only plain-text comments, capped at 100 events. `handoff` mode
   adds reviewer approve/not-approve and processor administrative completion through the same
-  transaction lane. Both outcomes are final; comments preserve state/owner in every state.
+  transaction lane. Opt-in `queue` mode composes six independently validated Stores and serves
+  authenticated summaries at `/api/requests`, the queue at `/`, and details at `/requests/{id}`.
+  The catalog is package-owned; there is no creation/import or arbitrary discovery. Queue summaries
+  reuse full-history reads under one request deadline; one failed row fails the whole list.
+  Both outcomes are final; comments preserve state/owner in every state.
   Role checks precede receipt retries, which precede cap/state/version checks. There is no
   import, reset, or payment route. Production rejects emulator/test settings.
   `scripts/shared_workflow_smoke.py` is a nonpackaged local test factory using ephemeral keys,
@@ -223,8 +227,8 @@ changes or disappears. Neither command sends mail or writes Sheets. **Strict pay
 (`01f7bff`, merge `aa9b1b1`): schema-v2 anchors carry `payment_links` (two exact Zelle grammars,
 per-ticket reference-digest bindings, atomic quarantine) and `operator_payments`; three fail-closed
 majors from the landing review remain open as the next fix step (see
-`documentation/reimbursement-refresh-plan.md` § 2026-09-06 amendment). The Step 34 delivery gate
-has **1,173 collected tests** with dev/slides/web installed and the local Firestore emulator running: 1,170 passed and three unchanged existing skips in both candidate and main; all 223 web cases pass without skips. The unchanged workflow files retain the nine-case optional PyYAML supplement pass. Strict package mypy, Ruff, packaging and six independent review lenses pass, as do all three feature CI jobs. Hosted handoff acceptance is still M7 / Step 35.
+`documentation/reimbursement-refresh-plan.md` § 2026-09-06 amendment). The Step 36 delivery gate
+has **1,231 collected tests** with dev/slides/web installed and the local Firestore emulator running: 1,228 passed and 3 unchanged existing skips in both candidate and main; all 281 web cases pass without skips. Strict package mypy, Ruff, packaging/privacy checks, installed-wheel browser smoke and six fresh independent lenses pass, as do all three feature CI jobs. Hosted handoff acceptance passed M7 / Step 35; hosted queue acceptance remains M8 / Step 37.
 **The Gmail read-only ingest connector has also shipped** (`documentation/gmail-ingest-plan.md`,
 tracking span #15–#22; deferred #18 and its umbrella #22 remain open): `gmail_source.py` + the
 `fetch-mail` CLI replace the manual Google Takeout export —

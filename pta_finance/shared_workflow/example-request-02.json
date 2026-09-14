@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "report": {
+    "title": "Reimbursement Review",
+    "eyebrow": "Example PTA / Treasurer",
+    "subtitle": "Receipts, decisions, and next steps / Fictional example data",
+    "organization": "Example PTA",
+    "email_signoff": [
+      "Thank you!",
+      "Example PTA Treasurer"
+    ],
+    "logo_data_uri": "",
+    "confirmed_outstanding": "0.00",
+    "cutoff_date": "2026-07-01",
+    "policy_version": "example-v1",
+    "as_of_date": "2026-08-15"
+  },
+  "provenance": {
+    "mapped_sha256": "84e1a7bbe15d8f9c0f66191d9007288640cb4be80f8de806e31287409686f950",
+    "policy_sha256": "4fc1d6a01e48136954098a43dcb0742a64f8f66c9d53838f54714eb85404e2e1",
+    "source_snapshot_sha256": "430ba714471429e024e949c0168fbbe1681259786550762b7f237a83621f83a7",
+    "accounted_review_keys": [
+      "submission:v1:5d3fa214695fe365c98bef6e82656b0e291793761e4b6cd4388469fffd72184e"
+    ]
+  },
+  "source_summary": {
+    "mapped_rows": 2,
+    "mapped_submissions": 1,
+    "mapped_total": "96.00",
+    "first_received": "2026-08-12",
+    "last_received": "2026-08-12"
+  },
+  "tickets": [
+    {
+      "review_key": "submission:v1:5d3fa214695fe365c98bef6e82656b0e291793761e4b6cd4388469fffd72184e",
+      "ref": "DEMO-02",
+      "form_label": "",
+      "origin": "submission",
+      "display_order": 1,
+      "requestor_name": "Example Volunteer",
+      "form_type": "Example Reimbursement Form",
+      "submitted": "2026-08-12",
+      "submitted_label": "",
+      "payment_method": "Zelle",
+      "source_evidence_sha256": "0df6bb926bc33d6cea5e8733829aa837f8a0f8a1917e518e07940d29d9d0fd68",
+      "source": {
+        "stated_total": "96.00",
+        "mapped_total": "96.00",
+        "categories": [
+          "Family Reading"
+        ],
+        "flags": []
+      },
+      "live": {
+        "workflow_state": "ACTIVE",
+        "decision": "UNREVIEWED",
+        "payment_status": "NOT_PAID",
+        "payment_date": "",
+        "confirmations": []
+      },
+      "review": {
+        "status": "A",
+        "action": "Review fictional line items",
+        "block": "Review fictional line items.",
+        "asks": [],
+        "note": "Fictional fixed queue source. No decision or payment has been recorded.",
+        "email_questions": [],
+        "email_context": ""
+      },
+      "items": [
+        {
+          "item_key": "DEMO-02:line:1",
+          "source_index": 1,
+          "source_date": "2026-08-10",
+          "source_description": "Book display cards",
+          "source_amount": "56.00",
+          "canonical_category": "Family Reading",
+          "display_date": "",
+          "display_item": "",
+          "reviewed_amount": "",
+          "status": "A",
+          "why": "Fictional line item awaiting reviewer decision."
+        },
+        {
+          "item_key": "DEMO-02:line:2",
+          "source_index": 2,
+          "source_date": "2026-08-10",
+          "source_description": "Reading activity sheets",
+          "source_amount": "40.00",
+          "canonical_category": "Family Reading",
+          "display_date": "",
+          "display_item": "",
+          "reviewed_amount": "",
+          "status": "A",
+          "why": "Fictional line item awaiting reviewer decision."
+        }
+      ],
+      "messages": [
+        {
+          "kind": "draft",
+          "date": "",
+          "mode": "generated",
+          "body": ""
+        }
+      ],
+      "archive_note": ""
+    }
+  ],
+  "supplemental": {
+    "anchors_sha256": "5a3a5b9320b815ce88a5ddac95d830a1f91ab5657acc63cb1ef262ecf687765b",
+    "evidence": [],
+    "events": [],
+    "unmatched": []
+  },
+  "appendix": {
+    "amendments": [],
+    "cfo_checks": [],
+    "excluded": [],
+    "defects": []
+  }
+}

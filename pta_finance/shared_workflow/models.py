@@ -233,12 +233,22 @@ def payload_hash(source: dict[str, Any], data: dict[str, Any], action: str = "co
 
 
 def load_source() -> dict[str, Any]:
+    """The original immutable source, including its historical projection."""
+    return load_packaged_source(
+        "example-request.json", "NEW-01", "Classroom supply reimbursement", "184.50", 2
+    )
+
+
+def load_packaged_source(
+    filename: str, ref: str, title: str, expected_total: str, item_count: int
+) -> dict[str, Any]:
+    """Validate a package-owned bundle and construct the unchanged source wire shape."""
     try:
         resources = files("pta_finance.shared_workflow")
         for resource in ("templates/request.html.j2", "static/request.js", "static/request.css"):
             if not resources.joinpath(resource).is_file():
                 raise ValueError("missing resource")
-        with as_file(resources.joinpath("example-request.json")) as path:
+        with as_file(resources.joinpath(filename)) as path:
             report = load_bundle(path)
         if len(report.tickets) != 1:
             raise ValueError("one request required")
@@ -247,15 +257,19 @@ def load_source() -> dict[str, Any]:
             (item.source_amount or Decimal("0.00") for item in ticket.items), Decimal("0.00")
         )
         if (
-            ticket.ref != "NEW-01"
-            or len(ticket.items) != 2
-            or total != Decimal("184.50")
-            or report.source_summary.mapped_rows != 2
+            ticket.ref != ref
+            or len(ticket.items) != item_count
+            or total != Decimal(expected_total)
+            or report.source_summary.mapped_rows != item_count
             or report.source_summary.mapped_submissions != 1
             or report.source_summary.mapped_total != total
             or report.provenance.accounted_review_keys != (ticket.review_key,)
             or report.settings.confirmed_outstanding != Decimal("0.00")
             or ticket.live.decision != "UNREVIEWED"
+            or ticket.live.workflow_state != "ACTIVE"
+            or ticket.live.payment_status != "NOT_PAID"
+            or ticket.live.payment_date is not None
+            or ticket.live.confirmations
         ):
             raise ValueError("fictional inventory mismatch")
         return {
@@ -265,7 +279,7 @@ def load_source() -> dict[str, Any]:
             "source_sha256": ticket.source_evidence_sha256,
             "display": {
                 "ref": ticket.ref,
-                "title": "Classroom supply reimbursement",
+                "title": title,
                 "submitted_on": ticket.submitted.isoformat(),
                 "total": f"{total:.2f}",
                 "items": [

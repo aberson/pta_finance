@@ -50,12 +50,16 @@ def inspect(app: Path = Path("/app")) -> None:
             raise RuntimeError("Installed application content differs from the staged receipt.")
         if b'"private_key":' in content or b"PTA_PRIVATE_CANARY" in content:
             raise RuntimeError("Credential or synthetic private canary found in application files.")
+    from pta_finance.shared_workflow.catalog import REQUEST_CAP, load_catalog
     from pta_finance.shared_workflow.models import load_source
 
-    assert load_source()["display"]["total"] == "184.50"
+    original = load_source()
+    catalog = load_catalog()
+    assert original["display"]["total"] == "184.50"
+    assert len(catalog) == REQUEST_CAP and catalog[original["request_id"]] == original
     assert os.getuid() != 0
     print(
-        "IMAGE INSPECTION PASS: non-root; inventory/environment clean; packaged resources loaded."
+        "IMAGE INSPECTION PASS: non-root; inventory/environment clean; six-source catalog loaded."
     )
 
 

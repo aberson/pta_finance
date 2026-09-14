@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shared request queue · Example PTA</title>
+  <link rel="stylesheet" href="/static/queue.css">
+  <script src="/static/queue.js" defer></script>
+</head>
+<body>
+<div class="banner">Fictional shared workflow · Changes are saved for both participants.</div>
+<main data-mode="{{ mode }}" data-role="{{ actor.role }}" data-request-cap="{{ request_cap }}" data-event-cap="{{ event_cap }}" data-workflow="{{ workflow | tojson | forceescape }}">
+  <header>
+    <div>
+      <p class="eyebrow">Example PTA · Shared workflow</p>
+      <h1>Requests, in one place</h1>
+      <p class="subtitle">See what needs attention, who acts next, and how each request got here.</p>
+    </div>
+    <p class="signed-in">Signed in as <strong>{{ actor.label }}</strong><span class="scope">{{ request_cap }} fixed fictional requests</span></p>
+  </header>
+  <div class="cards" role="group" aria-label="Filter by workflow status">
+    {% for state, presentation in workflow.states.items() %}
+    <button type="button" class="card" data-filter="{{ state }}" aria-pressed="false" disabled><span>{{ presentation.card_label }}</span><strong data-count="{{ state }}">—</strong></button>
+    {% endfor %}
+  </div>
+  <div class="refresh">
+    <div>
+      <p id="queue-freshness">No requests loaded yet.</p>
+      <p id="queue-message" role="status" aria-live="polite">Loading requests…</p>
+      <a id="session-refresh" href="{{ origin }}" hidden>Refresh your sign-in</a>
+    </div>
+    <button type="button" id="queue-reload" disabled>Reload</button>
+  </div>
+  <section class="panel" aria-label="Shared requests" id="queue-panel" aria-busy="true">
+    <div class="tools">
+      <label for="search">Find a request<input id="search" type="search" placeholder="Search title or reference" autocomplete="off" disabled></label>
+      <label for="status">Status<select id="status" disabled><option value="">All statuses</option>{% for state, presentation in workflow.states.items() %}<option value="{{ state }}">{{ presentation.option_label }}</option>{% endfor %}</select></label>
+      <label for="owner">Next owner<select id="owner" disabled><option value="">Anyone</option>{% for role, label in workflow.owners.items() %}<option value="{{ role }}">{{ label }}</option>{% endfor %}</select></label>
+      <button type="button" id="reset-filters" class="secondary" disabled>Reset filters</button>
+    </div>
+    <div class="table-wrap" role="region" aria-label="Request list; scroll horizontally on narrow screens" tabindex="0">
+      <table>
+        <caption class="sr-only">Shared requests, latest activity first</caption>
+        <thead><tr><th scope="col">Request</th><th scope="col">Amount</th><th scope="col">Status</th><th scope="col">Next owner</th><th scope="col">Latest activity</th></tr></thead>
+        <tbody id="rows"><tr><td colspan="5" class="empty">Loading requests…</td></tr></tbody>
+      </table>
+    </div>
+    <p class="foot" id="count" role="status" aria-live="polite">Waiting for the shared list.</p>
+  </section>
+  <div class="explainer">
+    <div><h2>A shared overview, then a full history</h2><p>Select any request to see its items, next action, and attributed history. Status counts always cover the whole list; filters change which rows you see.</p></div>
+    <div><h2>Refresh to see shared changes</h2><p>The queue loads when you enter or return. Use Reload to see changes made while you are here. Returning to the queue resets the filters.</p></div>
+  </div>
+  <p class="notice">“Completed” means the administrative handoff is complete. These workflow statuses do not report whether a payment was made.</p>
+  <noscript><p class="notice">JavaScript is required to load the shared requests and submit workflow changes.</p></noscript>
+</main>
+</body>
+</html>

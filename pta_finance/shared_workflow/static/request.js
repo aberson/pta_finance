@@ -5,6 +5,7 @@
   const url = `/api/requests/${root.dataset.requestId}`;
   const retry = document.querySelector("#retry");
   const reload = document.querySelector("#reload");
+  const allRequests = document.querySelector("#all-requests");
   const feedback = document.querySelector("#feedback");
   const session = document.querySelector("#session-refresh");
   const forms = [
@@ -24,6 +25,11 @@
     return spec.kind === "comments" || (spec.kind === "decision" && state === "AWAITING_REVIEW") ||
       (spec.kind === "complete" && state === "APPROVED");
   }
+  function guardQueueNavigation() {
+    if (!allRequests) return;
+    if (pending) allRequests.setAttribute("aria-disabled", "true");
+    else allRequests.removeAttribute("aria-disabled");
+  }
   function working(value) {
     busy = value;
     reload.disabled = value;
@@ -35,6 +41,7 @@
       });
       spec.form.setAttribute("aria-busy", String(value));
     });
+    guardQueueNavigation();
   }
   async function jsonRequest(target, options = {}) {
     const controller = new AbortController();
@@ -81,7 +88,7 @@
       state === "APPROVED" ? (root.dataset.role === "processor" ? "You can mark the workflow handoff complete." : "Waiting for the processor to complete the handoff.") :
       state === "NOT_APPROVED" ? "Not approved. This outcome is final; both participants may still comment." :
       "Workflow handoff complete. Both participants may still comment. This does not record a payment.";
-    document.querySelector("#next-action").textContent = root.dataset.mode === "handoff" ? next : "Both participants may add shared comments.";
+    document.querySelector("#next-action").textContent = ["handoff", "queue"].includes(root.dataset.mode) ? next : "Both participants may add shared comments.";
     document.querySelector("#items").replaceChildren(...request.display.items.map(item =>
       listItem(`${item.description} · ${item.category} · $${item.amount}`)));
     document.querySelector("#history").replaceChildren(...data.events.map(event =>
@@ -89,12 +96,17 @@
     working(busy);
   }
   function failure(error) {
-    const code = error.code || "TEMPORARILY_UNAVAILABLE";
+    const code = typeof error.code === "string" ? error.code : "TEMPORARILY_UNAVAILABLE";
     retry.hidden = pending === null;
     if (code === "SESSION_REFRESH" || code === "UNAUTHENTICATED") {
       version = null;
       session.hidden = false;
-      message("Refresh your sign-in, then check whether your operation was saved.");
+      if (root.dataset.mode === "queue") {
+        message("Keep this request tab open. Refresh your sign-in in a new tab, then return here and " +
+          (pending ? "choose Retry same operation to check whether your save completed." : "choose Reload to load this request."));
+      } else {
+        message("Refresh your sign-in, then check whether your operation was saved.");
+      }
     } else if (["TEMPORARILY_UNAVAILABLE", "RETRY_CONFLICT", "INTERNAL_ERROR"].includes(code)) {
       message(`${code}: Your draft is retained. Retry the same operation or reload to check it.`);
     } else {
@@ -130,10 +142,10 @@
       if (!result.receipt || result.receipt.operation_id !== pending.data.operation_id) {
         throw {code: "TEMPORARILY_UNAVAILABLE"};
       }
+      await load();
       pending = null;
       spec.input.value = "";
       spec.form.querySelectorAll("input[type=radio]").forEach(input => { input.checked = false; });
-      await load();
       message(spec.saved);
     } catch (error) {
       if (error.code === "STALE_VERSION") {
@@ -148,7 +160,23 @@
   }
   forms.forEach(spec => {
     spec.form.addEventListener("submit", event => { event.preventDefault(); void submit(spec); });
-    spec.form.addEventListener("input", () => { pending = null; retry.hidden = true; });
+    spec.form.addEventListener("input", () => {
+      pending = null;
+      retry.hidden = true;
+      guardQueueNavigation();
+    });
+  });
+  allRequests?.addEventListener("click", event => {
+    if (!pending) return;
+    event.preventDefault();
+    message(busy ? "Saving this operation. Wait before returning to all requests." :
+      "Resolve this pending save before returning to all requests. Retry the same operation or reload to check it.");
+    if (!busy && !retry.hidden) retry.focus();
+  });
+  window.addEventListener("beforeunload", event => {
+    if (!pending) return;
+    event.preventDefault();
+    event.returnValue = "";
   });
   retry.addEventListener("click", () => {
     if (pending) void submit(forms.find(spec => spec.kind === pending.kind), true);
