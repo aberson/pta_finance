@@ -105,18 +105,20 @@ def test_exact_http_wire_attribution_and_no_phase_b(
 
 
 @pytest.mark.parametrize(
-    "setting",
+    "mode,setting",
     [
-        None,
-        ("GOOGLE_SDK_PYTHON_LOGGING_SCOPE", "google.cloud.firestore_v1"),
-        ("GRPC_TRACE", "tcp"),
-        ("GRPC_VERBOSITY", "DEBUG"),
+        ("comments", None),
+        ("queue", None),
+        ("comments", ("GOOGLE_SDK_PYTHON_LOGGING_SCOPE", "google.cloud.firestore_v1")),
+        ("comments", ("GRPC_TRACE", "tcp")),
+        ("comments", ("GRPC_VERBOSITY", "DEBUG")),
     ],
 )
 def test_production_startup_logging_boundary_in_fresh_process(
     setting: tuple[str, str] | None,
+    mode: str,
 ) -> None:
-    config, _, _, _ = setup()
+    config, _, _, _ = setup(mode)
     runtime = asdict(config)
     runtime.pop("port")
     runtime.update(schema_version=1, origin="https://example.run.app")
@@ -166,6 +168,21 @@ def serve(app: FastAPI, **options: object) -> None:
         current = http.get(endpoint).json()
         assert current['request']['version'] == 1
         assert current['events'][0]['body'] == 'Fictional SDK logging canary'
+        if config.mode == 'queue':
+            rows = http.get('/api/requests').json()['requests']
+            assert len(rows) == 6 and len({row['request_id'] for row in rows}) == 6
+            selected = next(row for row in rows if row['display']['ref'] == 'DEMO-03')
+            request_id = selected['request_id']
+            assert http.get('/requests/' + request_id).status_code == 200
+            decision = http.post('/api/requests/' + request_id + '/decision',
+                headers={'Origin': config.origin, 'Content-Type': 'application/json',
+                         'X-PTA-CSRF': '1'},
+                json={'operation_id': str(uuid4()), 'expected_version': 0,
+                      'body': 'Fictional production queue decision', 'decision': 'approve'})
+            assert decision.status_code == 200
+            assert decision.json()['receipt']['request_id'] == request_id
+            assert decision.json()['receipt']['result_state'] == 'APPROVED'
+            print('QUEUE_SIX_COMPLETED', flush=True)
         print('REQUEST_COMPLETED', flush=True)
 
 launcher.FirestoreClient = client
@@ -186,10 +203,11 @@ raise SystemExit(launcher.main())
     if setting is None:
         assert result.returncode == 0, emitted
         assert "CLIENT_CONSTRUCTED" in result.stdout and "REQUEST_COMPLETED" in result.stdout
-        assert (
-            len(re.findall(r"route=/protected code=OK duration_ms=\d+ correlation_id=", emitted))
-            == 2
-        )
+        assert len(
+            re.findall(r"route=/protected code=OK duration_ms=\d+ correlation_id=", emitted)
+        ) == (5 if mode == "queue" else 2)
+        if mode == "queue":
+            assert "QUEUE_SIX_COMPLETED" in result.stdout
     else:
         assert result.returncode == 1
         assert "UNSAFE_RUNTIME_ENV:" in result.stderr

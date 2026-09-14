@@ -138,18 +138,26 @@ def serve() -> int:
     """Nonpackaged subprocess factory; stdin contains synthetic setup and public keys only."""
     from pta_finance.shared_workflow.app import create_app
     from pta_finance.shared_workflow.auth import IAPVerifier, KeyCache
+    from pta_finance.shared_workflow.catalog import load_catalog
     from pta_finance.shared_workflow.models import load_source
     from pta_finance.shared_workflow.store import Store
 
     setup = json.loads(sys.stdin.readline())
     config = fixture_config(setup["namespace"], setup.get("mode", "comments"))
     verifier = IAPVerifier(config, KeyCache(CertificateTransport(setup["keys"])))
-    store = (
-        None
-        if config.mode == "identity"
-        else Store(config, load_source(), emulator_client(setup["host"]))
-    )
-    app = create_app(config, verifier, store)
+    store = None
+    catalog_stores = None
+    if config.mode != "identity":
+        sources = load_catalog() if config.mode == "queue" else None
+        client = emulator_client(setup["host"])
+        if sources is not None:
+            catalog_stores = {
+                request_id: Store(config, source, client) for request_id, source in sources.items()
+            }
+            store = catalog_stores[load_source()["request_id"]]
+        else:
+            store = Store(config, load_source(), client)
+    app = create_app(config, verifier, store, catalog_stores=catalog_stores)
     uvicorn.run(
         app, host="127.0.0.1", port=8788, access_log=False, proxy_headers=False, log_level="error"
     )
@@ -359,6 +367,7 @@ def run_smoke(host: str, deadline_seconds: int) -> None:
                             await cycle(browser)
                         async with asyncio.timeout(90):
                             await handoff_cycle(browser)
+                        await queue_cycle(browser)
                     finally:
                         await browser.close()
 
@@ -538,6 +547,217 @@ def run_smoke(host: str, deadline_seconds: int) -> None:
                     "both namespaces durable",
                     flush=True,
                 )
+
+            async def queue_cycle(browser: Any) -> None:
+                contexts = [
+                    await browser.new_context(
+                        extra_http_headers={"X-Goog-IAP-JWT-Assertion": signer.token(config, role)}
+                    )
+                    for role in ("reviewer", "processor")
+                ]
+                for context in contexts:
+                    context.set_default_timeout(10000)
+                me = await (await contexts[0].request.get(ORIGIN + "/api/me")).json()
+                original_endpoint = ORIGIN + "/api/requests/" + me["request_id"]
+                original = await (await contexts[0].request.get(original_endpoint)).json()
+                await server.stop_async()
+                server.mode = "queue"
+                await server.start_async()
+                queue_started = time.monotonic()
+                async with asyncio.timeout(60):
+                    current_me = await (await contexts[0].request.get(ORIGIN + "/api/me")).json()
+                    assert current_me["mode"] == "queue" and current_me["request_id"] is None
+                    assert (
+                        await (await contexts[0].request.get(original_endpoint)).json() == original
+                    )
+                    first = original["events"][0]
+                    replay = await contexts[0].request.post(
+                        original_endpoint + "/comments",
+                        headers={
+                            "Origin": ORIGIN,
+                            "Content-Type": "application/json",
+                            "X-PTA-CSRF": "1",
+                        },
+                        data={
+                            key: first[key] for key in ("operation_id", "expected_version", "body")
+                        },
+                    )
+                    assert replay.status == 200 and (await replay.json())["receipt"] == first
+                    reviewer, processor = [await context.new_page() for context in contexts]
+                    for page in (reviewer, processor):
+                        await page.goto(ORIGIN)
+                        await expect(page.locator("#rows tr")).to_have_count(6)
+                    listed = await (await contexts[0].request.get(ORIGIN + "/api/requests")).json()
+                    assert set(listed) == {"requests", "request_count", "request_cap"}
+                    assert listed["request_count"] == listed["request_cap"] == 6
+                    by_ref = {row["display"]["ref"]: row for row in listed["requests"]}
+                    assert all(by_ref[f"DEMO-0{number}"]["version"] == 0 for number in range(2, 7))
+
+                    async def garden_detail(
+                        page: Any, state: str, owner: str, version: int, history: list[str]
+                    ) -> None:
+                        await expect(page.locator("#request-title")).to_have_text(
+                            "Garden club seed kits"
+                        )
+                        await expect(page.locator("#request-meta")).to_have_text(
+                            "DEMO-03 · Submitted 2026-08-12 · $142.75"
+                        )
+                        await expect(page.locator("#items li")).to_have_text(
+                            [
+                                "Seed packets · Garden Club · $82.75",
+                                "Planting trays · Garden Club · $60.00",
+                            ]
+                        )
+                        await expect(page.locator("#request-state")).to_have_text(
+                            f"{state} · Next owner: {owner} · Version {version}"
+                        )
+                        await expect(page.locator("#history li")).to_have_text(history)
+
+                    await reviewer.locator("#search").fill("demo-03")
+                    await expect(reviewer.locator("#rows tr")).to_have_count(1)
+                    await reviewer.locator("#rows a.request").click()
+                    await expect(reviewer.locator("#save")).to_be_enabled()
+                    await garden_detail(reviewer, "AWAITING_REVIEW", "reviewer", 0, [])
+                    await reviewer.get_by_role("radio", name="Approve", exact=True).check()
+                    await reviewer.locator("#decision-comment").fill("Fictional queue approval")
+                    await reviewer.locator("#save-decision").click()
+                    await expect(reviewer.locator("#feedback")).to_have_text("Decision saved.")
+                    request_id = by_ref["DEMO-03"]["request_id"]
+                    detail_endpoint = ORIGIN + "/api/requests/" + request_id
+                    approved = await (await contexts[0].request.get(detail_endpoint)).json()
+                    assert [
+                        (event["actor_label"], event["actor_role"], event["action"], event["body"])
+                        for event in approved["events"]
+                    ] == [("Reviewer", "reviewer", "approve", "Fictional queue approval")]
+                    approval_history = [
+                        f"Reviewer · {approved['events'][0]['created_at']} · approve · "
+                        "Fictional queue approval"
+                    ]
+                    await reviewer.reload()
+                    await garden_detail(reviewer, "APPROVED", "processor", 1, approval_history)
+                    await reviewer.locator("#all-requests").click()
+                    await expect(reviewer.locator("#rows tr")).to_have_count(6)
+                    await expect(
+                        reviewer.locator(f'#rows tr[data-request-id="{request_id}"]')
+                    ).to_contain_text("Approved")
+                    await processor.locator("#queue-reload").click()
+                    await processor.locator(f'#rows tr[data-request-id="{request_id}"] a').click()
+                    await processor.reload()
+                    await garden_detail(processor, "APPROVED", "processor", 1, approval_history)
+                    await expect(processor.locator("#complete-form")).to_be_visible()
+                    await processor.locator("#save-complete").click()
+                    await expect(processor.locator("#feedback")).to_contain_text(
+                        "does not record a payment"
+                    )
+                    completed = await (await contexts[0].request.get(detail_endpoint)).json()
+                    assert completed["events"][:1] == approved["events"]
+                    assert [
+                        (event["actor_label"], event["actor_role"], event["action"], event["body"])
+                        for event in completed["events"]
+                    ] == [
+                        ("Reviewer", "reviewer", "approve", "Fictional queue approval"),
+                        ("Processor", "processor", "complete", ""),
+                    ]
+                    complete_history = approval_history + [
+                        f"Processor · {completed['events'][1]['created_at']} · complete · "
+                    ]
+                    await reviewer.locator(f'#rows tr[data-request-id="{request_id}"] a').click()
+                    for page in (reviewer, processor):
+                        await page.reload()
+                        await garden_detail(page, "COMPLETED", "None", 2, complete_history)
+                    assert (
+                        await (await contexts[1].request.get(detail_endpoint)).json() == completed
+                    )
+                    await reviewer.locator("#all-requests").click()
+                    rejected_id = by_ref["DEMO-04"]["request_id"]
+                    await reviewer.locator(f'#rows tr[data-request-id="{rejected_id}"] a').click()
+                    await reviewer.get_by_role("radio", name="Not approve", exact=True).check()
+                    await reviewer.locator("#decision-comment").fill("Fictional queue reason")
+                    await reviewer.locator("#save-decision").click()
+                    await expect(reviewer.locator("#feedback")).to_have_text("Decision saved.")
+                    rejected = await (
+                        await contexts[0].request.get(ORIGIN + "/api/requests/" + rejected_id)
+                    ).json()
+                    assert [
+                        (event["actor_label"], event["actor_role"], event["action"], event["body"])
+                        for event in rejected["events"]
+                    ] == [("Reviewer", "reviewer", "not_approve", "Fictional queue reason")]
+                    rejected_time = rejected["events"][0]["created_at"]
+                    await expect(reviewer.locator("#request-state")).to_have_text(
+                        "NOT_APPROVED · Next owner: None · Version 1"
+                    )
+                    await expect(reviewer.locator("#history li")).to_have_text(
+                        [f"Reviewer · {rejected_time} · not_approve · Fictional queue reason"]
+                    )
+                    await reviewer.locator("#all-requests").click()
+                    await expect(reviewer.locator("#rows tr")).to_have_count(6)
+                    for state, count in (
+                        ("AWAITING_REVIEW", "3"),
+                        ("APPROVED", "0"),
+                        ("COMPLETED", "2"),
+                        ("NOT_APPROVED", "1"),
+                    ):
+                        await expect(reviewer.locator(f'[data-count="{state}"]')).to_have_text(
+                            count
+                        )
+                    await reviewer.locator('[data-filter="NOT_APPROVED"]').click()
+                    await expect(reviewer.locator("#rows tr")).to_have_count(1)
+                    rejected_row = reviewer.locator(f'#rows tr[data-request-id="{rejected_id}"]')
+                    await expect(rejected_row.locator(".badge")).to_have_text("Not approved")
+                    await expect(rejected_row.locator(".owner")).to_have_text("No further action")
+                    await expect(rejected_row.locator("td").last).to_contain_text(
+                        "Reviewer did not approve"
+                    )
+                    await expect(rejected_row.locator("time")).to_have_attribute(
+                        "datetime", rejected_time
+                    )
+                    other_id = by_ref["DEMO-02"]["request_id"]
+                    await reviewer.goto(ORIGIN + "/requests/" + other_id)
+                    await expect(reviewer.locator("#save")).to_be_enabled()
+                    await reviewer.locator("#comment").fill("Fictional separate request comment")
+                    await reviewer.locator("#save").click()
+                    await expect(reviewer.locator("#feedback")).to_have_text("Comment saved.")
+                    before = {
+                        row["request_id"]: await (
+                            await contexts[0].request.get(
+                                ORIGIN + "/api/requests/" + row["request_id"]
+                            )
+                        ).json()
+                        for row in listed["requests"]
+                    }
+                    assert before[me["request_id"]] == original
+                    assert before[request_id]["request"]["state"] == "COMPLETED"
+                    assert before[request_id] == completed
+                    assert before[rejected_id] == rejected
+                    assert before[other_id]["request"]["version"] == 1
+                    for ref in ("DEMO-05", "DEMO-06"):
+                        untouched = before[by_ref[ref]["request_id"]]
+                        assert untouched["request"]["version"] == 0 and untouched["events"] == []
+                    await server.stop_async()
+                    await server.start_async()
+                    for request_id, history in before.items():
+                        assert (
+                            await (
+                                await contexts[1].request.get(
+                                    ORIGIN + "/api/requests/" + request_id
+                                )
+                            ).json()
+                            == history
+                        )
+                    await reviewer.goto(ORIGIN)
+                    await expect(reviewer.locator("#rows tr")).to_have_count(6)
+                    evidence = root / ".build-step" / "queue-smoke"
+                    evidence.mkdir(parents=True, exist_ok=True)
+                    await reviewer.screenshot(path=str(evidence / "queue.png"), full_page=True)
+                    await processor.reload()
+                    await garden_detail(processor, "COMPLETED", "None", 2, complete_history)
+                    await processor.screenshot(path=str(evidence / "detail.png"), full_page=True)
+                    elapsed = time.monotonic() - queue_started
+                    print(
+                        "QUEUE PASS: installed wheel; six independent requests; original receipt "
+                        f"preserved; page mutations and restart durable; {elapsed:.2f}s",
+                        flush=True,
+                    )
 
             asyncio.run(exercise())
 

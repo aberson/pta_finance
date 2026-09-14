@@ -1,0 +1,121 @@
+{
+  "schema_version": 2,
+  "report": {
+    "title": "Reimbursement Review",
+    "eyebrow": "Example PTA / Treasurer",
+    "subtitle": "Receipts, decisions, and next steps / Fictional example data",
+    "organization": "Example PTA",
+    "email_signoff": [
+      "Thank you!",
+      "Example PTA Treasurer"
+    ],
+    "logo_data_uri": "",
+    "confirmed_outstanding": "0.00",
+    "cutoff_date": "2026-07-01",
+    "policy_version": "example-v1",
+    "as_of_date": "2026-08-15"
+  },
+  "provenance": {
+    "mapped_sha256": "7b98c90b9caeccdbdb488733ac47b8fd2fda73366c1da1572e2038d4f968a229",
+    "policy_sha256": "004a83366dbc489ca0af2a37d35010cf882f41e87b91dde5d78bc7c99dc3b4ec",
+    "source_snapshot_sha256": "9255dd65c09691eb69932297f6a3db73e10e659653cca749bcc5c011ac86b30d",
+    "accounted_review_keys": [
+      "submission:v1:e6261423576543571bdcc3fa9f0a233b66623e3f914801e7304cae26095722f1"
+    ]
+  },
+  "source_summary": {
+    "mapped_rows": 2,
+    "mapped_submissions": 1,
+    "mapped_total": "78.20",
+    "first_received": "2026-08-12",
+    "last_received": "2026-08-12"
+  },
+  "tickets": [
+    {
+      "review_key": "submission:v1:e6261423576543571bdcc3fa9f0a233b66623e3f914801e7304cae26095722f1",
+      "ref": "DEMO-04",
+      "form_label": "",
+      "origin": "submission",
+      "display_order": 1,
+      "requestor_name": "Example Volunteer",
+      "form_type": "Example Reimbursement Form",
+      "submitted": "2026-08-12",
+      "submitted_label": "",
+      "payment_method": "Zelle",
+      "source_evidence_sha256": "a768cbd67c1b8db20f8bc5479a14cab4c0ff7fcaf50567c9a710a268b52adc3a",
+      "source": {
+        "stated_total": "78.20",
+        "mapped_total": "78.20",
+        "categories": [
+          "Volunteer Appreciation"
+        ],
+        "flags": []
+      },
+      "live": {
+        "workflow_state": "ACTIVE",
+        "decision": "UNREVIEWED",
+        "payment_status": "NOT_PAID",
+        "payment_date": "",
+        "confirmations": []
+      },
+      "review": {
+        "status": "A",
+        "action": "Review fictional line items",
+        "block": "Review fictional line items.",
+        "asks": [],
+        "note": "Fictional fixed queue source. No decision or payment has been recorded.",
+        "email_questions": [],
+        "email_context": ""
+      },
+      "items": [
+        {
+          "item_key": "DEMO-04:line:1",
+          "source_index": 1,
+          "source_date": "2026-08-10",
+          "source_description": "Fruit platters",
+          "source_amount": "48.20",
+          "canonical_category": "Volunteer Appreciation",
+          "display_date": "",
+          "display_item": "",
+          "reviewed_amount": "",
+          "status": "A",
+          "why": "Fictional line item awaiting reviewer decision."
+        },
+        {
+          "item_key": "DEMO-04:line:2",
+          "source_index": 2,
+          "source_date": "2026-08-10",
+          "source_description": "Juice cartons",
+          "source_amount": "30.00",
+          "canonical_category": "Volunteer Appreciation",
+          "display_date": "",
+          "display_item": "",
+          "reviewed_amount": "",
+          "status": "A",
+          "why": "Fictional line item awaiting reviewer decision."
+        }
+      ],
+      "messages": [
+        {
+          "kind": "draft",
+          "date": "",
+          "mode": "generated",
+          "body": ""
+        }
+      ],
+      "archive_note": ""
+    }
+  ],
+  "supplemental": {
+    "anchors_sha256": "5cd4f1052106e7954e49e2eb1210dfc906ef37b1d65f5bc429c324e48c86276e",
+    "evidence": [],
+    "events": [],
+    "unmatched": []
+  },
+  "appendix": {
+    "amendments": [],
+    "cfo_checks": [],
+    "excluded": [],
+    "defects": []
+  }
+}

@@ -129,9 +129,18 @@ def test_staged_wheel_loads_resources_outside_checkout_and_rejects_production_te
         names = archive.namelist()
         for resource in (
             "example-request.json",
+            "example-request-02.json",
+            "example-request-03.json",
+            "example-request-04.json",
+            "example-request-05.json",
+            "example-request-06.json",
+            "catalog.py",
             "templates/request.html.j2",
+            "templates/queue.html.j2",
             "static/request.js",
             "static/request.css",
+            "static/queue.js",
+            "static/queue.css",
         ):
             assert "pta_finance/shared_workflow/" + resource in names
         assert all(
@@ -147,20 +156,49 @@ def test_staged_wheel_loads_resources_outside_checkout_and_rejects_production_te
         capture_output=True,
     )
     code = """import sys; sys.path.insert(0,sys.argv[1])
+import os, runpy
+from pathlib import Path
 from pta_finance.shared_workflow.models import load_source
+from pta_finance.shared_workflow.catalog import load_catalog
 from pta_finance.shared_workflow import __file__
 assert __file__.startswith(sys.argv[1])
 assert load_source()['display']['total']=='184.50'
+catalog = load_catalog()
+assert len(catalog) == 6 and catalog[load_source()['request_id']] == load_source()
+# Run the actual image inspector against the installed staged inventory. Its Linux
+# non-root assertion is supplied by this local harness; actual Cloud Build remains M8.
+if not hasattr(os, 'getuid'):
+    os.getuid = lambda: 10001
+elif os.getuid() == 0:
+    os.getuid = lambda: 10001
+inspector = runpy.run_path(str(Path(sys.argv[2]) / 'inspect_image.py'))['inspect']
+inspector(Path(sys.argv[2]))
+import pta_finance.shared_workflow.catalog as inventory
+inventory.ADDITIONAL_SOURCES = inventory.ADDITIONAL_SOURCES[:-1]
+try:
+    inspector(Path(sys.argv[2]))
+except Exception as error:
+    assert str(error) == 'FIXTURE_INVALID'
+else:
+    raise AssertionError('Image inspector failed to validate the complete catalog')
 print('WHEEL PASS')
 """
+    inspection_env = {
+        key: value
+        for key, value in os.environ.items()
+        if "EMULATOR" not in key
+        and not key.startswith("PTA_WORKFLOW_")
+        and key != "GOOGLE_APPLICATION_CREDENTIALS"
+    }
     result = subprocess.run(
-        [sys.executable, "-I", "-c", code, str(installed)],
+        [sys.executable, "-I", "-B", "-c", code, str(installed), str(staged)],
         cwd=tmp_path,
+        env=inspection_env,
         check=True,
         capture_output=True,
         text=True,
     )
-    assert result.stdout.strip() == "WHEEL PASS"
+    assert "six-source catalog loaded" in result.stdout and result.stdout.endswith("WHEEL PASS\n")
     env = {key: value for key, value in os.environ.items() if not key.startswith("PTA_WORKFLOW_")}
     env["FIRESTORE_EMULATOR_HOST"] = "127.0.0.1:8787"
     code = (

@@ -9,6 +9,7 @@
 </head>
 <body>
 <main data-request-id="{{ request_id }}" data-mode="{{ mode }}" data-role="{{ actor.role }}">
+  {% if mode == 'queue' %}<nav aria-label="Request navigation"><a id="all-requests" href="/">All requests</a></nav>{% endif %}
   <p class="eyebrow">Example PTA · Fictional collaboration proof</p>
   <h1>Shared request</h1>
   <p>Signed in as <strong>{{ actor.label }}</strong></p>
@@ -20,7 +21,7 @@
     <p>Shared comments become available after both accounts are configured.</p>
   </section>
   {% else %}
-  {% if mode == 'handoff' %}
+  {% if mode in ('handoff', 'queue') %}
   <p>This fictional workflow is an administrative handoff. It does not record a payment.</p>
   {% else %}
   <p>This fictional request is for shared comments. It does not record a payment.</p>
@@ -33,7 +34,7 @@
     <ul id="items"></ul>
   </section>
   <section aria-labelledby="history-title">
-    <h2 id="history-title">{% if mode == 'handoff' %}Workflow history{% else %}Comments{% endif %}</h2>
+    <h2 id="history-title">{% if mode in ('handoff', 'queue') %}Workflow history{% else %}Comments{% endif %}</h2>
     <ol id="history"></ol>
     <button type="button" id="reload">Reload</button>
   </section>
@@ -43,7 +44,7 @@
     <p>Plain text, up to 2,000 characters. Use fictional details only.</p>
     <button type="submit" id="save" disabled>Save comment</button>
   </form>
-  {% if mode == 'handoff' and actor.role == 'reviewer' %}
+  {% if mode in ('handoff', 'queue') and actor.role == 'reviewer' %}
   <form id="decision-form" hidden>
     <fieldset>
       <legend>Review outcome (choose one)</legend>
@@ -54,7 +55,7 @@
     <textarea id="decision-comment" rows="4" maxlength="2000" required></textarea>
     <button type="submit" id="save-decision" disabled>Save decision</button>
   </form>
-  {% elif mode == 'handoff' and actor.role == 'processor' %}
+  {% elif mode in ('handoff', 'queue') and actor.role == 'processor' %}
   <form id="complete-form" hidden>
     <label for="complete-comment">Completion comment (optional)</label>
     <textarea id="complete-comment" rows="4" maxlength="2000"></textarea>
@@ -63,7 +64,11 @@
   {% endif %}
   <button type="button" id="retry" hidden>Retry same operation</button>
   <p id="feedback" role="status" aria-live="polite"></p>
+  {% if mode == 'queue' %}
+  <a id="session-refresh" href="/requests/{{ request_id }}" target="_blank" rel="noopener noreferrer" hidden>Refresh your sign-in in a new tab</a>
+  {% else %}
   <a id="session-refresh" href="{{ origin }}" hidden>Refresh your sign-in</a>
+  {% endif %}
   {% endif %}
 </main>
 </body>
