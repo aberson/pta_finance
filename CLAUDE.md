@@ -64,7 +64,7 @@ uv run pta-finance report --fy YYYY --variant both        # HTML + 1 report_log 
 uv run pta-finance sync-budget --fy 2027 --apply          # writes amount/notes to Budget Timeseries
 uv run pta-finance fetch-mail --since <date>              # .eml into [gmail] inbox_dir; no Sheet
 uv run pta-finance map-receipts --source mail_samples --write-tab Reimbursements  # replaces it
-uv run pta-finance report-reimbursements                  # atomically replaces private HTML; no Sheet
+uv run pta-finance report-reimbursements                  # atomically replaces private HTML (+ receipt sidecar if present); no Sheet
 uv run pta-finance update-reimbursements --fetch-since <date>  # .eml + private bundle + HTML; no Sheet
 ```
 
@@ -92,6 +92,9 @@ pta_finance/        package (flat layout): config, ids, schema, models, sheets,
                     reimbursement_pipeline (stable original/supplemental evidence + scoped reducers),
                     reimbursement_report (strict schema-v2 bundle + v1 migration + deterministic
                     HTML/email rendering),
+                    receipt_viewer (validates the optional private `<bundle>.receipts.json`
+                    sidecar of PNG/JPEG receipt pages + fingerprinted item locations that the
+                    queue HTML embeds as click-to-view source receipts),
                     budget_sync (editable-budget-tab → Budget Timeseries reconcile),
                     report_source (Budget Timeseries → report/analyze inputs),
                     treasurer_slides (strict private models + a Windows LPAC-isolated native-text
@@ -172,6 +175,13 @@ scripts/            identity guard + README screenshot capture and PowerPoint ex
   authorize payment, and operator records are content-addressed (a persisted review cannot be
   amended in place). `report-reimbursements` is
   offline; `update-reimbursements` may acquire Gmail first but never sends mail or writes Sheets.
+  **Receipt viewer** (`receipt_viewer.py`, `reports/templates/receipt_viewer.*.j2`): `build_report`
+  auto-detects a sibling `<bundle>.receipts.json`, validates it (exact keys, image hashes, item
+  fingerprints via `item_fingerprint`, in-bounds boxes, path containment, 20 MiB/page and 100 MiB
+  total), and embeds the pages so clicking a queue item opens its receipt with red outlines; an
+  invalid or stale sidecar stops HTML replacement, and an absent one renders "Receipt not linked".
+  Locations are prepared offline by an operator or assistant; the toolkit never OCRs, downloads,
+  or auto-matches at render time ([docs/receipt-viewer.md](docs/receipt-viewer.md)).
 - **Treasurer-summary foundation** (`treasurer_slides/`): strict private models plus an optional
   Windows-only native-text parser in a pre-read LPAC boundary. It accepts private PDF bytes only
   after attestation, tests with fictional fixtures, and fails closed before a statement read on
@@ -183,6 +193,13 @@ scripts/            identity guard + README screenshot capture and PowerPoint ex
   user refresh token. Those Gmail credentials are also gitignored and deliberately never enter CI.
 
 ## 6. Current state
+
+**Receipt viewer shipped and backfilled (2026-09-14).** Queue items open their source receipt
+with red outlines from an optional private sidecar (`reimbursement-report.receipts.json`). The
+private backfill links 147 of 227 items across 43 of 49 tickets (164 embedded pages); the 80
+unlinked items have no original receipt in the evidence (paper-total tickets, one absent IKEA
+upload, and the unlocated Amazon invoice rows) and stay "Receipt not linked". Backfill tooling,
+per-item audit, and verification notes live under gitignored `reports/output/.work/receipt-backfill/`.
 
 **Shared workflow Step 32 delivered (2026-09-12 UTC).** The optional comments-only service passed local HTTP/browser/emulator and installed-wheel checks, the complete main-checkout suite, six independent reviews, and feature CI. Step 33/M6 subsequently passed actual cloud observations and operator acceptance on 2026-09-12. The private record satisfies the Phase B entry gate. Handoff behavior now has local implementation and automated coverage; M7 / Step 35 cloud acceptance now passes; all fifteen observations and the operator wording judgment are recorded privately. See the [delivery record](documentation/shared-workflow-proof-sync.md#step-32-delivery--2026-09-12-utc).
 

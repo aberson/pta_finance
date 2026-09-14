@@ -1,0 +1,115 @@
+(() => {
+  'use strict';
+  const data = JSON.parse(document.getElementById('receipt-data').textContent);
+  const get = id => document.getElementById('receipt-' + id);
+  const dialog = get('viewer'), viewport = get('viewport'), page = get('page');
+  const picture = get('image'), marks = get('marks');
+  let pageIds = [], regions = [], index = 0, zoom = 1, opener = null, focusOnLoad = false;
+  function layout() {
+    if (!picture.naturalWidth || page.hidden) return;
+    const padding = parseFloat(getComputedStyle(viewport).paddingLeft) * 2;
+    const availableWidth = Math.max(100, viewport.clientWidth - padding);
+    const availableHeight = Math.max(100, viewport.clientHeight - padding);
+    const fit = Math.min(availableWidth / picture.naturalWidth,
+                         availableHeight / picture.naturalHeight, 1);
+    page.style.width = (picture.naturalWidth * fit * zoom) + 'px';
+    get('zoom-out').disabled = zoom <= 1;
+    get('zoom-in').disabled = zoom >= 4;
+  }
+  function focusItem() {
+    if (!picture.naturalWidth || page.hidden) return;
+    const boxes = regions.filter(region => region.page_id === pageIds[index] && region.box);
+    if (!boxes.length) return;
+    zoom = 1;
+    layout();
+    const padding = parseFloat(getComputedStyle(viewport).paddingLeft) * 2;
+    zoom = Math.max(1, Math.min(4, (viewport.clientWidth - padding) / page.clientWidth));
+    layout();
+    const top = Math.min(...boxes.map(region => region.box[1]));
+    const bottom = Math.max(...boxes.map(region => region.box[1] + region.box[3]));
+    viewport.scrollTo(0, Math.max(0, (top + bottom) / 2 * picture.clientHeight -
+                                      viewport.clientHeight / 2 + padding / 2));
+  }
+  function displayPage() {
+    const id = pageIds[index], source = data.pages[id];
+    zoom = 1;
+    marks.replaceChildren();
+    const boxes = regions.filter(region => region.page_id === id && region.box);
+    get('focus').disabled = boxes.length === 0;
+    for (const region of boxes) {
+      const [x, y, width, height] = region.box;
+      const ellipse = document.createElementNS('http://www.w3.org/2000/svg', 'ellipse');
+      // Leave a little space around the line while keeping the outline on the page.
+      const cx = x + width / 2, cy = y + height / 2;
+      ellipse.setAttribute('cx', cx);
+      ellipse.setAttribute('cy', cy);
+      ellipse.setAttribute('rx', Math.min(width * .60 + .006, cx, 1 - cx));
+      ellipse.setAttribute('ry', Math.min(height * .72 + .003, cy, 1 - cy));
+      marks.append(ellipse);
+    }
+    get('page-label').textContent = `${index + 1} of ${pageIds.length} · ${source.label}`;
+    get('prev').disabled = index === 0;
+    get('next').disabled = index === pageIds.length - 1;
+    const unmarked = regions.some(region => region.page_id === id && !region.box);
+    get('status').textContent = boxes.length
+      ? 'The red outline marks the source of this claim. Compare the receipt with the submitted amount.' +
+        (unmarked ? ' Some locations on this page have not been marked.' : '')
+      : 'Source receipt available. The exact item location has not been marked on this page.';
+    picture.alt = source.label;
+    focusOnLoad = true;
+    picture.src = source.src;
+    page.hidden = false;
+    layout();
+    viewport.scrollTo(0, 0);
+  }
+  picture.addEventListener('load', () => {
+    layout();
+    if (focusOnLoad) { focusOnLoad = false; focusItem(); }
+  });
+  picture.addEventListener('error', () => {
+    page.hidden = true;
+    get('status').textContent = 'This receipt image could not be displayed. Recheck the saved source page.';
+  });
+  document.querySelectorAll('.receipt-item').forEach(button => {
+    button.addEventListener('click', () => {
+      opener = button;
+      const {receiptId, itemLabel, itemAmount, ticketRef} = button.dataset;
+      const entry = Object.hasOwn(data.items, receiptId) ? data.items[receiptId] : null;
+      regions = entry ? entry.regions : [];
+      pageIds = [...new Set(regions.map(region => region.page_id))];
+      index = 0;
+      get('title').textContent = itemLabel;
+      get('claim').textContent = `${ticketRef} · Submitted for review: ${itemAmount}`;
+      page.hidden = true;
+      picture.removeAttribute('src');
+      marks.replaceChildren();
+      get('toolbar').hidden = pageIds.length === 0;
+      get('empty').hidden = pageIds.length !== 0;
+      get('status').textContent = 'No verified source receipt is available for this item.';
+      dialog.showModal();
+      document.body.style.overflow = 'hidden';
+      if (pageIds.length) displayPage();
+    });
+  });
+  get('close').addEventListener('click', () => dialog.close());
+  dialog.addEventListener('click', event => {
+    if (event.target === dialog) {
+      const bounds = dialog.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right ||
+          event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();
+    }
+  });
+  dialog.addEventListener('close', () => {
+    document.body.style.overflow = '';
+    if (opener) opener.focus({preventScroll: true});
+  });
+  get('prev').addEventListener('click', () => { if (index > 0) { index--; displayPage(); } });
+  get('next').addEventListener('click', () => {
+    if (index < pageIds.length - 1) { index++; displayPage(); }
+  });
+  get('zoom-in').addEventListener('click', () => { zoom = Math.min(4, zoom + .5); layout(); });
+  get('zoom-out').addEventListener('click', () => { zoom = Math.max(1, zoom - .5); layout(); });
+  get('fit').addEventListener('click', () => { zoom = 1; layout(); viewport.scrollTo(0, 0); });
+  get('focus').addEventListener('click', focusItem);
+  window.addEventListener('resize', layout);
+})();

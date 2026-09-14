@@ -331,6 +331,10 @@ update-reimbursements   optionally run the first, refresh evidence, then run the
 All report data and HTML stay under gitignored `reports/output/`. The report command is fully
 offline: it does not load `config.toml`, Google credentials, Gmail, or Sheets.
 
+Click an item description in the queue to inspect its source receipt with a red outline around
+the matched lines. Receipt pages and verified locations are supplied in an optional private
+sidecar; see [Inspecting a source receipt](receipt-viewer.md) for setup and missing-receipt behavior.
+
 **Rebuild the report without checking Gmail:**
 
 ```powershell

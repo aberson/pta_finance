@@ -1,0 +1,19 @@
+<dialog class="receipt-dialog" id="receipt-viewer" aria-labelledby="receipt-title" aria-describedby="receipt-status">
+  <header class="receipt-head"><div><h2 id="receipt-title">Source receipt</h2><p id="receipt-claim"></p></div><button type="button" id="receipt-close" aria-label="Close receipt viewer" autofocus>Close &times;</button></header>
+  <div class="receipt-toolbar" id="receipt-toolbar">
+    <button type="button" id="receipt-prev" aria-label="Previous receipt page">&larr; Previous</button>
+    <span class="receipt-page-label" id="receipt-page-label" aria-live="polite"></span>
+    <button type="button" id="receipt-next" aria-label="Next receipt page">Next &rarr;</button>
+    <button type="button" id="receipt-zoom-out" aria-label="Zoom out">&minus;</button>
+    <button type="button" id="receipt-focus">Focus item</button>
+    <button type="button" id="receipt-fit">Fit page</button>
+    <button type="button" id="receipt-zoom-in" aria-label="Zoom in">+</button>
+  </div>
+  <p class="receipt-status" id="receipt-status" role="status"></p>
+  <div class="receipt-viewport" id="receipt-viewport">
+    <div class="receipt-page" id="receipt-page" hidden><img id="receipt-image" alt=""><svg viewBox="0 0 1 1" preserveAspectRatio="none" aria-hidden="true" id="receipt-marks"></svg></div>
+    <div class="receipt-empty" id="receipt-empty" hidden><h3>Receipt not linked yet</h3><p>No source receipt is linked to this item. Its location needs to be verified before it can be circled.</p></div>
+  </div>
+</dialog>
+<script type="application/json" id="receipt-data">{{ receipts|tojson }}</script>
+<script>{% include 'receipt_viewer.js.j2' %}</script>

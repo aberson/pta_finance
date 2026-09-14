@@ -1523,7 +1523,7 @@ def _email_blocks(ticket: Ticket, signoff: Sequence[str]) -> tuple[EmailBlock, .
     return tuple(blocks)
 
 
-def render_html(report: ReimbursementReport) -> str:
+def render_html(report: ReimbursementReport, *, receipts: Mapping[str, Any] | None = None) -> str:
     """Render a validated report to deterministic, self-contained HTML."""
 
     environment = Environment(
@@ -1542,6 +1542,22 @@ def render_html(report: ReimbursementReport) -> str:
         ticket.review_key: report.events_for(ticket.review_key) for ticket in report.tickets
     }
     evidence_by_key = {evidence.evidence_key: evidence for evidence in report.supplemental.evidence}
+
+    def receipt_id(ticket: Ticket, item: ReviewItem) -> str:
+        return hashlib.sha256(
+            json.dumps([ticket.review_key, item.item_key]).encode("utf-8")
+        ).hexdigest()
+
+    receipt_data = receipts or {"pages": {}, "items": {}}
+    viewer_data = {
+        "pages": receipt_data["pages"],
+        "items": {
+            receipt_id(ticket, item): entry
+            for ticket in report.tickets
+            for item in ticket.items
+            if (entry := receipt_data["items"].get(ticket.review_key, {}).get(item.item_key))
+        },
+    }
     rendered = template.render(
         report=report,
         summary=report.summary,
@@ -1549,6 +1565,8 @@ def render_html(report: ReimbursementReport) -> str:
         email_blocks=email_blocks,
         ticket_events=ticket_events,
         evidence_by_key=evidence_by_key,
+        receipts=viewer_data,
+        receipt_id=receipt_id,
         money=_format_money,
         iso_date=_format_date,
     )
@@ -1580,8 +1598,17 @@ def write_html_atomic(path: Path, html_text: str) -> None:
 def build_report(data_path: Path, output_path: Path) -> BuildResult:
     """Load, validate, render, and atomically write one private reimbursement report."""
 
+    from pta_finance import receipt_viewer
+
     report = load_bundle(data_path)
-    html_text = render_html(report)
+    receipts_path = data_path.with_suffix(".receipts.json")
+    try:
+        receipts = (
+            receipt_viewer.load_receipts(receipts_path, report) if receipts_path.exists() else None
+        )
+    except receipt_viewer.ReceiptViewerError as exc:
+        raise ReimbursementReportError(str(exc)) from exc
+    html_text = render_html(report, receipts=receipts)
     encoded = html_text.encode("utf-8")
     write_html_atomic(output_path, html_text)
     return BuildResult(

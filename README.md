@@ -90,6 +90,11 @@ Follow-up receipts and replies can be linked to the original request. Unclear ma
 visible for review. If evidence behind an existing review changes or disappears, the refresh
 stops so it can be checked.
 
+Click an item in the queue to open its source receipt with a red outline around the matching
+lines. Receipt pages and verified locations live in an optional private file beside the report;
+items without one show **Receipt not linked**. See the
+[receipt viewer guide](docs/receipt-viewer.md).
+
 <details>
 <summary><strong>Receipt and review commands</strong></summary>
 
@@ -161,12 +166,13 @@ Private Drive upload is not built yet.
 | Edit the budget or understand the spreadsheet | [Spreadsheet guide](docs/using-the-spreadsheet.md) |
 | Connect Google and run the tool | [Setup guide](SETUP.md) |
 | Load receipts and refresh the review queue | [Receipt guide](docs/loading-receipts.md) |
+| Check the receipt behind a queue item | [Receipt viewer guide](docs/receipt-viewer.md) |
 | Ask an AI assistant for help | [Example prompts](docs/ask-an-ai-assistant.md) |
 
 ## Project status
 
 **Ready to use:** budget updates, financial analysis, HTML reports, Gmail downloads, receipt
-mapping, and the reimbursement review queue.
+mapping, the reimbursement review queue, and click-to-view source receipts in that queue.
 
 **In progress:** turning the treasurer snapshot prototype into an automatic slide workflow.
 The [slide plan](documentation/treasurer-summary-wave-1-plan.md) tracks the remaining work.

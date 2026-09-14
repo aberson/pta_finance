@@ -53,6 +53,7 @@
     @media(max-width:720px){body{padding:0}.sheet{padding:17px 14px;box-shadow:none}.mast{grid-template-columns:auto 1fr}.mast .gates{grid-column:1/-1;justify-content:flex-start}.current-grid,.score{grid-template-columns:repeat(2,minmax(0,1fr))}.thead{align-items:flex-start}.tvd{flex:1 1 100%;min-width:0;white-space:normal}.closed summary{grid-template-columns:70px 1fr}.closed summary span:nth-child(3),.closed summary span:nth-child(4){display:none}.ticket,.new-queue,.tail{max-width:100%;min-width:0}}
     @media print{@page{size:letter landscape;margin:.35in}html,body{background:white}.sheet{max-width:none;padding:0;box-shadow:none}.ticket,.current-state,.amend,.closed details{break-inside:avoid}.new-queue{break-before:page}.closed details>.closed-body{display:block!important}}
   </style>
+  <style>{% include 'receipt_viewer.css.j2' %}</style>
 </head>
 {% macro chip(code) -%}
 <span class="chip {{ status_meta[code][1] }}">{{ status_meta[code][0] }}</span>
@@ -70,7 +71,7 @@
       <tbody>
       {% for category, items in ticket.item_groups %}
         <tr class="grp"><td colspan="5">Category &middot; {{ category }}</td></tr>
-        {% for item in items %}<tr><td>{{ iso_date(item.effective_date) }}</td><td class="nm">{{ item.effective_item }}</td><td class="amt">{{ money(item.effective_amount) }}</td><td>{{ chip(item.status) }}</td><td class="wy">{{ item.why }}</td></tr>{% endfor %}
+        {% for item in items %}<tr><td>{{ iso_date(item.effective_date) }}</td><td class="nm"><button type="button" class="receipt-item" data-receipt-id="{{ receipt_id(ticket, item) }}" data-item-label="{{ item.effective_item }}" data-item-amount="{{ money(item.effective_amount) }}" data-ticket-ref="{{ ticket.ref }}" aria-haspopup="dialog">{{ item.effective_item }}<span class="receipt-hint">{% if receipts['items'].get(receipt_id(ticket, item)) %}View source receipt{% else %}Receipt not linked{% endif %}</span></button></td><td class="amt">{{ money(item.effective_amount) }}</td><td>{{ chip(item.status) }}</td><td class="wy">{{ item.why }}</td></tr>{% endfor %}
       {% endfor %}
       </tbody>
     </table></div>
@@ -139,5 +140,6 @@
 
   <p class="foot">Source snapshot {{ report.provenance.source_snapshot_sha256[:12] }} &middot; mapped evidence {{ report.provenance.mapped_sha256[:12] }} &middot; policy {{ report.provenance.policy_sha256[:12] }}. Cutoff {{ iso_date(report.settings.cutoff_date) }}. Generated from a validated schema-v2 private bundle; no live sheet or mailbox was changed.<br><span class="private">Private &mdash; contains requestor names and reimbursement detail. Do not circulate outside authorized reviewers.</span></p>
 </main>
+{% include 'receipt_viewer.html.j2' %}
 </body>
 </html>
