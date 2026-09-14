@@ -186,7 +186,7 @@ The next product milestone lets the Processor create shared drafts, edit draft d
 - **Type:** code
 - **Status:** DONE
 - **Issue:** #68
-- **Delivery:** `7656e406eaf5e4ef89b2daac557f5465fc55f61c`; complete candidate/main gates, six fresh independent lenses and feature CI passed. [Evidence](shared-request-queue-sync.md). Hosted M8 remains separate.
+- **Delivery:** Candidate `7656e406eaf5e4ef89b2daac557f5465fc55f61c`, integrated main `7f07ba3d13e37c26af0f82b9bc120acf74715cb5`; complete candidate/main gates, six fresh independent lenses and feature/main CI passed. [Evidence](shared-request-queue-sync.md). Hosted M8 remains separate.
 - **Flags:** --reviewers deep --isolation worktree
 - **Files:** Existing files in §4; new catalog, five example bundles, queue template/assets and two test files in §5; extend `docs/shared-workflow-proof.md` with the M8 procedure.
 - **Existing context:** `Store` already isolates a source's transaction/history path; `create_app` admits one ID, and `load_source()` is the immutable original source. Extend their composition while preserving old modes, schema and receipts.
@@ -203,6 +203,7 @@ The next product milestone lets the Processor create shared drafts, edit draft d
 - **Type:** operator
 - **Status:** PENDING
 - **Issue:** #69
+- **Progress (2026-09-14 UTC):** Delivered source staging and actual cloud image inspection passed. The checked image and private receipts are retained; no queue deployment or two-account observation has run. Resume after fresh desktop coordination and verification of both accepted M7 baselines, without repeating completed staging/build steps.
 - **Files:** Execute the Step 36 M8 runbook; use existing private runtime/env and new ignored `reports/output/shared-workflow/` acceptance records.
 - **Existing context:** Step 35 establishes the original completed request/history, Step 36 supplies the new catalog/UI and immutable image inspection, and the same two real subjects remain configured.
 - **Produces:** Private M8 observations, source/build/image/revision and policy receipts, preservation comparisons, and an operator functional-proof judgment. No shipped code artifacts.

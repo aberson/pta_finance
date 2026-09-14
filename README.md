@@ -178,8 +178,10 @@ not record a payment. Local checks use signed identities, real HTTP, Chromium, a
 emulator transactions. Real two-account comments acceptance (M6) passed; hosted handoff
 acceptance (M7) has passed. Opt-in `queue` mode adds six fixed fictional requests with independent
 histories, current workflow counts, title/reference search, status/owner filters and direct detail
-links. Reload or return to the queue to see shared changes. Hosted queue acceptance (M8) remains
-pending; ticket creation follows M8 and a separate engineering plan. See the [shared-workflow runbook](docs/shared-workflow-proof.md)
+links. Reload or return to the queue to see shared changes. The queue build passed its tests,
+independent reviews, and feature/main CI; its cloud image passed inspection. Hosted queue
+acceptance (M8) remains pending. Ticket creation follows M8 and a separate engineering plan.
+See the [delivery evidence](documentation/shared-request-queue-sync.md) and [shared-workflow runbook](docs/shared-workflow-proof.md)
 for startup, packaging, and the cloud acceptance procedures.
 
 **Not built yet:** an admin web app, automatic reimbursement totals in the budget, or live

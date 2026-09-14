@@ -228,7 +228,7 @@ changes or disappears. Neither command sends mail or writes Sheets. **Strict pay
 per-ticket reference-digest bindings, atomic quarantine) and `operator_payments`; three fail-closed
 majors from the landing review remain open as the next fix step (see
 `documentation/reimbursement-refresh-plan.md` § 2026-09-06 amendment). The Step 36 delivery gate
-has **1,231 collected tests** with dev/slides/web installed and the local Firestore emulator running: 1,228 passed and 3 unchanged existing skips in both candidate and main; all 281 web cases pass without skips. Strict package mypy, Ruff, packaging/privacy checks, installed-wheel browser smoke and six fresh independent lenses pass, as do all three feature CI jobs. Hosted handoff acceptance passed M7 / Step 35; hosted queue acceptance remains M8 / Step 37.
+has **1,231 collected tests** with dev/slides/web installed and the local Firestore emulator running: 1,228 passed and 3 unchanged existing skips in both candidate and main; all 281 web cases pass without skips. Strict package mypy, Ruff, packaging/privacy checks, installed-wheel browser smoke and six fresh independent lenses pass, as do all three jobs in both feature and main CI. Hosted handoff acceptance passed M7 / Step 35. The M8 image from delivered source `7f07ba3` passed actual cloud build and inspection; deployment and two-account acceptance remain pending in M8 / Step 37. Resume from private image and baseline receipts; do not repeat completed build steps.
 **The Gmail read-only ingest connector has also shipped** (`documentation/gmail-ingest-plan.md`,
 tracking span #15–#22; deferred #18 and its umbrella #22 remain open): `gmail_source.py` + the
 `fetch-mail` CLI replace the manual Google Takeout export —

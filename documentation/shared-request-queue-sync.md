@@ -10,4 +10,10 @@ Both isolated candidate and integrated main passed the complete repository suite
 
 Integration uses Git's three-way merge and preserves the operator's unrelated `.gitignore` edit byte-for-byte and unstaged. Step 36 / #68 is code delivery; Phase 8 / #67 and Step 37 / #69 remain open for M8. Detailed build, account and namespace values remain private.
 
-**Hosted queue acceptance is pending.** No M8 image build, deployment or two-account observation is claimed by these code gates. The prepared runbook preserves M7 and specifies real decisions, six-history isolation, disabled-user restoration, fresh-revision persistence and the operator's functional judgment. Ticket creation and lifecycle engineering follow accepted M8 under the already approved product rules.
+Integrated main `7f07ba3d13e37c26af0f82b9bc120acf74715cb5` is pushed; all three [main CI jobs](https://github.com/aberson/pta_finance/actions/runs/34826615005) also passed. The reviewed candidate and complete private evidence were archived before removing the owned build worktree and stopping its emulator. Step 36 / #68 is closed; Phase 8 / #67 and Step 37 / #69 remain open.
+
+## M8 preparation — 2026-09-14 UTC
+
+The 34-file allowlisted stage from delivered source `7f07ba3` passed the actual cloud build and image inspection: non-root execution, clean inventory/environment, and successful six-source catalog loading. Its immutable image and build receipts are retained privately. No queue deployment or two-account observation has run; the live service remains in accepted M7 handoff mode.
+
+**Hosted queue acceptance is pending.** Resume from the inspected image after fresh desktop coordination and both-account M7 baseline verification. The runbook preserves M7 and specifies real decisions, six-history isolation, disabled-user restoration, fresh-revision persistence and the operator's functional judgment. Ticket creation and lifecycle engineering follow accepted M8 under the already approved product rules.
