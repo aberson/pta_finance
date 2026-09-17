@@ -30,14 +30,18 @@ financial reports use GitHub Actions.
 | Templating | `Jinja2`; optional `[pdf]` → `WeasyPrint` |
 | Native statement parsing (foundation) | optional `[slides]` → `pypdfium2`, Windows LPAC worker |
 | CLI / config | stdlib `argparse` / `tomllib` |
+| Web proof (optional) | `[web]` → `fastapi` + `uvicorn` + `google-cloud-firestore` + `cryptography` |
 | Scheduler | GitHub Actions cron (`0 9 1 * *`) + `workflow_dispatch` |
-| Lint / type / test | `ruff`, `mypy --strict`, `pytest` |
+| Lint / type / test | `ruff`, `mypy --strict`, `pytest`, `playwright` (+ `httpx`) — all four are `[dev]` deps |
 
 ## 3. Key commands
 
 ```bash
 uv sync --extra dev --extra web     # add [slides] for native-parser tests, [pdf] for WeasyPrint
-uv run pytest -q                    # test
+uv run playwright install chromium  # required: browser tests fail (not skip) without a binary
+uv run pytest -q                    # test — with [web] installed this ALSO needs a loopback
+                                    # Firestore emulator on FIRESTORE_EMULATOR_HOST, or 6 modules
+                                    # fail at collection by design (see § 5)
 uv run ruff check .                 # lint
 uv run ruff format --check .        # format check
 uv run mypy --strict pta_finance    # typecheck
@@ -99,6 +103,9 @@ pta_finance/        package (flat layout): config, ids, schema, models, sheets,
                     report_source (Budget Timeseries → report/analyze inputs),
                     treasurer_slides (strict private models + a Windows LPAC-isolated native-text
                     parser foundation; later Wave 1 steps add OCR, facts, review, and Slides),
+                    budget_import (LEGACY one-shot budget loader),
+                    shared_workflow/ (optional [web] proof — app, auth, catalog, config, and
+                    packaged fictional bundles; NOT a top-level dir, it lives in the package),
                     analytics/, reports/(templates/)
 tests/              fake-org fixtures + mocked gspread; test_smoke_pipeline.py is the wiring gate
 .github/            last-run.txt (scheduler keepalive) + workflows/ci.yml (PR gate)
@@ -112,12 +119,15 @@ config.toml         gitignored private config; config.example.toml ships fake va
 documentation/      committed feature plans (e.g. gmail-ingest-plan.md)
 docs/               operator guides, light/dark SVG workflows, fictional report screenshots,
                     and an editable fictional treasurer-snapshot.pptx example
-scripts/            identity guard + README screenshot capture and PowerPoint export helpers
+deployment/         committed shared-workflow deployment assets (deployment/shared-workflow)
+scripts/            identity guard, README screenshot capture and PowerPoint export helpers,
+                    shared_workflow_smoke.py (local emulator/wheel/browser factory),
+                    stage_shared_workflow.py (restricted-import source staging)
 ```
 
 ## 5. Architecture
 
-- **Optional shared-workflow proof** (`shared_workflow/`, `[web]`): separate FastAPI/Uvicorn
+- **Optional shared-workflow proof** (`pta_finance/shared_workflow/`, `[web]`): separate FastAPI/Uvicorn
   entry point, strict `PTA_WORKFLOW_CONFIG` JSON, verified IAP assertions, two pinned subjects,
   and bounded Firestore transactions. It loads only its packaged fictional bundles through
   the existing offline validator; it never discovers private CLI configuration or imports
@@ -194,12 +204,31 @@ scripts/            identity guard + README screenshot capture and PowerPoint ex
 
 ## 6. Current state
 
+**Main CI is RED and has been since `7eb0c4f`.** `tests/test_receipt_viewer.py:188` guards on
+`importorskip("playwright.sync_api")`, but `playwright` ships in the `dev` extra every job
+installs, so the guard can never fire; the `lint-type-test` job collects that browser test and
+never runs `playwright install`, so `chromium.launch()` raises. The only job with a browser
+(`shared-workflow`) is path-filtered to `tests/test_shared_workflow_*.py` and never collects it.
+Last green run is `b1e0a2c`. **Phase 9 Step 38 (#72) is the repair and must land first.**
+
+**Phase 9 planned, NOT built (2026-09-16).** Automatic source-receipt filling — Steps 38–49,
+umbrella #71, step issues #72–#83, all OPEN; scoped plan in
+[documentation/receipt-autofill-plan.md](documentation/receipt-autofill-plan.md). **Zero code
+exists.** It adds a fill stage to `update-reimbursements` that fetches each ticket's own uploaded
+receipt assets from a configured host allowlist, rasterizes them (PDFs through the existing
+attested Windows LPAC worker), auto-links only single-asset tickets with `box: null`, and stages
+ambiguous tickets into a proposals file an operator confirms. Red outlines stay human.
+
 **Receipt viewer shipped and backfilled (2026-09-14).** Queue items open their source receipt
-with red outlines from an optional private sidecar (`reimbursement-report.receipts.json`). The
-private backfill links 147 of 227 items across 43 of 49 tickets (164 embedded pages); the 80
-unlinked items have no original receipt in the evidence (paper-total tickets, one absent IKEA
-upload, and the unlocated Amazon invoice rows) and stay "Receipt not linked". Backfill tooling,
-per-item audit, and verification notes live under gitignored `reports/output/.work/receipt-backfill/`.
+with red outlines from an optional private sidecar (`reimbursement-report.receipts.json`). As
+measured on 2026-09-14 the private backfill linked 147 of 227 items across 43 of 49 tickets (164
+embedded pages). **As of 2026-09-16 the bundle holds 231 items with 84 unlinked** — the sidecar is
+an input nothing regenerates, so items arriving after the backfill stay "Receipt not linked"
+until Phase 9 ships. Of those 84: 69 were adjudicated as having no locatable invoice, 11 are
+structural (paper totals, blank form rows, duplicate/reissue markers, one absent vendor upload),
+and **4 do have a retrievable original** — an upload URL in their own submission email that has
+never been downloaded. Backfill tooling, per-item audit, and verification notes live under
+gitignored `reports/output/.work/receipt-backfill/`.
 
 **Shared workflow Step 32 delivered (2026-09-12 UTC).** The optional comments-only service passed local HTTP/browser/emulator and installed-wheel checks, the complete main-checkout suite, six independent reviews, and feature CI. Step 33/M6 subsequently passed actual cloud observations and operator acceptance on 2026-09-12. The private record satisfies the Phase B entry gate. Handoff behavior now has local implementation and automated coverage; M7 / Step 35 cloud acceptance now passes; all fifteen observations and the operator wording judgment are recorded privately. See the [delivery record](documentation/shared-workflow-proof-sync.md#step-32-delivery--2026-09-12-utc).
 
@@ -245,7 +274,7 @@ changes or disappears. Neither command sends mail or writes Sheets. **Strict pay
 per-ticket reference-digest bindings, atomic quarantine) and `operator_payments`; three fail-closed
 majors from the landing review remain open as the next fix step (see
 `documentation/reimbursement-refresh-plan.md` § 2026-09-06 amendment). The Step 36 delivery gate
-has **1,231 collected tests** with dev/slides/web installed and the local Firestore emulator running: 1,228 passed and 3 unchanged existing skips in both candidate and main; all 281 web cases pass without skips. Strict package mypy, Ruff, packaging/privacy checks, installed-wheel browser smoke and six fresh independent lenses pass, as do all three jobs in both feature and main CI. Hosted handoff acceptance passed M7 / Step 35. The M8 image from delivered source `7f07ba3` passed actual cloud build and inspection; deployment and two-account acceptance remain pending in M8 / Step 37. Resume from private image and baseline receipts; do not repeat completed build steps.
+has **1,231 collected tests** with dev/slides/web installed and the local Firestore emulator running: 1,228 passed and 3 unchanged existing skips in both candidate and main; all 281 web cases pass without skips. Strict package mypy, Ruff, packaging/privacy checks, installed-wheel browser smoke and six fresh independent lenses pass, as did all three CI jobs **at that time** — that 1,231 figure predates `7eb0c4f`, which added the receipt-viewer suite, and main CI has been red ever since (see the top of this section). Re-measure at the next full-suite gate rather than reusing 1,231. Hosted handoff acceptance passed M7 / Step 35. The M8 image from delivered source `7f07ba3` passed actual cloud build and inspection; deployment and two-account acceptance remain pending in M8 / Step 37. Resume from private image and baseline receipts; do not repeat completed build steps.
 **The Gmail read-only ingest connector has also shipped** (`documentation/gmail-ingest-plan.md`,
 tracking span #15–#22; deferred #18 and its umbrella #22 remain open): `gmail_source.py` + the
 `fetch-mail` CLI replace the manual Google Takeout export —
@@ -278,8 +307,14 @@ setup + M2 real-sheet smoke are DONE). **Next = operator-gated observation:** M3
 ## 7. Environment requirements
 
 - Windows 11 + Python `>=3.12`; `uv` on PATH. No `pip` (uv-managed).
-- README screenshot maintenance only: the reimbursement capture helper uses ephemeral
-  Playwright 1.58.0 + Chromium; exporting the example slide requires desktop PowerPoint on Windows.
+- **Playwright is a `[dev]` dependency, not screenshot-only.** Four test modules import it, and a
+  browser binary is required for a green suite: run `uv run playwright install chromium`. Its
+  absence does NOT skip those tests — it fails them (that is the current red-CI defect; see § 6).
+  The README capture helper additionally pins Playwright 1.58.0 ephemerally, and exporting the
+  example slide requires desktop PowerPoint on Windows.
+- **For the full local suite with `[web]`:** a loopback Firestore emulator reachable via
+  `FIRESTORE_EMULATOR_HOST`. Those modules fail at collection rather than skipping without it, by
+  design — a missing emulator must never look like a pass.
 - **For the optional Treasurer Slides native-text foundation only:** a Windows host and
   `uv sync --extra dev --extra slides`. `pypdfium2` runs only in the LPAC worker; there is no
   supported operator command until the remaining Wave 1 steps ship.

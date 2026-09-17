@@ -886,9 +886,13 @@ unproven and its failure mode is silent blank glyphs rather than a crash. Steps 
 Step 49 (M9) is the attended operator run. A local HTML picker for confirming multi-asset tickets is
 deliberately deferred to Step 50.
 
-Note before Step 43 dispatches: [treasurer-summary Wave 1](documentation/treasurer-summary-wave-1-plan.md)
-Step 16 (issue #43, PENDING) claims the same three native-worker files and the same CI job. The two
-need an explicit sequencing decision; whichever lands second rebases.
+Sequencing is already resolved — no operator gate. [treasurer-summary Wave 1](documentation/treasurer-summary-wave-1-plan.md)
+Step 16 (issue #43, still OPEN) claims the same three native-worker files and the same
+`windows-native-sandbox` job. Step 43's brief checks whether #43 has landed and rebases or leaves
+a note accordingly; whichever lands second rebases. No decision is required before dispatch.
+
+Plan sync completed 2026-09-16: umbrella [#71](https://github.com/aberson/pta_finance/issues/71),
+automated Steps 38–48 in #72–#82, attended Step 49 (M9) in #83. Implementation has not begun.
 
 ---
 
@@ -915,7 +919,9 @@ offline evidence layer to the reimbursement queue; it changes no amounts, decisi
   builder, a Playwright smoke test, a promote-with-backup script, and a per-item audit. Marks were
   verified by independent vision reviewers plus adversarial refuters, with a resolver round for
   disputes. Result: 147 of 227 queue items linked across 43 of 49 tickets over 164 pages; the 80
-  unlinked items have no original receipt in the evidence.
+  unlinked items had no original receipt in the evidence. **As measured on 2026-09-14** — the
+  bundle has since grown to 231 items / 84 unlinked, and 4 of those 84 DO have a retrievable
+  original (an upload URL never downloaded). See Phase 9.
 
 ### Files changed
 
@@ -935,7 +941,7 @@ offline evidence layer to the reimbursement queue; it changes no amounts, decisi
 |---|---|
 | Ellipse geometry | The viewer inflates each box (`rx = 0.60w + 0.006`, `ry = 0.72h + 0.003`); a box that must exclude an adjacent line needs about 22% vertical headroom. |
 | Mark convention | Product lines with their price, plus one ellipse over the totals block when the total equals or explains the claim; claim money is never changed and documented claim/receipt discrepancies are preserved. |
-| Missing originals | Paper-total tickets, one absent IKEA upload, and the unlocated Amazon invoice rows stay "Receipt not linked"; two attachments filed as receipts were mis-filed mailbox screenshots. |
+| Missing originals | Paper-total tickets, one absent vendor upload, and the unlocated invoice rows stay "Receipt not linked"; two attachments filed as receipts were mis-filed mailbox screenshots. |
 | Size | The private HTML is about 92 MB with 164 embedded pages; lower JPEG quality would cut roughly a quarter if needed. |
 
 Validation: 821 passed, 2 skipped (823 collected) on the selected suite that excludes the
