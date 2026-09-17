@@ -864,6 +864,34 @@ its engineering plan follows acceptance of the live queue and does not expand St
 
 ---
 
+## Phase 9 — Automatic source-receipt filling — planned (Steps 38–49)
+
+**Objective:** Make the reimbursement refresh *produce* receipt evidence instead of only
+consuming it, so newly arrived queue items stop rendering "Receipt not linked" until someone
+hand-builds a sidecar.
+
+**Status: PLANNED (2026-09-16).** The scoped source of truth is
+[documentation/receipt-autofill-plan.md](documentation/receipt-autofill-plan.md). Reserve
+Steps 38–49. The refresh gains a fill stage that fetches each ticket's own uploaded receipt
+assets from a configured host allowlist into a private cache, renders them to display pages
+(PDFs through the existing attested Windows LPAC worker), auto-links only single-asset tickets
+with `box: null`, and stages every ambiguous ticket into a private proposals file an operator
+confirms. Red outlines stay human — `receipt_viewer.py` forbids inferring a location from an
+amount or description. No Sheet write, no outbound mail, no scheduler; the monthly workflow is
+untouched.
+
+Step 38 repairs a pre-existing red CI browser gate that blocks every gate downstream. Steps 41–42
+gate the LPAC render work behind a spike, because pdfium's Windows font mapper inside the LPAC is
+unproven and its failure mode is silent blank glyphs rather than a crash. Steps 38–48 are automated;
+Step 49 (M9) is the attended operator run. A local HTML picker for confirming multi-asset tickets is
+deliberately deferred to Step 50.
+
+Note before Step 43 dispatches: [treasurer-summary Wave 1](documentation/treasurer-summary-wave-1-plan.md)
+Step 16 (issue #43, PENDING) claims the same three native-worker files and the same CI job. The two
+need an explicit sequencing decision; whichever lands second rebases.
+
+---
+
 ## Receipt viewer and source backfill — shipped 2026-09-14
 
 **Status: COMPLETE.** Accepted by the user for current items ("Looks great!"), then extended to
