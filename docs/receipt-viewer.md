@@ -20,6 +20,7 @@ Locations live in an optional private JSON file beside the report bundle. Replac
 `.json` suffix with `.receipts.json`. For the default bundle this is
 `reports/output/reimbursement-report.receipts.json`. Both `report-reimbursements` and the render
 stage of `update-reimbursements` pick it up automatically. Existing bundles need no migration.
+Both commands print how many item lines have a validated receipt link and how many remain unlinked.
 
 This version uses **verified saved locations**. It does not perform OCR, download receipts during
 rendering, or automatically match newly submitted items. An operator or an assistant inspecting the

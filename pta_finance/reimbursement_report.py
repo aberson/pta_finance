@@ -421,6 +421,7 @@ class BuildResult:
     sha256: str
     bytes_written: int
     summary: ReportSummary
+    receipt_linked_items: int = 0
 
 
 def _object(
@@ -1091,10 +1092,20 @@ def _validate_ticket(ticket: Ticket, *, label: str) -> None:
     if drafts > 1:
         _fail(f"{label} tickets may contain at most one draft message")
     if ticket.live.workflow_state == "SETTLED":
-        if ticket.review.status != "A" or ticket.live.decision != "APPROVED":
-            _fail(f"{label} SETTLED tickets must be approved")
         if ticket.live.payment_status not in {"PAID", "PAID_PRIOR"}:
             _fail(f"{label} SETTLED tickets must carry paid status")
+        fully_approved = ticket.review.status == "A" and ticket.live.decision == "APPROVED"
+        paid_and_declined = (
+            ticket.review.status == "D"
+            and ticket.live.decision == "DECLINED"
+            and ticket.approved > 0
+            and ticket.amount_for("D") > 0
+            and all(item.status in {"A", "D"} for item in ticket.items)
+            and ticket.live.payment_date is not None
+            and bool(ticket.live.confirmations)
+        )
+        if not (fully_approved or paid_and_declined):
+            _fail(f"{label} SETTLED tickets must be approved or paid with declined lines")
 
     expected_decision = {"A": "APPROVED", "C": "CLARIFICATION", "D": "DECLINED"}
     if ticket.live.decision != "UNREVIEWED":
@@ -1616,4 +1627,7 @@ def build_report(data_path: Path, output_path: Path) -> BuildResult:
         sha256=hashlib.sha256(encoded).hexdigest(),
         bytes_written=len(encoded),
         summary=report.summary,
+        receipt_linked_items=(
+            sum(len(items) for items in receipts["items"].values()) if receipts else 0
+        ),
     )

@@ -1052,6 +1052,10 @@ def _print_reimbursement_report_result(result: reimbursement_report.BuildResult)
         f"${summary.declined:,.2f} declined, ${summary.question:,.2f} question"
     )
     print(f"  email drafts   : {summary.emails_to_send}")
+    print(
+        f"  receipt links  : {result.receipt_linked_items} linked, "
+        f"{summary.item_lines - result.receipt_linked_items} unlinked"
+    )
     print(f"  output         : {result.output_path}")
     print(f"  sha256         : {result.sha256}")
 

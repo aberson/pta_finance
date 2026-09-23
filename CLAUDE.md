@@ -183,13 +183,15 @@ scripts/            identity guard, README screenshot capture and PowerPoint exp
   is recorded only from exact `payment_links` (strict Zelle grammars, per-reference bindings,
   atomic group validation) or audited `operator_payments`; thread anchors and direct links never
   authorize payment, and operator records are content-addressed (a persisted review cannot be
-  amended in place). `report-reimbursements` is
+  amended in place). A settled claim may retain declined lines when its approved lines were paid,
+  preserving both amounts separately. `report-reimbursements` is
   offline; `update-reimbursements` may acquire Gmail first but never sends mail or writes Sheets.
   **Receipt viewer** (`receipt_viewer.py`, `reports/templates/receipt_viewer.*.j2`): `build_report`
   auto-detects a sibling `<bundle>.receipts.json`, validates it (exact keys, image hashes, item
   fingerprints via `item_fingerprint`, in-bounds boxes, path containment, 20 MiB/page and 100 MiB
   total), and embeds the pages so clicking a queue item opens its receipt with red outlines; an
   invalid or stale sidecar stops HTML replacement, and an absent one renders "Receipt not linked".
+  The report command prints linked and unlinked item counts after validation.
   Locations are prepared offline by an operator or assistant; the toolkit never OCRs, downloads,
   or auto-matches at render time ([docs/receipt-viewer.md](docs/receipt-viewer.md)).
 - **Treasurer-summary foundation** (`treasurer_slides/`): strict private models plus an optional
@@ -219,15 +221,14 @@ receipt assets from a configured host allowlist, rasterizes them (PDFs through t
 attested Windows LPAC worker), auto-links only single-asset tickets with `box: null`, and stages
 ambiguous tickets into a proposals file an operator confirms. Red outlines stay human.
 
-**Receipt viewer shipped and backfilled (2026-09-14).** Queue items open their source receipt
+**Receipt viewer shipped and backfilled (2026-09-14; current links refreshed 2026-09-23).** Queue items open their source receipt
 with red outlines from an optional private sidecar (`reimbursement-report.receipts.json`). As
 measured on 2026-09-14 the private backfill linked 147 of 227 items across 43 of 49 tickets (164
-embedded pages). **As of 2026-09-16 the bundle holds 231 items with 84 unlinked** — the sidecar is
-an input nothing regenerates, so items arriving after the backfill stay "Receipt not linked"
-until Phase 9 ships. Of those 84: 69 were adjudicated as having no locatable invoice, 11 are
-structural (paper totals, blank form rows, duplicate/reissue markers, one absent vendor upload),
-and **4 do have a retrievable original** — an upload URL in their own submission email that has
-never been downloaded. Backfill tooling, per-item audit, and verification notes live under
+embedded pages). **As of 2026-09-23 the bundle holds 235 items with 155 linked and 80 unlinked**
+after a private manual backfill of eight recent items. The sidecar is still an input nothing
+regenerates, so future items stay "Receipt not linked" until Phase 9 ships. Of the older 80, 69
+were adjudicated as having no locatable invoice and 11 are structural (paper totals, blank form
+rows, duplicate/reissue markers, one absent vendor upload). Backfill tooling and audits live under
 gitignored `reports/output/.work/receipt-backfill/`.
 
 **Shared workflow Step 32 delivered (2026-09-12 UTC).** The optional comments-only service passed local HTTP/browser/emulator and installed-wheel checks, the complete main-checkout suite, six independent reviews, and feature CI. Step 33/M6 subsequently passed actual cloud observations and operator acceptance on 2026-09-12. The private record satisfies the Phase B entry gate. Handoff behavior now has local implementation and automated coverage; M7 / Step 35 cloud acceptance now passes; all fifteen observations and the operator wording judgment are recorded privately. See the [delivery record](documentation/shared-workflow-proof-sync.md#step-32-delivery--2026-09-12-utc).

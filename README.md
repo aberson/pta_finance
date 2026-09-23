@@ -173,6 +173,8 @@ Private Drive upload is not built yet.
 
 **Ready to use:** budget updates, financial analysis, HTML reports, Gmail downloads, receipt
 mapping, the reimbursement review queue, and click-to-view source receipts in that queue.
+The reimbursement report prints linked and unlinked receipt counts. A claim with paid approved
+lines and declined lines can close with both outcomes visible in its case history.
 
 **In progress:** turning the treasurer snapshot prototype into an automatic slide workflow.
 The [slide plan](documentation/treasurer-summary-wave-1-plan.md) tracks the remaining work.

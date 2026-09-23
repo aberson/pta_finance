@@ -85,6 +85,7 @@ def test_build_report_embeds_checked_receipts_offline_and_deterministically(tmp_
     assert str(tmp_path) not in rendered
     assert reimbursement_report.build_report(bundle, output).sha256 == result.sha256
     assert result.summary == reimbursement_report.load_bundle(bundle).summary
+    assert result.receipt_linked_items == 1
 
 
 @pytest.mark.parametrize(

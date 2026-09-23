@@ -177,6 +177,7 @@ def test_report_reimbursements_is_offline_and_prints_only_aggregates(
     assert output_path.read_text(encoding="utf-8").startswith("<!doctype html>")
     assert "Fictional Requester" in output_path.read_text(encoding="utf-8")
     assert "1 active, 0 settled" in stdout
+    assert "receipt links  : 0 linked, 1 unlinked" in stdout
     assert "$12.34 approved" in stdout
     assert "Fictional Requester" not in stdout
     assert "example.org" not in stdout

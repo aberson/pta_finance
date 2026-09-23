@@ -462,8 +462,44 @@ def test_build_report_writes_atomically_and_returns_result(tmp_path: Path) -> No
     assert result.bytes_written == len(output)
     assert result.sha256 == hashlib.sha256(output).hexdigest()
     assert result.summary.active == 3
+    assert result.receipt_linked_items == 0
     assert output.startswith(b"<!doctype html>")
     assert not list(output_path.parent.glob(f".{output_path.name}.*.tmp"))
+
+
+def test_paid_approved_and_declined_lines_can_close_claim(tmp_path: Path) -> None:
+    bundle = _bundle()
+    ticket = bundle["tickets"][1]  # type: ignore[index]
+    ticket["items"][1]["status"] = "D"  # type: ignore[index]
+    ticket["review"]["status"] = "D"  # type: ignore[index]
+    ticket["live"].update(  # type: ignore[union-attr]
+        {
+            "workflow_state": "SETTLED",
+            "decision": "DECLINED",
+            "payment_status": "PAID_PRIOR",
+            "payment_date": "2026-08-03",
+            "confirmations": ["Fictional payment for the approved $5.00 line"],
+        }
+    )
+    ticket["messages"] = []  # type: ignore[index]
+    path = tmp_path / "mixed.json"
+    _write_bundle(path, bundle)
+
+    report = reimbursement_report.load_bundle(path)
+    mixed = next(t for t in report.closed_tickets if t.ref == "NEW-02")
+    assert mixed.approved == Decimal("5.00")
+    assert mixed.amount_for("D") == Decimal("7.00")
+    assert mixed.pay_now == Decimal("0.00")
+    assert report.summary.active == 2
+    assert report.summary.settled == 2
+    rendered = reimbursement_report.render_html(report)
+    assert "Resolved claims; nothing remains to pay" in rendered
+    assert "Paid + declined" in rendered
+
+    ticket["items"][0]["status"] = "D"  # type: ignore[index]
+    _write_bundle(path, bundle)
+    with pytest.raises(reimbursement_report.ReimbursementReportError, match="paid with declined"):
+        reimbursement_report.load_bundle(path)
 
 
 @pytest.mark.parametrize(
