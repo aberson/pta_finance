@@ -981,15 +981,20 @@ Firestore-emulator modules and two native-PDF modules. The full suite cannot col
 tests, a private end-to-end refresh, strict mypy (39 source files), Ruff lint/format, the public
 identity guard, and `git diff --check` passed.
 
-### Next feature candidate
+### Phase 10 — Non-reimbursement action queue
 
-Plan a separate **non-reimbursement action queue** from archived mail. It should preserve the
+Build a separate **non-reimbursement action queue** from archived mail. It should preserve the
 source thread and attachments, group repeated follow-ups, and track owner, next action, status,
 and completion evidence for pre-purchase approval requests, board budget decisions that require
 internal/public updates, and planning estimates. It must distinguish these from reimbursement
-claims and never infer a payment, write a budget, or send a reply from free text. Start with
-`plan-feature` against the current mail parser, budget commands, and the private September 23
-triage; then review the plan, sync build issues, and implement with fictional mail fixtures.
+claims and never infer a payment, write a budget, or send a reply from free text. The scoped plan
+was reviewed against the current mail parser, budget commands, and private September 23 triage;
+build issues were synced with fictional mail fixtures and private acceptance as separate steps.
+
+**Phase 10 plan:** [non-reimbursement action queue](documentation/non-reimbursement-action-queue-plan.md)
+(Steps 51–56; umbrella #86, build issues #87–#92). Step 50 remains reserved for the receipt
+picker. Before building Phase 10, complete Phase 9 Step 38 / #72 so the existing CI browser
+gate is green.
 
 ---
 
