@@ -38,7 +38,7 @@ financial reports use GitHub Actions.
 
 ```bash
 uv sync --extra dev --extra web     # add [slides] for native-parser tests, [pdf] for WeasyPrint
-uv run playwright install chromium  # required: browser tests fail (not skip) without a binary
+uv run playwright install chromium  # required to execute browser tests locally
 uv run pytest -q                    # test — with [web] installed this ALSO needs a loopback
                                     # Firestore emulator on FIRESTORE_EMULATOR_HOST, or 6 modules
                                     # fail at collection by design (see § 5)
@@ -206,20 +206,21 @@ scripts/            identity guard, README screenshot capture and PowerPoint exp
 
 ## 6. Current state
 
-**Main CI is RED and has been since `7eb0c4f`.** `tests/test_receipt_viewer.py:188` guards on
-`importorskip("playwright.sync_api")`, but `playwright` ships in the `dev` extra every job
-installs, so the guard can never fire; the `lint-type-test` job collects that browser test and
-never runs `playwright install`, so `chromium.launch()` raises. The only job with a browser
-(`shared-workflow`) is path-filtered to `tests/test_shared_workflow_*.py` and never collects it.
-Last green run is `b1e0a2c`. **Phase 9 Step 38 (#72) is the repair and must land first.**
+**Phase 9 Step 38 (#72) has a locally verified CI browser-gate repair; PR CI is pending.**
+`playwright` ships in the `dev` extra. The `lint-type-test` job runs its full suite with a fresh,
+empty Playwright browser directory and asserts that both receipt-viewer browser cases skip.
+The test skips only when Playwright reports its executable missing. `shared-workflow` installs
+Chromium and asserts that both receipt-viewer viewports run without skips. The three CI jobs
+remain separate. The defect began at `7eb0c4f`; the preceding green
+run was `b1e0a2c`.
 
-**Phase 9 planned, NOT built (2026-09-16).** Automatic source-receipt filling — Steps 38–49,
-umbrella #71, step issues #72–#83, all OPEN; scoped plan in
-[documentation/receipt-autofill-plan.md](documentation/receipt-autofill-plan.md). **Zero code
-exists.** It adds a fill stage to `update-reimbursements` that fetches each ticket's own uploaded
-receipt assets from a configured host allowlist, rasterizes them (PDFs through the existing
-attested Windows LPAC worker), auto-links only single-asset tickets with `box: null`, and stages
-ambiguous tickets into a proposals file an operator confirms. Red outlines stay human.
+**Phase 9 receipt autofill remains planned.** Step 38 is the CI repair candidate; Steps 39–49
+cover the autofill feature under umbrella #71 and step issues #73–#83. The scoped plan is in
+[documentation/receipt-autofill-plan.md](documentation/receipt-autofill-plan.md). **No autofill
+feature code exists yet.** It adds a fill stage to `update-reimbursements` that fetches each
+ticket's own uploaded receipt assets from a configured host allowlist. It rasterizes PDFs through
+the existing attested Windows LPAC worker, auto-links only single-asset tickets with `box: null`,
+and stages ambiguous tickets into a proposals file an operator confirms. Red outlines stay human.
 
 **Receipt viewer shipped and backfilled (2026-09-14; current links refreshed 2026-09-23).** Queue items open their source receipt
 with red outlines from an optional private sidecar (`reimbursement-report.receipts.json`). As
@@ -275,7 +276,7 @@ changes or disappears. Neither command sends mail or writes Sheets. **Strict pay
 per-ticket reference-digest bindings, atomic quarantine) and `operator_payments`; three fail-closed
 majors from the landing review remain open as the next fix step (see
 `documentation/reimbursement-refresh-plan.md` § 2026-09-06 amendment). The Step 36 delivery gate
-has **1,231 collected tests** with dev/slides/web installed and the local Firestore emulator running: 1,228 passed and 3 unchanged existing skips in both candidate and main; all 281 web cases pass without skips. Strict package mypy, Ruff, packaging/privacy checks, installed-wheel browser smoke and six fresh independent lenses pass, as did all three CI jobs **at that time** — that 1,231 figure predates `7eb0c4f`, which added the receipt-viewer suite, and main CI has been red ever since (see the top of this section). Re-measure at the next full-suite gate rather than reusing 1,231. Hosted handoff acceptance passed M7 / Step 35. The M8 image from delivered source `7f07ba3` passed actual cloud build and inspection; deployment and two-account acceptance remain pending in M8 / Step 37. Resume from private image and baseline receipts; do not repeat completed build steps.
+has **1,231 collected tests** with dev/slides/web installed and the local Firestore emulator running: 1,228 passed and 3 unchanged existing skips in both candidate and main; all 281 web cases pass without skips. Strict package mypy, Ruff, packaging/privacy checks, installed-wheel browser smoke and six fresh independent lenses pass, as did all three CI jobs **at that time** — that 1,231 figure predates `7eb0c4f`, which added the receipt-viewer suite, and the resulting CI failure is addressed by the Step 38 candidate (PR CI pending; see above). Re-measure at the next full-suite gate rather than reusing 1,231. Hosted handoff acceptance passed M7 / Step 35. The M8 image from delivered source `7f07ba3` passed actual cloud build and inspection; deployment and two-account acceptance remain pending in M8 / Step 37. Resume from private image and baseline receipts; do not repeat completed build steps.
 **The Gmail read-only ingest connector has also shipped** (`documentation/gmail-ingest-plan.md`,
 tracking span #15–#22; deferred #18 and its umbrella #22 remain open): `gmail_source.py` + the
 `fetch-mail` CLI replace the manual Google Takeout export —
@@ -308,9 +309,10 @@ setup + M2 real-sheet smoke are DONE). **Next = operator-gated observation:** M3
 ## 7. Environment requirements
 
 - Windows 11 + Python `>=3.12`; `uv` on PATH. No `pip` (uv-managed).
-- **Playwright is a `[dev]` dependency, not screenshot-only.** Four test modules import it, and a
-  browser binary is required for a green suite: run `uv run playwright install chromium`. Its
-  absence does NOT skip those tests — it fails them (that is the current red-CI defect; see § 6).
+- **Playwright is a `[dev]` dependency, not screenshot-only.** Three test modules import it. Run
+  `uv run playwright install chromium` to execute browser tests locally; the receipt-viewer
+  browser test skips when the executable is absent. The shared-workflow browser tests and smoke
+  require the binary and fail without it.
   The README capture helper additionally pins Playwright 1.58.0 ephemerally, and exporting the
   example slide requires desktop PowerPoint on Windows.
 - **For the full local suite with `[web]`:** a loopback Firestore emulator reachable via

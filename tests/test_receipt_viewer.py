@@ -191,7 +191,12 @@ def test_browser_receipt_navigation_zoom_focus_and_missing_source(
     output = tmp_path / "report.html"
     reimbursement_report.build_report(bundle, output)
     with playwright.sync_playwright() as driver:
-        browser = driver.chromium.launch()
+        try:
+            browser = driver.chromium.launch()
+        except playwright.Error as exc:
+            if "Executable doesn't exist at" in str(exc):
+                pytest.skip("Playwright Chromium executable is not installed")
+            raise
         page = browser.new_page(viewport=viewport)
         errors: list[str] = []
         requests: list[str] = []
