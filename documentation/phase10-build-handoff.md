@@ -23,9 +23,9 @@ passed all three jobs. This handoff itself may have a later documentation commit
 - Baseline strict mypy passed on 39 source files; Ruff lint and format checks passed. The full
   local pytest run was interrupted at about 68% at the operator's request to stop resource use.
   It is **not** a passing baseline result; rerun it when the computer is available.
-- Pytest generated untracked screenshots under `.build-step/`. Automatic approval review rejected
-  their removal. Keep them out of commits, inspect them on resume, and clean or stash them through
-  an approved operation before the build-phase clean-tree gate.
+- Pytest generated screenshots under `.build-step/`. Automatic approval review rejected their
+  removal, so they were preserved in local git stash `d155d977e3361ec19671cf45410891b1aac21a68`.
+  The project working tree is clean. Inspect that stash later if the screenshots are needed.
 - The temporary `pta-firestore-phase10` emulator container was stopped. Docker Desktop was shut
   down, and `wsl --list --running` reported no running distributions.
 
