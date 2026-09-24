@@ -993,7 +993,9 @@ build issues were synced with fictional mail fixtures and private acceptance as 
 
 **Phase 10 plan:** [non-reimbursement action queue](documentation/non-reimbursement-action-queue-plan.md)
 (Steps 51–56; umbrella #86, build issues #87–#92). Step 50 remains reserved for the receipt
-picker. Phase 9 Step 38 / #72 completed on 2026-09-23, and all three PR CI jobs passed; Phase 10 can start at Step 51.
+picker. Phase 9 Step 38 / #72 completed on 2026-09-23, and all three PR CI jobs passed.
+Phase 10 is paused during Step 51 with an unfinished implementation in a preserved worktree;
+see the [resume handoff](documentation/phase10-build-handoff.md).
 
 ---
 

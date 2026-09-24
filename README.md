@@ -179,8 +179,8 @@ lines and declined lines can close with both outcomes visible in its case histor
 **Phase 9 Step 38 complete** — issues #72 closed. The receipt-viewer browser CI gate is repaired:
 [PR #93](https://github.com/aberson/pta_finance/pull/93) passed all three jobs. The full local suite
 passed 1,253 tests with 3 expected skips, 0 type errors, and 0 lint violations. Automatic receipt
-filling remains planned; the [Phase 10 action queue](documentation/non-reimbursement-action-queue-plan.md)
-is the next build.
+filling remains planned. The [Phase 10 action queue](documentation/non-reimbursement-action-queue-plan.md)
+is paused during Step 51; see the [resume handoff](documentation/phase10-build-handoff.md).
 
 **In progress:** turning the treasurer snapshot prototype into an automatic slide workflow.
 The [slide plan](documentation/treasurer-summary-wave-1-plan.md) tracks the remaining work.

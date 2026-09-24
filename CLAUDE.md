@@ -206,6 +206,12 @@ scripts/            identity guard, README screenshot capture and PowerPoint exp
 
 ## 6. Current state
 
+**Phase 10 action queue is paused during Step 51 (#87).** The standalone archive scanner and
+fictional tests are unfinished in a preserved worktree, not merged to main. Focused and static
+checks passed; the Step 51 full suite was interrupted and independent review has not run.
+Fix subject-only evidence drift before review. Steps 52–55 and attended Step 56 remain pending;
+the [resume handoff](documentation/phase10-build-handoff.md) has the exact worktree and gates.
+
 **Phase 9 Step 38 (#72) is complete.** PR #93 passed all three CI jobs; the full post-merge
 local suite passed 1,253 tests with 3 expected skips.
 `playwright` ships in the `dev` extra. The `lint-type-test` job runs its full suite with a fresh,
