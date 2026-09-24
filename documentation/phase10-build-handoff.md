@@ -44,6 +44,8 @@ build-step-51-20260924005815, based on 64a499c.
   "Phase 10 baseline pytest screenshots 2026-09-24"; the earlier screenshot
   stash is d155d977e3361ec19671cf45410891b1aac21a68. Worktree .build-step/
   artifacts are local evidence, not part of the implementation.
+- The temporary Firestore container was stopped. Docker Desktop has exited, and
+  WSL reports no running distributions. No Step 51 test process remains.
 
 ## Scope and test cost
 
