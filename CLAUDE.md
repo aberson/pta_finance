@@ -206,7 +206,8 @@ scripts/            identity guard, README screenshot capture and PowerPoint exp
 
 ## 6. Current state
 
-**Phase 9 Step 38 (#72) has a locally verified CI browser-gate repair; PR CI is pending.**
+**Phase 9 Step 38 (#72) is complete.** PR #93 passed all three CI jobs; the full post-merge
+local suite passed 1,253 tests with 3 expected skips.
 `playwright` ships in the `dev` extra. The `lint-type-test` job runs its full suite with a fresh,
 empty Playwright browser directory and asserts that both receipt-viewer browser cases skip.
 The test skips only when Playwright reports its executable missing. `shared-workflow` installs
@@ -214,7 +215,7 @@ Chromium and asserts that both receipt-viewer viewports run without skips. The t
 remain separate. The defect began at `7eb0c4f`; the preceding green
 run was `b1e0a2c`.
 
-**Phase 9 receipt autofill remains planned.** Step 38 is the CI repair candidate; Steps 39–49
+**Phase 9 receipt autofill remains planned.** Step 38 repaired the CI browser gate; Steps 39–49
 cover the autofill feature under umbrella #71 and step issues #73–#83. The scoped plan is in
 [documentation/receipt-autofill-plan.md](documentation/receipt-autofill-plan.md). **No autofill
 feature code exists yet.** It adds a fill stage to `update-reimbursements` that fetches each
@@ -276,7 +277,7 @@ changes or disappears. Neither command sends mail or writes Sheets. **Strict pay
 per-ticket reference-digest bindings, atomic quarantine) and `operator_payments`; three fail-closed
 majors from the landing review remain open as the next fix step (see
 `documentation/reimbursement-refresh-plan.md` § 2026-09-06 amendment). The Step 36 delivery gate
-has **1,231 collected tests** with dev/slides/web installed and the local Firestore emulator running: 1,228 passed and 3 unchanged existing skips in both candidate and main; all 281 web cases pass without skips. Strict package mypy, Ruff, packaging/privacy checks, installed-wheel browser smoke and six fresh independent lenses pass, as did all three CI jobs **at that time** — that 1,231 figure predates `7eb0c4f`, which added the receipt-viewer suite, and the resulting CI failure is addressed by the Step 38 candidate (PR CI pending; see above). Re-measure at the next full-suite gate rather than reusing 1,231. Hosted handoff acceptance passed M7 / Step 35. The M8 image from delivered source `7f07ba3` passed actual cloud build and inspection; deployment and two-account acceptance remain pending in M8 / Step 37. Resume from private image and baseline receipts; do not repeat completed build steps.
+has **1,231 collected tests** with dev/slides/web installed and the local Firestore emulator running: 1,228 passed and 3 unchanged existing skips in both candidate and main; all 281 web cases pass without skips. Strict package mypy, Ruff, packaging/privacy checks, installed-wheel browser smoke and six fresh independent lenses pass, as did all three CI jobs **at that time** — that 1,231 figure predates `7eb0c4f`, which added the receipt-viewer suite, and the resulting CI failure was repaired by Step 38 (PR #93 all three jobs green; full main suite: 1,253 passed, 3 expected skips). Hosted handoff acceptance passed M7 / Step 35. The M8 image from delivered source `7f07ba3` passed actual cloud build and inspection; deployment and two-account acceptance remain pending in M8 / Step 37. Resume from private image and baseline receipts; do not repeat completed build steps.
 **The Gmail read-only ingest connector has also shipped** (`documentation/gmail-ingest-plan.md`,
 tracking span #15–#22; deferred #18 and its umbrella #22 remain open): `gmail_source.py` + the
 `fetch-mail` CLI replace the manual Google Takeout export —

@@ -5,7 +5,7 @@ Phase 9 — Steps 38–49. Planned 2026-09-16 against `main` at `7eb0c4f`.
 **Goal:** Make `pta-finance update-reimbursements` produce receipt evidence instead of only
 consuming it, so newly arrived review items stop rendering "Receipt not linked" until someone
 hand-builds a sidecar.
-**Status:** PLANNED.
+**Status:** STEP 38 DONE (2026-09-23); Steps 39–49 planned.
 
 Master plan: [`plan.md`](../plan.md). Steps 1–37 are reserved by earlier phases; this feature
 continues at **Step 38**.
@@ -546,6 +546,8 @@ from the URL or the original filename, so no vendor filename lands on disk or in
 - **Produces:** guard fix in `tests/test_receipt_viewer.py`; `.github/workflows/ci.yml` change so the receipt-viewer browser test runs in a browser-equipped job
 - **Done when:** all three CI jobs are green on a PR branch; the browser test is observed **executing** (not skipped) in exactly one job, and observed **skipping cleanly** when no browser binary is present
 - **Depends on:** none
+- **Status:** DONE (2026-09-23)
+- **Evidence:** PR #93 run 35932478654 passed all three jobs; lint asserted two skips and shared-workflow asserted the same two cases executed. The full post-merge local suite passed 1,253 tests with 3 expected skips.
 
 <!-- autofix-applied: 2026-09-16 -->
 ### Step 39: Shared page geometry and deterministic normalization

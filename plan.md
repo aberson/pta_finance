@@ -870,7 +870,7 @@ its engineering plan follows acceptance of the live queue and does not expand St
 consuming it, so newly arrived queue items stop rendering "Receipt not linked" until someone
 hand-builds a sidecar.
 
-**Status: PLANNED (2026-09-16).** The scoped source of truth is
+**Status: STEP 38 DONE (2026-09-23); Steps 39–49 planned.** The scoped source of truth is
 [documentation/receipt-autofill-plan.md](documentation/receipt-autofill-plan.md). Reserve
 Steps 38–49. The refresh gains a fill stage that fetches each ticket's own uploaded receipt
 assets from a configured host allowlist into a private cache, renders them to display pages
@@ -880,7 +880,7 @@ confirms. Red outlines stay human — `receipt_viewer.py` forbids inferring a lo
 amount or description. No Sheet write, no outbound mail, no scheduler; the monthly workflow is
 untouched.
 
-Step 38 repairs a pre-existing red CI browser gate that blocks every gate downstream. Steps 41–42
+Step 38 repaired the pre-existing red CI browser gate; all three jobs passed on PR #93. Steps 41–42
 gate the LPAC render work behind a spike, because pdfium's Windows font mapper inside the LPAC is
 unproven and its failure mode is silent blank glyphs rather than a crash. Steps 38–48 are automated;
 Step 49 (M9) is the attended operator run. A local HTML picker for confirming multi-asset tickets is
@@ -892,7 +892,7 @@ Step 16 (issue #43, still OPEN) claims the same three native-worker files and th
 a note accordingly; whichever lands second rebases. No decision is required before dispatch.
 
 Plan sync completed 2026-09-16: umbrella [#71](https://github.com/aberson/pta_finance/issues/71),
-automated Steps 38–48 in #72–#82, attended Step 49 (M9) in #83. Implementation has not begun.
+automated Steps 38–48 in #72–#82, attended Step 49 (M9) in #83. Step 38 is complete; receipt autofill implementation begins at Step 39.
 
 ---
 
@@ -993,8 +993,7 @@ build issues were synced with fictional mail fixtures and private acceptance as 
 
 **Phase 10 plan:** [non-reimbursement action queue](documentation/non-reimbursement-action-queue-plan.md)
 (Steps 51–56; umbrella #86, build issues #87–#92). Step 50 remains reserved for the receipt
-picker. Before building Phase 10, complete Phase 9 Step 38 / #72 so the existing CI browser
-gate is green.
+picker. Phase 9 Step 38 / #72 completed on 2026-09-23, and all three PR CI jobs passed; Phase 10 can start at Step 51.
 
 ---
 
