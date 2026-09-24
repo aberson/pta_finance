@@ -1,6 +1,6 @@
 # Non-reimbursement action queue — Phase 10 feature plan
 
-**Baseline:** `main` at `a421c94` on 2026-09-23. **Planning issue:** #85. **Umbrella:** #86. **Status:** READY for build. Plan review and plan wrap both returned READY on 2026-09-23; build issues #87–#92 are synced. Phase 9 still owns Steps 38–49, and its deferred receipt picker owns Step 50; this plan uses Steps 51–56. **Build entry gate:** Phase 9 Step 38 / issue #72 completed on 2026-09-23; all three CI jobs passed on PR #93. The earlier CI run for `a421c94` failed in `lint-type-test` because Chromium was absent. **Build pause:** preflight was stopped before Step 51 at the operator's request; see the [resume handoff](phase10-build-handoff.md).
+**Baseline:** `main` at `a421c94` on 2026-09-23. **Planning issue:** #85. **Umbrella:** #86. **Status:** READY for build. Plan review and plan wrap both returned READY on 2026-09-23; build issues #87–#92 are synced. Phase 9 still owns Steps 38–49, and its deferred receipt picker owns Step 50; this plan uses Steps 51–56. **Build entry gate:** Phase 9 Step 38 / issue #72 completed on 2026-09-23; all three CI jobs passed on PR #93. The earlier CI run for `a421c94` failed in `lint-type-test` because Chromium was absent. **Build pause:** Step 51 has an unfinished implementation in a preserved worktree; its full suite and independent review did not complete. See the [resume handoff](phase10-build-handoff.md).
 
 ## 1. What This Feature Does
 

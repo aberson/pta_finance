@@ -1,41 +1,74 @@
-# Phase 10 build handoff — paused before Step 51
+# Phase 10 build handoff — paused during Step 51
 
-**Project:** `C:\Users\abero\dev\pta_finance`
-
-**Plan:** [Non-reimbursement action queue](non-reimbursement-action-queue-plan.md)
-
-**Pause date:** 2026-09-23 (America/Los_Angeles)
+**Project:** C:\Users\abero\dev\pta_finance
+**Plan:** documentation/non-reimbursement-action-queue-plan.md
+**Pause date:** 2026-09-24 (America/Los_Angeles)
 
 ## Verify first
 
-Run `git log --oneline -5`, `git rev-parse --short HEAD`, and `git status --short --branch`
-in the project directory. Reconcile any change from this handoff before starting work. The last
-published feature prerequisite was Step 38 at `e5412f3`; its [main CI run](https://github.com/aberson/pta_finance/actions/runs/35938788116)
-passed all three jobs. This handoff itself may have a later documentation commit.
+In the project directory, run git log --oneline -5, git rev-parse --short HEAD, and
+git status --short --branch. Then run:
+git -C C:\Users\abero\dev\worktree_build-step-51-20260924005815 status --short
+Reconcile any changes before resuming. The preserved branch is
+build-step-51-20260924005815, based on 64a499c.
 
 ## State at pause
 
-- Phase 10 Steps 51–55 are pending; Step 56 is attended private-archive acceptance. No Phase 10
-  code step was dispatched, no Phase 10 worktree was created, and no build issue was changed.
-- The build-phase host probe passed in this session: fresh reviewer contexts could not access the
-  parent verdict-service handle, and tampered or old signed verdicts were rejected. Repeat the
-  session-specific probe when resuming.
-- Baseline strict mypy passed on 39 source files; Ruff lint and format checks passed. The full
-  local pytest run was interrupted at about 68% at the operator's request to stop resource use.
-  It is **not** a passing baseline result; rerun it when the computer is available.
-- Pytest generated screenshots under `.build-step/`. Automatic approval review rejected their
-  removal, so they were preserved in local git stash `d155d977e3361ec19671cf45410891b1aac21a68`.
-  The project working tree is clean. Inspect that stash later if the screenshots are needed.
-- The temporary `pta-firestore-phase10` emulator container was stopped. Docker Desktop was shut
-  down, and `wsl --list --running` reported no running distributions.
+- Step 51 / issue #87 is in progress, not reviewed, merged, or marked DONE. Steps 52–55
+  remain pending; Step 56 is attended private-archive acceptance. Main was clean at
+  64a499c before this documentation update. Issue #87 has a started comment.
+- The Step 51 worktree contains uncommitted pta_finance/cli.py, new
+  pta_finance/mail_actions.py, tests/test_mail_actions.py, and fictional fixtures in
+  tests/fixtures/mail_actions/. Its developer report is at
+  C:\Users\abero\dev\worktree_build-step-51-20260924005815\.build-step\dev-report.md.
+  Keep this worktree; it is the only copy of the unfinished implementation.
+- The resumed-session host isolation and authenticated verdict-service probes passed.
+  The Step 51 verdict service was closed and its sidecar removed when the operator
+  requested a wind-down. Start a new per-step verdict channel on resume; no PASS
+  was recorded.
+- Baseline strict mypy, Ruff lint/format, identity guard, and the full pytest suite
+  passed before Step 51. Pytest collected 1,328 tests and printed three skips. The
+  full run took about half an hour on this machine.
+- In the Step 51 worktree, seven focused action tests, strict mypy (40 files),
+  Ruff lint and format (83 files), identity guard, and git diff --check passed.
+  Its full pytest run reached at least 74% without a reported failure and was
+  interrupted at the operator's request. It is not a full-suite pass; edits
+  made during that run were covered by focused and static gates, not by a
+  completed full suite.
+- Known defect to fix first: receipt_ingest's evidence_sha256 excludes Subject.
+  A same-key subject-only change could pass Step 51's drift check. Compare all
+  captured source fields except source_labels before replacement, and add a
+  focused regression test. Also review what happens when a proposed reply
+  references an unclassified local ancestor; the developer report explains it.
+- Baseline pytest screenshots were preserved in a local stash titled
+  "Phase 10 baseline pytest screenshots 2026-09-24"; the earlier screenshot
+  stash is d155d977e3361ec19671cf45410891b1aac21a68. Worktree .build-step/
+  artifacts are local evidence, not part of the implementation.
+
+## Scope and test cost
+
+The feature scope remains five sequential code steps plus attended Step 56.
+The high cost this window was repeated full-suite testing: the baseline alone
+took about 30 minutes, and the current build protocol calls full pytest in the
+developer worktree, again at build-step gates, after merge, at the build-phase
+checkpoint, and at phase end. All five steps also request six-lens deep review.
+Repeating the same full suite within one step is the clearest overtesting
+opportunity. A leaner next run would use focused tests during implementation
+and one full suite at the ship gate, while retaining static checks, independent
+review, and CI. The installed build skills currently require their full gates,
+so any reduced protocol must be chosen explicitly before resuming. An
+interrupted or targeted run must never be reported as a full pass.
 
 ## Resume
 
-Notify the operator **before** launching Docker Desktop: its window covers the screen during
-active computer use. When the operator is ready, run:
+Notify the operator before launching Docker Desktop; its window covers the
+screen. The Firestore emulator is needed for the full local suite. Reopen the
+existing worktree, fix the known drift defect and test it, then complete
+Step 51's mechanical gates and independent review before merge. Only after an
+authenticated Step 51 PASS and the post-merge gate should the plan mark Step 51
+DONE and continue with Step 52.
 
-`/build-phase --plan documentation/non-reimbursement-action-queue-plan.md`
-
-The build should rerun its baseline gates, then execute Steps 51–55 in order. Step 56 remains an
-attended check of the private archive and operator decisions. Do not treat the interrupted pytest
-run or the prior session's host probe as current-session gate evidence.
+The plan entry point remains:
+/build-phase --plan documentation/non-reimbursement-action-queue-plan.md --resume 51
+Resume against the preserved Step 51 worktree rather than creating a new
+implementation.
