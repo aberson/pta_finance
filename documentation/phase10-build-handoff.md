@@ -1,7 +1,9 @@
 # Phase 10 build handoff — paused before Step 51
 
-**Project:** `C:\Users\abero\dev\pta_finance`  
-**Plan:** [Non-reimbursement action queue](non-reimbursement-action-queue-plan.md)  
+**Project:** `C:\Users\abero\dev\pta_finance`
+
+**Plan:** [Non-reimbursement action queue](non-reimbursement-action-queue-plan.md)
+
 **Pause date:** 2026-09-23 (America/Los_Angeles)
 
 ## Verify first
