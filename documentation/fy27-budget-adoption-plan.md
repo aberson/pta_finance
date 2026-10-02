@@ -1,7 +1,12 @@
 # FY2027 budget adoption â€” folding the members' "Pending Approval" expense budget in
 
 > **Status:** Phases 1â€“3 DONE â€” Board-approved and APPLIED 2026-07-20 (see Execution log below).
-> Phases 4â€“5 (archive old copies; process close-out) remain. Plus the tagging follow-up.
+> Phases 4â€“5 (archive old copies; process close-out) remain. The July tagging follow-up is complete.
+>
+> **Current naming (October 1, 2026):** the editable source is now `FY2027 - Editable Internal Budget`;
+> the former public comparison is `FY2027 - Internal Budget`; a separate `FY2027 - Public Budget`
+> follows the legacy share layout. Historical tab names below record the original adoption.
+> Sync uses the private `sheets.budget_tab_template` setting; the CLI commands are unchanged.
 >
 > **Companion (private, gitignored):** `reports/output/fy27-budget-reconciliation.md` holds the real
 > amounts, the full line-by-line delta table, and the board's rationale notes. This plan stays
@@ -54,7 +59,7 @@ These gate the build; they are enumerated with specifics in the companion file Â
 - **Problem:** The tab is *Pending Approval*; adopting it changes what every report shows. Approval +
   the three data confirmations must be explicit before any write.
 - **Produces:** the four decisions recorded (a note on the companion file is enough).
-- **Status:** PENDING
+- **Status:** DONE (2026-07-20)
 
 ---
 
@@ -75,7 +80,7 @@ These gate the build; they are enumerated with specifics in the companion file Â
 - **Guard:** do **not** rename any existing line (renames lose the hidden `strategic_group` /
   `strategic_goal` tags). Transcribe into the names already on the tab.
 - **Produces:** an updated `FY2027 Budget` tab, not yet synced.
-- **Status:** PENDING
+- **Status:** DONE (2026-07-20)
 
 ### Step 3: Preview the sync (writes nothing)
 
@@ -84,7 +89,7 @@ These gate the build; they are enumerated with specifics in the companion file Â
 - **Expect:** ~18 amount changes, ~2 new lines, ~18 note changes; **zero suspected renames** and
   **zero duplicates**. Any rename/duplicate flag means a Step-2 name didn't match a canonical line â€”
   fix the tab and re-preview before applying.
-- **Status:** PENDING
+- **Status:** DONE (2026-07-20)
 
 ### Step 4: Apply the sync
 
@@ -92,7 +97,7 @@ These gate the build; they are enumerated with specifics in the companion file Â
 - **Do:** `uv run pta-finance sync-budget --fy 2027 --apply` (snapshots the database first).
 - **Verify:** `uv run pta-finance report --fy 2027 --variant internal` â€” the proposed expense total
   drops to the Zero-Deficit figure and net flips from deficit to surplus (companion Â§1).
-- **Status:** PENDING
+- **Status:** DONE (2026-07-20)
 
 ---
 
@@ -105,7 +110,7 @@ These gate the build; they are enumerated with specifics in the companion file Â
   budget, not only in the private reconciliation file.
 - **Do:** confirm the `notes` column on `Budget Timeseries` now carries each cut's rationale (they
   ride through `sync-budget` from column C). Spot-check the highest-scrutiny lines.
-- **Status:** PENDING
+- **Status:** DONE (2026-07-20)
 
 ---
 
@@ -178,7 +183,24 @@ _(Generic â€” all real amounts live in the sheet, not this repo.)_
   ("edit only `FY<year> Budget`") is unchanged, and the operator guide's tab table now lists
   the new tab as share-only.
 
-## Not doing (and why)
+## October 2026 maintenance closeout
+
+The editable source can now be renamed without breaking `sync-budget`: set the optional string
+`budget_tab_template` under `[sheets]` in private `config.toml`. The literal `{fy}` token is replaced
+with the requested fiscal year. Omitting the setting preserves `FY{fy} Budget`.
+
+- The presentation views distinguish editable allocations, internal analysis, and public sharing.
+  The public layout pairs event income and expenses and shows prior-year budget and actuals.
+- README, the spreadsheet guide, configuration example, and CLI documentation explain the setting.
+- The CLI regression test exercises a renamed source; existing default-name tests still pass.
+- Validation: 37 targeted config/budget-sync tests passed; scoped Ruff checks and strict mypy passed;
+  live read-only sync reported no changes. This is not a full-suite or Phase 10 completion claim.
+- Actual figures, snapshots, PDFs, rendering recipes, and verification records remain private in
+  ignored `reports/output/budget-refresh/`. The one-time Sheet mutation scripts must not be replayed.
+- Earlier execution logs describe historical layouts. Their combined fundraising expense row and
+  dated reserve row are superseded by the current public view; reserves remain separate from the annual plan.
+
+## Original adoption scope exclusions
 
 - **No importer tool for the members' tab.** A one-time transcription through the existing, safe
   `sync-budget` path is cheaper and lower-risk than new code; the long-term fix is editing the live

@@ -27,6 +27,9 @@ use fictional data.*
 
 Edit the **`FY<year> Budget`** tab in Google Sheets. Preview your changes, then apply them.
 The tool saves a backup first and leaves actual spending and other years alone.
+If your editable tab has a different name, set `budget_tab_template` under `[sheets]` in
+private `config.toml`, for example `"FY{fy} - Editable Internal Budget"`. The same commands
+then use that tab; `{fy}` is replaced with the requested fiscal year.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/budget-workflow-dark.svg">

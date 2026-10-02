@@ -21,6 +21,8 @@ start_month = 1                        # 1 = January (calendar year)
 labels = ["K", "1", "2", "3", "4", "5"]
 
 [sheets]
+# Optional editable source tab for sync-budget; {fy} is replaced with the fiscal year.
+# budget_tab_template = "FY{fy} - Editable Internal Budget"
 spreadsheet_id           = "<google-spreadsheet-id>"
 test_spreadsheet_id      = "<throwaway-test-sheet-id>"     # for `check`
 drive_receipts_folder_id = "<google-drive-folder-id>"

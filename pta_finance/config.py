@@ -76,6 +76,7 @@ class Sheets:
     test_spreadsheet_id: str
     drive_receipts_folder_id: str
     drive_reports_folder_id: str
+    budget_tab_template: str = "FY{fy} Budget"
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,11 @@ def load_config(path: Path) -> Config:
         ),
         drive_reports_folder_id=_require_str(
             sheets_s, "drive_reports_folder_id", "sheets.drive_reports_folder_id"
+        ),
+        budget_tab_template=(
+            _require_str(sheets_s, "budget_tab_template", "sheets.budget_tab_template")
+            if "budget_tab_template" in sheets_s
+            else "FY{fy} Budget"
         ),
     )
 

@@ -160,7 +160,9 @@ scripts/            identity guard, README screenshot capture and PowerPoint exp
   never rewrites existing ones.
 - **Editable budget ↔ DB** (`budget_sync.py`): the operator hand-edits a readable **"FY&lt;fy&gt; Budget"**
   tab (styled after the hidden "Budget Share" tab); `sync-budget` reconciles those edits back into
-  the Budget Timeseries. PURE `parse_budget_tab` + `plan_budget_sync` (matches `(type, raw_category)`
+  the Budget Timeseries. An optional private `sheets.budget_tab_template` overrides the editable
+  tab title; `{fy}` is replaced with the requested year and the default remains `FY{fy} Budget`.
+  PURE `parse_budget_tab` + `plan_budget_sync` (matches `(type, raw_category)`
   within `(fy, proposed)`), CLI orchestrates. Default dry-run diff; `--apply` snapshots first
   (`backup.snapshot_raw_tab`, safe CSV + exact tagged entered-value JSON) then writes ONLY changed amount/notes cells +
   appends new lines via schema-independent `SheetsClient.update_cells` / `append_raw_rows`. Never

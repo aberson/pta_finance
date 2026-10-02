@@ -21,12 +21,17 @@ it is one living system, and the tools that make the reports read straight out o
 So there is exactly **one** place to change a year's budget: the tab named **"FY&lt;year&gt;
 Budget"** (for example `FY2027 Budget`). Make your changes there.
 
+Your installation can instead name it **`FY2027 - Editable Internal Budget`**. The private
+`config.toml` setting `[sheets] budget_tab_template` tells the sync tool which name to use;
+`"FY{fy} - Editable Internal Budget"` substitutes the requested year for `{fy}`. Throughout
+this guide, `FY<year> Budget` means that configured editable source, whatever its title.
+
 > ### ⛔ Never copy, duplicate, or edit an old budget sheet
 > An old "Budget 2026-2027" sheet — or any spare copy — **is not connected to anything.** Numbers
 > you change on a copy don't reach the reports, the dashboards, or the database. To count, they
 > have to be **re-typed by hand** into the real tab first — which is slow, error-prone, and the
 > exact chore this system exists to avoid. If you're not sure a tab is the live one, it almost
-> certainly isn't: the live one is named **`FY<year> Budget`** and nothing else.
+> certainly isn't: confirm the configured editable source before changing any numbers.
 
 A picture that helps: think of the spreadsheet as a building. The **`FY<year> Budget`** tab is the
 **front desk** where you drop off changes. The other tabs are back rooms — some store the official
@@ -60,7 +65,8 @@ one of those three kinds.
 |---|---|---|
 | **`FY<year> Budget`** (e.g. `FY2027 Budget`) | The **one** tab you hand-edit to set or adjust a year's proposed budget. | ✅ **Yes — this is the point.** Edit freely, then sync it in (below). |
 | **Budget Timeseries** | The actual **database**: every year's numbers in one long list. Every report and dashboard reads from here. | ⚠️ **Normally no.** The sync tool updates it *for* you from your `FY<year> Budget` tab. Hand-editing works but is easy to get wrong. |
-| **`FY<year> - Public Budget`** | The **member-facing, publishable** budget: last year's actuals next to this year's proposed amounts, with deltas, category subtotals, and totals. Per-fundraiser costs are combined into one "Fundraising Expenses" line. | 📖 **Share it; don't budget in it.** It's a generated snapshot of `FY<year> Budget` + the database — to change a number, edit `FY<year> Budget` and ask for a regeneration. |
+| **`FY<year> - Internal Budget`** | Internal comparison and rationale, with each fundraising event's income and costs together. | 📖 **Review it; edit allocations in the configured editable source.** |
+| **`FY<year> - Public Budget`** | Member-facing annual plan with prior-year budget and actual comparisons. Each fundraising event's income and costs appear together. | 📖 **Share it; don't budget in it.** Current figures can link to the editable source. After structural changes, refresh the view and verify totals; regenerate PDFs after any change. |
 | **Reimbursements** | An **auto-built** list of receipt line items, rebuilt from the treasurer's email. | ❌ **No.** It's machine-owned — any hand edit is wiped the next time it's rebuilt. |
 | **Dashboards** — e.g. *Group Explorer, Receipts Explorer, Spending by Goal, Income & Expense Breakdown, Pivot / Explore, Year-over-Year, Forecast* | Interactive views. You pick a value from a **dropdown** and the chart and table redraw. | 🔁 **Use the dropdowns; don't hand-edit the cells or formulas.** They rebuild themselves from the database. |
 | **Assumptions** | The tunable constants (the "settings") plus a written record of how the analytics were built. | ⚠️ **Mostly leave alone.** There's a clearly-marked "deletable" area for scratch notes. |

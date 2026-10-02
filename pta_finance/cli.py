@@ -1209,7 +1209,8 @@ def _cmd_sync_budget(args: argparse.Namespace) -> int:
     preserved, and a line present in the DB but absent from the tab is FLAGGED, never deleted.
 
     ``--fy`` defaults to the current fiscal year (:func:`pta_finance.ids.fiscal_year_label` of
-    today's UTC date under ``fiscal_year.start_month``); the tab it reads is ``FY<fy> Budget``.
+    today's UTC date under ``fiscal_year.start_month``). The editable tab defaults to
+    ``FY<fy> Budget``; ``sheets.budget_tab_template`` can override its name.
     """
     config = _load(args)
     fy: int = (
@@ -1218,7 +1219,7 @@ def _cmd_sync_budget(args: argparse.Namespace) -> int:
         else ids.fiscal_year_label(datetime.now(UTC).date(), config.fiscal_year.start_month)
     )
     client = SheetsClient(config)
-    tab = budget_sync.budget_tab_name(fy)
+    tab = config.sheets.budget_tab_template.replace("{fy}", str(fy))
 
     tab_grid = client.read_values(tab)
     if not tab_grid:

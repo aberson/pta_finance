@@ -448,7 +448,7 @@ class FakeSyncClient:
 
     def read_values(self, tab: str) -> list[list[str]]:
         self.read_values_calls.append(tab)
-        if tab == budget_sync.budget_tab_name(2027):
+        if tab in (budget_sync.budget_tab_name(2027), "FY2027 - Editable Internal Budget"):
             return [list(r) for r in _BUDGET_TAB_GRID]
         if tab == report_source.BUDGET_TIMESERIES_TAB:
             return [list(r) for r in _TS_GRID]
@@ -486,6 +486,24 @@ def test_cli_sync_budget_dry_run_makes_no_writes(
     assert "dry-run" in out
     assert "1 amount change(s)" in out
     assert "1 new line(s)" in out
+
+
+def test_cli_sync_budget_uses_configured_editable_tab(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    FakeSyncClient.instances = []
+    monkeypatch.setattr(cli, "SheetsClient", FakeSyncClient)
+    config_path = _write_config(tmp_path)
+    config_path.write_text(
+        config_path.read_text().replace(
+            "[sheets]", '[sheets]\nbudget_tab_template = "FY{fy} - Editable Internal Budget"'
+        )
+    )
+    assert cli.main(["sync-budget", "--fy", "2027", "--config", str(config_path)]) == 0
+    (client,) = FakeSyncClient.instances
+    assert client.read_values_calls[0] == "FY2027 - Editable Internal Budget"
+    assert client.update_cells_calls == []
+    assert client.append_calls == []
 
 
 def test_cli_sync_budget_apply_writes_through_the_caller(
