@@ -558,6 +558,7 @@ from the URL or the original filename, so no vendor filename lands on disk or in
 - **Produces:** `pta_finance/receipt_geometry.py`, `pta_finance/receipt_pages.py` (image path), `tests/test_receipt_pages.py`; **`pta_finance/receipt_viewer.py`** — export the page-budget constants and a `headroom_bytes(sidecar_path)` helper so producers import rather than redefine them (`load_receipts` and `item_fingerprint` are unchanged); the `receipts` extra in `pyproject.toml` with `uv.lock` refreshed; `.github/workflows/ci.yml` — every job installs a **fixed** `--extra` list, so a new extra that no job names leaves the new tests running without their dependency
 - **Done when:** byte-identical output across two runs on the same input; a rotated-EXIF fixture normalizes to displayed orientation; the geometry constants are asserted with `is`, not `==`, so re-duplication fails CI; the `lint-type-test` job installs the new extra and `tests/test_receipt_pages.py` is observed **executing, not skipped**, in that job (a module-level `importorskip` that leaves the module uncovered in every CI job is not an acceptable resolution — mirror the JUnit case-name and skip-state assertions in the `Receipt viewer browser test` CI step); full suite green
 - **Depends on:** 38
+- **Status:** BLOCKED (2026-10-09)
 
 <!-- autofix-applied: 2026-09-16 -->
 ### Step 40: Allowlisted asset fetcher with a content-addressed cache
