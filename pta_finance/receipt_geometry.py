@@ -96,12 +96,12 @@ NORMALIZATION: Final[PageNormalization] = PageNormalization(
     max_source_pixels=80_000_000,
     # JPEG's own format limit; a longer edge exists only to amplify the resampler's cost.
     max_source_edge=65_535,
-    # The § 5A starting values. They become § 5A's exact calibrated values (1.5x the largest
-    # measured need over every host, rounded up) once the CI-runner records join the dev-box
-    # record in plan § 6.3; each known-good anchor must then finish within 80% of each limit.
-    memory_bytes=1536 * 1024 * 1024,
-    cpu_seconds=15,
-    wall_seconds=30,
+    # Calibrated per plan § 5A over four hosts (record in § 6.3): 1.5x the largest need —
+    # 960 MiB, 5.50 s CPU, 5.64 s wall — rounded up to 64 MiB and whole seconds. Every known-good
+    # anchor finishes within 80% of each limit; a Pillow move re-runs that gate, never a re-tune.
+    memory_bytes=1472 * 1024 * 1024,
+    cpu_seconds=9,
+    wall_seconds=9,
     ready_seconds=5,
     # Pinned, not calibrated: at least 4x the measured Pillow-loaded interpreter baseline.
     max_as_baseline=256 * 1024 * 1024,

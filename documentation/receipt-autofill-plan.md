@@ -1320,35 +1320,47 @@ calibrated per § 5A to 1.5× the largest of N = 3 measured runs per host for th
 within 80% of each limit; the largest legitimate in-process peak
 measured so far is about 941 MiB working set and 4.6 s (an 80 MP CMYK progressive JPEG), and Step 39
 replaces that figure with the per-host measurement § 5A defines. **Calibrated values (Step 39,
-2026-10-10 — partial: the two CI-runner records are still to be folded in):** Pillow 12.2.0,
-Python 3.12.13, N = 3 per anchor per host, each host in its § 5A unit, every anchor a page at
-production limits, with `scripts/calibrate_receipt_decode.py`. *Windows dev box* (Intel Core Ultra
-7 155H; Job commit, Job user time): largest peak commit 933.1 MiB (978,395,136 B), CPU 4.73 s and
-wall 5.11 s, all from the 80 MP CMYK progressive anchor (80 MP RGBA PNG: 701.9 MiB, 1.13 s,
-1.42 s); spread at most 1.083 on every resolvable reading. *Linux under WSL on the same box*
-(bisected `RLIMIT_AS`, user + system): largest need 960 MiB, CPU 3.99 s, wall 3.66 s, again the
-CMYK anchor (RGBA PNG: 704 MiB, 1.56 s, 1.43 s); spread at most 1.047; Pillow-loaded interpreter
-baseline 46.8 MiB (49,115,136 B), so `max_as_baseline` (256 MiB) is 5.5× it. *Method change to
-the spread rule, recorded here for ratification (§ 5A's text is unchanged):* the "spread above 1.2
-invalidates" test was applied to every memory reading and to every CPU or wall reading whose
-smallest run is at least 0.5 s, not to sub-second time readings. The reason is resolution: Windows
-Job CPU accounting advances in 15.625 ms ticks, so a reading of a few ticks has a spread that is
-quantization, not run-to-run variance (0.5 s is 32 ticks, about 3% quantization). The readings
-this exempted were only the Windows CPU readings of the three small anchors, none of which bounds a
-limit — motion photo 0.156–0.219 s (spread 1.40), phone 0.203–0.266 s (1.31) and MPO
-0.031–0.078 s (2.50); in an earlier dev-box run 1.23, 1.33 and 2.00. Every exempted wall reading
-and every Linux reading was within 1.2 anyway (at most 1.11). Every reading that bounds a limit
-— the two 80 MP anchors — was checked and passed, and the first WSL run, invalidated by a bounding
-reading (RGBA PNG CPU spread 1.252 under concurrent load), was re-run rather than relaxed. From
-these two hosts § 5A's formulas give
-`memory_bytes` = 1,472 MiB, `cpu_seconds` = 8 and `wall_seconds` = 8. Until the
-`lint-type-test` and `windows-native-sandbox` records (the slowest runners decide CPU and wall)
-replace this partial record, the committed values stay at the starting 1.5 GiB / 15 s / 30 s.
-Measured once on the dev box: the `cpu-bound` sentinel's uncapped decode needs 14.6–15.0 s of
-CPU and the `wall-clock` sentinel's 22.6–25.9 s. Windows enforces `PerProcessUserTimeLimit` with a
-lag — a 1 s limit ended the child at 2.0–2.6 s of user time, and under heavy load a 2 s limit at
-6.6 s — so on Windows the broker wall clock is the hard time bound and the Job CPU limit a
-backstop. The header checks — pixel and source-edge
+2026-10-10, final):** Pillow 12.2.0, N = 3 per anchor per host, each host in its § 5A unit
+(Windows: Job peak commit and Job user time; Linux: bisected `RLIMIT_AS` need above the runtime
+baseline, at 64 MiB resolution, and user + system time), every anchor a page at the starting
+limits, measured with `scripts/calibrate_receipt_decode.py`. Largest reading per host, all from
+the 80 MP CMYK progressive anchor (the 80 MP RGBA PNG in brackets), with the largest spread over
+the readings the spread rule checks:
+
+| host | memory | CPU | wall | spread |
+|---|---|---|---|---|
+| Windows dev box (Intel Core Ultra 7 155H, Python 3.12.13) | 933.1 MiB [701.9] | 4.73 s [1.13] | 5.11 s [1.42] | 1.083 |
+| Linux, WSL2 on the dev box (Python 3.12.13) | 960 MiB [704] | 3.99 s [1.56] | 3.66 s [1.43] | 1.047 |
+| `lint-type-test` runner, ubuntu (AMD EPYC 7763, Python 3.12.15) | 960 MiB [704] | 4.96 s [1.93] | 4.97 s [1.94] | 1.012 |
+| `windows-native-sandbox` runner, windows-2022 (AMD family 25, Python 3.12.15) | 932.9 MiB [701.7] | 5.50 s [1.41] | 5.64 s [1.55] | 1.035 |
+
+The three small anchors needed at most 128 MiB, 0.33 s and 0.42 s on any host. The CI records come
+from run 38063930164. Formula inputs, M taken over all four hosts (CPU and wall on the slowest
+runner, `windows-native-sandbox`): M_memory = 960 MiB (1,006,632,960 B), M_cpu = 5.50 s,
+M_wall = 5.64 s. **Chosen values:** `memory_bytes` = ⌈1.5 × 960 MiB ÷ 64 MiB⌉ × 64 MiB = 1,472 MiB
+(1,543,503,872 B), `cpu_seconds` = max(5, ⌈1.5 × 5.50⌉) = 9 and `wall_seconds` =
+max(9, ⌈1.5 × 5.64⌉) = 9. Every known-good anchor then finishes at or below 80% of each limit:
+65.2% of memory, 61.1% of CPU and 62.7% of wall at the worst reading, and the headroom tests run
+at 1,177 MiB, 8 s and 8 s. The Pillow-loaded Linux interpreter baseline measured 49.9 MiB
+(52,310,016 B) on the `lint-type-test` runner and 46.8 MiB under WSL, so `max_as_baseline`
+(256 MiB, pinned) is 5.1× the larger. *Method change to the spread rule, recorded here for
+ratification (§ 5A's text is unchanged):* the "spread above 1.2 invalidates" test was applied to
+every memory reading and to every CPU or wall reading whose smallest run is at least 0.5 s, not to
+sub-second time readings. The reason is resolution: Windows Job CPU accounting advances in
+15.625 ms ticks, so a reading of a few ticks has a spread that is quantization, not run-to-run
+variance (0.5 s is 32 ticks, about 3% quantization). The readings this exempted that would
+otherwise have failed were all Windows CPU readings of the small anchors, none of which bounds a
+limit: on the dev box, motion photo 0.156–0.219 s (spread 1.40), phone 0.203–0.266 s (1.31) and
+MPO 0.031–0.078 s (2.50), with 1.23, 1.33 and 2.00 in an earlier run; and on the windows-2022
+runner, MPO 0.094–0.141 s (1.50). Every other exempted reading was within 1.2 anyway (at most
+1.17). Every reading that bounds a limit — the two 80 MP anchors — was checked and passed on every
+host. The first WSL run, invalidated by a bounding reading (RGBA PNG CPU spread 1.252 under
+concurrent load), was re-run rather than relaxed. Measured once on the dev box: the `cpu-bound`
+sentinel's uncapped decode needs 14.6–15.0 s of CPU and the `wall-clock` sentinel's 22.6–25.9 s;
+the `lanczos-strip` need (about 2.58 GB) stays above the chosen `memory_bytes`. Windows enforces
+`PerProcessUserTimeLimit` with a lag — a 1 s limit ended the child at 2.0–2.6 s of user time, and
+under heavy load a 2 s limit at 6.6 s — so on Windows the broker wall clock is the hard time bound
+and the Job CPU limit a backstop. The header checks — pixel and source-edge
 ceilings, the mode allowlist, the animated-PNG refusal — remain only as cheap fast paths and policy;
 none is a safety bound, and the raw-byte scan, EXIF and multi-picture counts are deleted.
 **Residual:** the child is still an ordinary user-level process running as the operator. A
