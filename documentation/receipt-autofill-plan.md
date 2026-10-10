@@ -1319,11 +1319,26 @@ calibrated per § 5A to 1.5× the largest of N = 3 measured runs per host for th
 (job commit on Windows, bisected address space on Linux), with every anchor required to finish
 within 80% of each limit; the largest legitimate in-process peak
 measured so far is about 941 MiB working set and 4.6 s (an 80 MP CMYK progressive JPEG), and Step 39
-replaces that figure with the per-host measurement § 5A defines. **Calibrated values:** *not yet
-measured — Step 39 replaces this sentence with the measured peak per host, the chosen
-`memory_bytes`, `cpu_seconds` and `wall_seconds`, N and the spread, the Pillow-loaded Linux
-interpreter baseline, and the Pillow version they were measured under (this record is Step 39's
-only edit to this plan).* The header checks — pixel and source-edge
+replaces that figure with the per-host measurement § 5A defines. **Calibrated values (Step 39,
+2026-10-10 — partial: the two CI-runner records are still to be folded in):** Pillow 12.2.0,
+Python 3.12.13, N = 3 per anchor per host, each host in its § 5A unit, every anchor a page at
+production limits, with `scripts/calibrate_receipt_decode.py`. *Windows dev box* (Intel Core Ultra
+7 155H; Job commit, Job user time): largest peak commit 933.1 MiB (978,395,136 B), CPU 4.73 s and
+wall 5.11 s, all from the 80 MP CMYK progressive anchor (80 MP RGBA PNG: 701.9 MiB, 1.13 s,
+1.42 s); spread at most 1.083 on every resolvable reading. *Linux under WSL on the same box*
+(bisected `RLIMIT_AS`, user + system): largest need 960 MiB, CPU 3.99 s, wall 3.66 s, again the
+CMYK anchor (RGBA PNG: 704 MiB, 1.56 s, 1.43 s); spread at most 1.047; Pillow-loaded interpreter
+baseline 46.8 MiB (49,115,136 B), so `max_as_baseline` (256 MiB) is 5.5× it. Readings under 0.5 s
+(the three small anchors) have spreads from Windows' 15.625 ms CPU-accounting tick, so the spread
+rule was applied to resolvable readings only. From these two hosts § 5A's formulas give
+`memory_bytes` = 1,472 MiB, `cpu_seconds` = 8 and `wall_seconds` = 8. Until the
+`lint-type-test` and `windows-native-sandbox` records (the slowest runners decide CPU and wall)
+replace this partial record, the committed values stay at the starting 1.5 GiB / 15 s / 30 s.
+Measured once on the dev box: the `cpu-bound` sentinel's uncapped decode needs 14.6–15.0 s of
+CPU and the `wall-clock` sentinel's 22.6–25.9 s. Windows enforces `PerProcessUserTimeLimit` with a
+lag — a 1 s limit ended the child at 2.0–2.6 s of user time, and under heavy load a 2 s limit at
+6.6 s — so on Windows the broker wall clock is the hard time bound and the Job CPU limit a
+backstop. The header checks — pixel and source-edge
 ceilings, the mode allowlist, the animated-PNG refusal — remain only as cheap fast paths and policy;
 none is a safety bound, and the raw-byte scan, EXIF and multi-picture counts are deleted.
 **Residual:** the child is still an ordinary user-level process running as the operator. A

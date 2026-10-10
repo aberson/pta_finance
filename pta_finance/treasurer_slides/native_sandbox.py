@@ -29,6 +29,8 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any, NoReturn, Protocol
 
+from pta_finance import process_limits
+
 _READY_FRAME_MAXIMUM_BYTES = 256
 _READY_NONCE_BYTES = 32
 _APP_CONTAINER_PROFILE_PREFIX = "PtaFinanceNativeWorker"
@@ -57,14 +59,6 @@ _WINDOWS_PROCESS_CREATION_ALL_APPLICATION_PACKAGES_OPT_OUT = 0x00000001
 _WINDOWS_PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
 _WINDOWS_PROC_THREAD_ATTRIBUTE_JOB_LIST = 0x0002000D
 _WINDOWS_PROC_THREAD_ATTRIBUTE_ALL_APPLICATION_PACKAGES_POLICY = 0x0002000F
-_WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
-_WINDOWS_JOB_OBJECT_LIMIT_PROCESS_TIME = 0x00000002
-_WINDOWS_JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
-_WINDOWS_JOB_OBJECT_LIMIT_PROCESS_MEMORY = 0x00000100
-_WINDOWS_JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
-_WINDOWS_JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION = 0x00000400
-_WINDOWS_HUNDRED_NANOSECONDS_PER_SECOND = 10_000_000
-_WINDOWS_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
 _WINDOWS_SECURITY_DESCRIPTOR_REVISION = 1
 _WINDOWS_INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
@@ -129,42 +123,6 @@ class _DeferredStartupArtifacts:
 
     runtime: Path | None
     profile_name: str | None
-
-
-class _IoCounters(ctypes.Structure):
-    _fields_ = [
-        ("ReadOperationCount", ctypes.c_ulonglong),
-        ("WriteOperationCount", ctypes.c_ulonglong),
-        ("OtherOperationCount", ctypes.c_ulonglong),
-        ("ReadTransferCount", ctypes.c_ulonglong),
-        ("WriteTransferCount", ctypes.c_ulonglong),
-        ("OtherTransferCount", ctypes.c_ulonglong),
-    ]
-
-
-class _BasicLimitInformation(ctypes.Structure):
-    _fields_ = [
-        ("PerProcessUserTimeLimit", ctypes.c_longlong),
-        ("PerJobUserTimeLimit", ctypes.c_longlong),
-        ("LimitFlags", ctypes.c_ulong),
-        ("MinimumWorkingSetSize", ctypes.c_size_t),
-        ("MaximumWorkingSetSize", ctypes.c_size_t),
-        ("ActiveProcessLimit", ctypes.c_ulong),
-        ("Affinity", ctypes.c_size_t),
-        ("PriorityClass", ctypes.c_ulong),
-        ("SchedulingClass", ctypes.c_ulong),
-    ]
-
-
-class _ExtendedLimitInformation(ctypes.Structure):
-    _fields_ = [
-        ("BasicLimitInformation", _BasicLimitInformation),
-        ("IoInfo", _IoCounters),
-        ("ProcessMemoryLimit", ctypes.c_size_t),
-        ("JobMemoryLimit", ctypes.c_size_t),
-        ("PeakProcessMemoryUsed", ctypes.c_size_t),
-        ("PeakJobMemoryUsed", ctypes.c_size_t),
-    ]
 
 
 class _SidAndAttributes(ctypes.Structure):
@@ -722,58 +680,33 @@ def _build_environment(
 
 
 def _make_job_object(kernel32: Any, *, memory_bytes: int, cpu_seconds: int) -> int:
+    """Create the worker's Job through the shared ``process_limits`` leaf.
+
+    The argument check stays here, in front of the leaf, so its refusal is unchanged. Every
+    leaf error becomes :class:`NativeSandboxUnavailable`, and a Job handle the leaf could not
+    close is retained by the deferred cleanup rather than silently abandoned.
+    """
+
     if memory_bytes < 1 or cpu_seconds < 1:
         _raise_sandbox_unavailable()
-    creator = kernel32.CreateJobObjectW
-    creator.argtypes = (ctypes.c_void_p, ctypes.c_wchar_p)
-    creator.restype = ctypes.c_void_p
-    setter = kernel32.SetInformationJobObject
-    setter.argtypes = (ctypes.c_void_p, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong)
-    setter.restype = ctypes.c_int
-    handle = creator(None, None)
-    if not handle:
-        _raise_sandbox_unavailable()
-    handle_value = int(handle)
     try:
-        information = _ExtendedLimitInformation()
-        information.BasicLimitInformation.LimitFlags = (
-            _WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-            | _WINDOWS_JOB_OBJECT_LIMIT_PROCESS_TIME
-            | _WINDOWS_JOB_OBJECT_LIMIT_ACTIVE_PROCESS
-            | _WINDOWS_JOB_OBJECT_LIMIT_PROCESS_MEMORY
-            | _WINDOWS_JOB_OBJECT_LIMIT_JOB_MEMORY
-            | _WINDOWS_JOB_OBJECT_LIMIT_DIE_ON_UNHANDLED_EXCEPTION
+        return process_limits.make_job_object(
+            kernel32, memory_bytes=memory_bytes, cpu_seconds=cpu_seconds
         )
-        information.BasicLimitInformation.PerProcessUserTimeLimit = (
-            cpu_seconds * _WINDOWS_HUNDRED_NANOSECONDS_PER_SECOND
-        )
-        information.BasicLimitInformation.ActiveProcessLimit = 1
-        information.ProcessMemoryLimit = memory_bytes
-        information.JobMemoryLimit = memory_bytes
-        if not setter(
-            ctypes.c_void_p(handle_value),
-            _WINDOWS_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-            ctypes.byref(information),
-            ctypes.sizeof(information),
-        ):
-            _raise_sandbox_unavailable()
-        return handle_value
-    except Exception:
-        try:
-            _close_handle(kernel32, handle_value)
-        except NativeSandboxUnavailable:
+    except process_limits.ProcessLimitsError as exc:
+        if exc.handle is not None:
             # No child exists yet, but retain the Job handle rather than silently
-            # abandoning it if the close itself transiently fails.
+            # abandoning it if the close itself transiently failed.
             _defer_sandbox_process(
                 NativeSandboxProcess(
                     kernel32=kernel32,
                     process_handle=None,
-                    job_handle=handle_value,
+                    job_handle=exc.handle,
                     runtime=None,
                     profile_name=None,
                 )
             )
-        raise
+        _raise_sandbox_unavailable()
 
 
 def _make_attribute_list(kernel32: Any, count: int) -> tuple[Any, int]:
@@ -1424,22 +1357,11 @@ def _attest_launched_worker_before_handle_transfer(
             _raise_sandbox_unavailable()
         if not native_worker._has_no_all_application_packages_policy(advapi32, token):
             _raise_sandbox_unavailable()
-        in_job = ctypes.c_int()
-        is_in_job = kernel32.IsProcessInJob
-        is_in_job.argtypes = (
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            ctypes.POINTER(ctypes.c_int),
-        )
-        is_in_job.restype = ctypes.c_int
-        if (
-            not is_in_job(
-                ctypes.c_void_p(process_handle),
-                ctypes.c_void_p(job_handle),
-                ctypes.byref(in_job),
-            )
-            or not in_job.value
-        ):
+        try:
+            in_job = process_limits.is_process_in_job(kernel32, process_handle, job_handle)
+        except process_limits.ProcessLimitsError:
+            _raise_sandbox_unavailable()
+        if not in_job:
             _raise_sandbox_unavailable()
     finally:
         _close_handle(kernel32, _pointer_value(token))

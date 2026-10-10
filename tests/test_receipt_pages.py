@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import base64
 import dataclasses
 import hashlib
@@ -10,6 +11,7 @@ import re
 import struct
 import subprocess
 import sys
+import threading
 import tomllib
 import zlib
 from collections.abc import Callable
@@ -18,10 +20,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from PIL import Image, ImageCms, ImageFile, PngImagePlugin, TiffImagePlugin
+from PIL import Image, ImageCms, PngImagePlugin
 from test_reimbursement_report import _bundle, _write_bundle
 
-from pta_finance import receipt_geometry, receipt_pages, receipt_viewer, reimbursement_report
+from pta_finance import (
+    receipt_decode,
+    receipt_geometry,
+    receipt_pages,
+    receipt_viewer,
+    reimbursement_report,
+)
 
 _ROOT = Path(__file__).resolve().parents[1]
 _TEMPLATE = _ROOT / "pta_finance" / "reports" / "templates" / "receipt_viewer.js.j2"
@@ -45,6 +53,20 @@ _STORED_FROM_DISPLAYED = {
     6: Image.Transpose.ROTATE_90,
     7: Image.Transpose.TRANSVERSE,
     8: Image.Transpose.ROTATE_270,
+}
+_NORMALIZATION_FIELDS = {
+    "max_long_edge",
+    "jpeg_quality",
+    "jpeg_subsampling",
+    "background",
+    "max_source_bytes",
+    "max_source_pixels",
+    "max_source_edge",
+    "memory_bytes",
+    "cpu_seconds",
+    "wall_seconds",
+    "ready_seconds",
+    "max_as_baseline",
 }
 
 
@@ -149,19 +171,32 @@ def _sampling(payload: bytes) -> int:
     return frame[7]
 
 
+def _png_chunk(kind: bytes, data: bytes) -> bytes:
+    crc = struct.pack(">I", zlib.crc32(kind + data))
+    return struct.pack(">I", len(data)) + kind + data + crc
+
+
 def _png_header(width: int, height: int, depth: int = 8) -> bytes:
     """A grayscale PNG claiming ``width`` x ``height`` pixels with almost no image data."""
 
-    def chunk(kind: bytes, data: bytes) -> bytes:
-        crc = struct.pack(">I", zlib.crc32(kind + data))
-        return struct.pack(">I", len(data)) + kind + data + crc
-
     return (
         b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, depth, 0, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(b"\0"))
-        + chunk(b"IEND", b"")
+        + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, depth, 0, 0, 0, 0))
+        + _png_chunk(b"IDAT", zlib.compress(b"\0"))
+        + _png_chunk(b"IEND", b"")
     )
+
+
+def _raw_exif(entries: list[tuple[int, int, int, bytes]], data: bytes = b"") -> bytes:
+    """Fictional big-endian EXIF with one IFD of (tag, type, count, 4-byte value) entries.
+
+    ``data`` follows the IFD; a value field may point into it (offsets from the TIFF header).
+    """
+
+    ifd = struct.pack(">H", len(entries))
+    for tag, kind, count, value in entries:
+        ifd += struct.pack(">HHI", tag, kind, count) + value.ljust(4, b"\0")
+    return b"Exif\x00\x00MM\x00*" + struct.pack(">I", 8) + ifd + struct.pack(">I", 0) + data
 
 
 def _exif_with_corrupt_gps_count() -> bytes:
@@ -185,22 +220,65 @@ def _exif_with_corrupt_gps_count() -> bytes:
     raise AssertionError("fixture has no GPS directory")
 
 
+def _request(**changes: Any) -> receipt_decode.DecodeRequest:
+    """The production request for a fictional 4 KiB PNG, with ``changes`` applied."""
+
+    request = receipt_pages._request_for(bytes(4096), "png")
+    return dataclasses.replace(request, **changes)
+
+
+def _no_spawn(*args: object, **kwargs: object) -> None:
+    raise AssertionError("a decode child must not be spawned")
+
+
+# --- One source of truth -------------------------------------------------------------------
+
+
 def test_geometry_and_page_budget_are_imported_not_restated() -> None:
-    # Identity, not equality: a restated copy of either object fails here.
+    # Identity, not equality, on objects CPython never shares by accident: a restated copy of
+    # either fails here.
     assert receipt_pages.NORMALIZATION is receipt_geometry.NORMALIZATION
     assert receipt_pages.MAX_PAGE_BYTES is receipt_viewer.MAX_PAGE_BYTES
+    assert receipt_pages.scaled_size is receipt_decode.scaled_size
     normalization = receipt_geometry.NORMALIZATION
+    assert {field.name for field in dataclasses.fields(normalization)} == _NORMALIZATION_FIELDS
     assert (normalization.max_long_edge, normalization.jpeg_quality) == (2200, 85)
-    assert (normalization.background, normalization.max_jpeg_scans) == ((255, 255, 255), 64)
+    assert normalization.background == (255, 255, 255)
+    assert normalization.max_source_bytes == 26_214_400
+    assert (normalization.max_source_pixels, normalization.max_source_edge) == (80_000_000, 65_535)
+    assert (normalization.ready_seconds, normalization.max_as_baseline) == (5, 256 * 1024 * 1024)
     # The explicit ceiling, not Pillow's own bomb warning, is what refuses an oversize header.
     assert Image.MAX_IMAGE_PIXELS is not None
     assert normalization.max_source_pixels < Image.MAX_IMAGE_PIXELS
 
 
+def test_the_request_carries_every_child_value_from_the_shared_instance() -> None:
+    request = receipt_pages._request_for(bytes(10), "jpeg")
+    shared = receipt_geometry.NORMALIZATION
+    sent = json.loads(request.line())
+    assert set(sent) == receipt_decode.REQUEST_KEYS
+    assert sent == {
+        "protocol": "receipt-decode/1",
+        "media_type": "jpeg",
+        "byte_count": 10,
+        "max_source_bytes": shared.max_source_bytes,
+        "max_source_pixels": shared.max_source_pixels,
+        "max_source_edge": shared.max_source_edge,
+        "max_long_edge": shared.max_long_edge,
+        "background": list(shared.background),
+        "memory_bytes": shared.memory_bytes,
+        "cpu_seconds": shared.cpu_seconds,
+    }
+    # The broker-only values never leave the broker.
+    assert not {"wall_seconds", "ready_seconds", "max_as_baseline"} & set(sent)
+    assert receipt_decode.parse_request(request.line()) == request
+
+
 def test_normalization_values_are_read_from_the_shared_instance(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # A producer that restated any value inline would ignore these replacements.
+    # A producer that restated any value inline would ignore these replacements; the child
+    # applies them only because the broker sends them in the request.
     picture = Image.new("RGBA", (400, 200), (0, 0, 0, 0))
     picture.paste((0, 0, 0, 255), (200, 0, 400, 200))
     asset = _asset(tmp_path, _encode(picture, "PNG"))
@@ -236,6 +314,26 @@ def test_box_padding_mirrors_the_viewer_template() -> None:
     padding = receipt_geometry.BOX_PADDING
     assert (float(rx[0][0]), float(rx[0][1])) == (padding.rx_scale, padding.rx_pad)
     assert (float(ry[0][0]), float(ry[0][1])) == (padding.ry_scale, padding.ry_pad)
+
+
+@pytest.mark.parametrize(
+    ("source", "orientation", "expected"),
+    [
+        ((4032, 3024), 6, (1650, 2200, 2200 / 4032)),
+        ((4032, 3024), 1, (2200, 1650, 2200 / 4032)),
+        ((2200, 1000), 8, (1000, 2200, 1.0)),
+        ((2201, 1000), 1, (2200, 1000, 2200 / 2201)),
+        ((1, 44_700_000), 1, (1, 2200, 2200 / 44_700_000)),
+    ],
+    ids=["phone-rotated", "phone", "at-limit-rotated", "one-over", "strip"],
+)
+def test_scaled_size_is_the_one_size_derivation(
+    source: tuple[int, int], orientation: int, expected: tuple[int, int, float]
+) -> None:
+    assert receipt_decode.scaled_size(*source, orientation, 2200) == expected
+
+
+# --- Normalization through the real decode child ---------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -286,7 +384,7 @@ def test_png_exif_and_xmp_orientation_are_applied_and_recorded(
 
 def test_a_corrupt_gps_directory_still_normalizes_upright(tmp_path: Path) -> None:
     # Regression: this GPS directory made Pillow's exif_transpose raise TypeError while it
-    # re-serialised EXIF, which would have escaped the per-asset refusal and aborted a batch.
+    # re-serialised EXIF. The child reads the orientation only, never re-serialises EXIF.
     stored = _marked().transpose(Image.Transpose.ROTATE_90)
     data = _encode(stored, "JPEG", quality=95, exif=_exif_with_corrupt_gps_count())
     events: list[receipt_pages.PageProgress] = []
@@ -297,27 +395,53 @@ def test_a_corrupt_gps_directory_still_normalizes_upright(tmp_path: Path) -> Non
     assert events[0].orientation == 6
 
 
-@pytest.mark.parametrize("error", [TypeError, KeyError, IndexError, struct.error])
-def test_any_decoder_failure_is_a_per_asset_refusal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: type[Exception]
-) -> None:
-    def broken(self: Image.Image) -> Image.Exif:
-        raise error("fictional decoder failure")
+def _undecodable(kind: str) -> tuple[bytes, str]:
+    good_png = _encode(_receipt(), "PNG")
+    good_jpeg = _encode(_receipt((400, 1000), "RGB"), "JPEG", quality=90)
+    if kind == "corrupt-zlib-stream":
+        # A valid header and a CRC-correct IDAT whose deflate stream is fictional noise.
+        noise = hashlib.shake_256(b"fictional-idat").digest(4096)
+        start = good_png.index(b"IDAT") - 4
+        end = start + 12 + int.from_bytes(good_png[start : start + 4], "big")
+        return good_png[:start] + _png_chunk(b"IDAT", noise) + good_png[end:], "png"
+    if kind == "truncated-jpeg-scan":
+        return good_jpeg[: len(good_jpeg) * 2 // 3], "jpeg"
+    if kind == "jpeg-without-a-frame":
+        return b"\xff\xd8" + good_jpeg[2:20] + b"\xff\xd9", "jpeg"
+    raise AssertionError(kind)
 
-    monkeypatch.setattr(Image.Image, "getexif", broken)
-    with pytest.raises(receipt_pages.ReceiptPageError, match="not a readable image"):
-        _pages(tmp_path, _asset(tmp_path, _encode(_receipt(), "PNG")))
+
+@pytest.mark.parametrize(
+    "kind", ["corrupt-zlib-stream", "truncated-jpeg-scan", "jpeg-without-a-frame"]
+)
+def test_any_decoder_failure_is_a_per_asset_refusal(tmp_path: Path, kind: str) -> None:
+    # Crafted bytes, not a patched decoder: a patch in this process could never reach the child.
+    data, media_type = _undecodable(kind)
+    with pytest.raises(receipt_pages.ReceiptPageError, match="not a readable image") as caught:
+        _pages(tmp_path, _asset(tmp_path, data, media_type))
+    assert caught.value.reason == "unreadable"
+    assert caught.value.usage is not None, "the child ran and was measured"
     assert _files(tmp_path) == []
 
 
-@pytest.mark.parametrize("value", [6.0, 9, 0, "6"], ids=["float", "nine", "zero", "text"])
+@pytest.mark.parametrize(
+    "entry",
+    [
+        (0x0112, 3, 1, struct.pack(">H", 9)),
+        (0x0112, 3, 1, struct.pack(">H", 0)),
+        (0x0112, 2, 2, b"6\0"),
+        (0x0112, 5, 1, struct.pack(">I", 26)),  # RATIONAL 6/1, stored after the IFD
+    ],
+    ids=["nine", "zero", "text", "rational"],
+)
 def test_an_orientation_outside_integers_one_to_eight_is_ignored_and_recorded_as_one(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: object
+    tmp_path: Path, entry: tuple[int, int, int, bytes]
 ) -> None:
-    monkeypatch.setattr(Image.Image, "getexif", lambda self: {0x0112: value})
-    events: list[receipt_pages.PageProgress] = []
+    exif = _raw_exif([entry], struct.pack(">II", 6, 1))
     stored = _marked().transpose(Image.Transpose.ROTATE_90)
-    (page,) = _pages(tmp_path, _asset(tmp_path, _encode(stored, "PNG")), progress=events.append)
+    events: list[receipt_pages.PageProgress] = []
+    data = _encode(stored, "JPEG", quality=95, exif=exif)
+    (page,) = _pages(tmp_path, _asset(tmp_path, data, "jpeg"), progress=events.append)
     assert (page.width, page.height) == stored.size, "applied and recorded orientation agree"
     assert events[0].orientation == 1 and type(events[0].orientation) is int
 
@@ -472,6 +596,19 @@ def test_source_metadata_never_reaches_the_page(tmp_path: Path, source: str) -> 
         assert not {"comment", "exif", "icc_profile", "xmp", "progressive"} & set(output.info)
 
 
+def test_bilevel_pages_are_flattened_before_a_lanczos_downscale(tmp_path: Path) -> None:
+    # One-pixel stripes: LANCZOS on 8-bit gray averages them; a bilevel or nearest-neighbour
+    # resize would leave pure black and white.
+    stripes = Image.new("1", (4400, 100), 1)
+    for x in range(0, 4400, 2):
+        stripes.paste(0, (x, 0, x + 1, 100))
+    (page,) = _pages(tmp_path, _asset(tmp_path, _encode(stripes, "PNG")))
+    with Image.open(page.path) as output:
+        assert output.size == (2200, 50)
+        middle = output.crop((100, 10, 2100, 40)).tobytes()
+    assert sum(64 <= value <= 192 for value in middle) > 0.9 * len(middle)
+
+
 def test_pages_round_trip_through_the_production_sidecar_loader(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle.json"
     _write_bundle(bundle, _bundle())
@@ -530,10 +667,19 @@ def test_progress_is_reported_per_page_after_the_page_lands(tmp_path: Path) -> N
     assert (event.source_width, event.source_height) == (3000, 1200)
     assert (event.page.width, event.page.height, event.page.scale) == (2200, 880, 2200 / 3000)
     assert event.byte_count == event.page.path.stat().st_size
+    usage = event.decode_usage
+    assert usage is not None and usage.wall_seconds > 0 and usage.cpu_seconds >= 0
+    if sys.platform == "win32":
+        assert usage.peak_memory_bytes is not None and usage.peak_memory_bytes > 0
+    else:
+        assert usage.peak_memory_bytes is None
 
 
-def test_failed_fetch_yields_zero_pages_and_writes_nothing(tmp_path: Path) -> None:
+def test_failed_fetch_yields_zero_pages_and_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     seen: list[receipt_pages.PageProgress] = []
+    monkeypatch.setattr(receipt_pages.subprocess, "Popen", _no_spawn)
     asset = _Asset("asset:v1:" + "0" * 64, "png", None)
     assert _pages(tmp_path, asset, progress=seen.append) == []
     assert not seen
@@ -549,6 +695,7 @@ def test_rerun_is_a_no_op_and_a_different_page_is_never_replaced(tmp_path: Path)
     with pytest.raises(receipt_pages.ReceiptPageConflictError, match="EX-01-a1-p1.jpg") as caught:
         _pages(tmp_path, other)
     assert isinstance(caught.value, receipt_pages.ReceiptPageError), "conflicts are per-asset"
+    assert caught.value.reason == "conflict"
     assert str(tmp_path) not in str(caught.value)
     assert page.path.read_bytes() == before[1]
     assert _files(tmp_path) == ["receipt-pages/auto/EX-01-a1-p1.jpg"]
@@ -570,298 +717,6 @@ def test_a_page_published_mid_write_is_compared_never_clobbered(
     page = tmp_path / "receipt-pages" / "auto" / "EX-01-a1-p1.jpg"
     assert page.read_bytes() == rival
     assert _files(tmp_path) == ["receipt-pages/auto/EX-01-a1-p1.jpg"]
-
-
-def test_an_unusable_pages_directory_aborts_with_its_own_error(tmp_path: Path) -> None:
-    (tmp_path / "receipt-pages").write_text("a file where the pages directory belongs")
-    with pytest.raises(receipt_pages.ReceiptPagesDirectoryError, match="not writable") as caught:
-        _pages(tmp_path, _asset(tmp_path, _encode(_receipt(), "PNG")))
-    assert not isinstance(caught.value, receipt_pages.ReceiptPageError), "must abort the stage"
-    assert str(tmp_path) not in str(caught.value)
-
-
-_REFUSALS = {
-    "pdf": "PDF receipt assets",
-    "unknown_type": "must be PNG, JPEG or PDF",
-    "digest": "no longer matches its asset id",
-    "malformed_id": "asset id is malformed",
-    "svg_as_png": "not a readable image",
-    "text_as_jpeg": "not a readable image",
-    "png_as_jpeg": "not a readable image",
-    "truncated": "not a readable image",
-    "over_pixel_ceiling": "too many pixels",
-    "header_over_ceiling": "too many pixels",
-    "pillow_bomb": "too many pixels",
-    "sixteen_bit": "unsupported pixel format",
-    "animated_png": "animated PNG",
-    "missing_file": "missing or unreadable",
-    "unsafe_ref": "safe receipt page id",
-}
-
-
-@pytest.mark.parametrize("problem", sorted(_REFUSALS))
-def test_refusals_name_the_problem_and_write_no_page(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
-) -> None:
-    good = _encode(_receipt(), "PNG")
-    asset = _asset(tmp_path, good)
-    options: dict[str, Any] = {}
-    if problem == "pdf":
-        asset = _asset(tmp_path, b"%PDF-1.7\n% fictional\n", "pdf")
-    elif problem == "unknown_type":
-        asset = _asset(tmp_path, b"GIF89a fictional", "gif")
-    elif problem == "digest":
-        asset = _Asset("asset:v1:" + "0" * 64, "png", asset.path)
-    elif problem == "malformed_id":
-        asset = _Asset("asset:v1:not-a-digest", "png", asset.path)
-    elif problem == "svg_as_png":
-        asset = _asset(tmp_path, b'<svg onload="alert(1)"></svg>')
-    elif problem == "text_as_jpeg":
-        asset = _asset(tmp_path, b"fictional plain text", "jpeg")
-    elif problem == "png_as_jpeg":
-        asset = _asset(tmp_path, good, "jpeg")
-    elif problem == "truncated":
-        asset = _asset(tmp_path, good[: len(good) // 2])
-    elif problem == "over_pixel_ceiling":
-        # A valid, decodable page: only the configured ceiling can refuse it.
-        lowered = dataclasses.replace(receipt_pages.NORMALIZATION, max_source_pixels=400 * 1000 - 1)
-        monkeypatch.setattr(receipt_pages, "NORMALIZATION", lowered)
-    elif problem == "header_over_ceiling":
-        asset = _asset(tmp_path, _png_header(9000, 9000))  # 81 MP, below Pillow's own checks
-    elif problem == "pillow_bomb":
-        asset = _asset(tmp_path, _png_header(15000, 15000))  # Pillow's own bomb error
-    elif problem == "sixteen_bit":
-        # Header only: refused from the header, before any pixel could be decoded.
-        asset = _asset(tmp_path, _png_header(40, 40, depth=16))
-    elif problem == "animated_png":
-        # Browsers would show the animation; one fixed frame is not evidence of what they show.
-        still, frame = Image.new("RGB", (40, 20), "white"), Image.new("RGB", (40, 20), "black")
-        asset = _asset(tmp_path, _encode(still, "PNG", save_all=True, append_images=[frame]))
-    elif problem == "missing_file":
-        asset = _Asset(asset.asset_id, "png", tmp_path / "cache" / "absent.png")
-    else:
-        options["ticket_ref"] = "../EX-01"
-    with pytest.raises(receipt_pages.ReceiptPageError, match=_REFUSALS[problem]) as caught:
-        _pages(tmp_path, asset, **options)
-    assert str(tmp_path) not in str(caught.value)
-    assert _files(tmp_path) == []
-
-
-def test_a_page_over_the_viewer_page_cap_is_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(receipt_pages, "MAX_PAGE_BYTES", 64)
-    with pytest.raises(receipt_pages.ReceiptPageError, match="page limit"):
-        _pages(tmp_path, _asset(tmp_path, _encode(_receipt(), "PNG")))
-    assert _files(tmp_path) == []
-
-
-def test_the_module_imports_without_pillow() -> None:
-    script = "import sys; sys.modules['PIL'] = None\nimport pta_finance.receipt_pages"
-    subprocess.run([sys.executable, "-c", script], check=True, capture_output=True)
-
-
-@pytest.mark.parametrize("state", ["missing", "outdated"])
-def test_a_missing_or_outdated_pillow_aborts_naming_the_receipts_extra(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
-) -> None:
-    asset = _asset(tmp_path, _encode(_receipt(), "PNG"))
-    if state == "missing":
-        monkeypatch.setitem(sys.modules, "PIL", None)
-    else:
-        monkeypatch.setattr(sys.modules["PIL"], "__version__", "12.1.0")
-    with pytest.raises(ImportError, match="'receipts' extra") as caught:
-        _pages(tmp_path, asset)
-    assert not isinstance(caught.value, receipt_pages.ReceiptPageError), "must abort the stage"
-    assert _files(tmp_path) == []
-
-
-def test_pillow_floor_matches_the_receipts_extra() -> None:
-    project = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    (requirement,) = project["project"]["optional-dependencies"]["receipts"]
-    major, minor = receipt_pages._PILLOW_FLOOR
-    assert requirement == f"pillow>={major}.{minor}"
-
-
-def _noise(size: tuple[int, int]) -> Image.Image:
-    """Seeded fictional noise: unlike a blank page, its entropy data is full of FF 00 pairs."""
-
-    width, height = size
-    return Image.frombytes("RGB", size, hashlib.shake_256(b"fictional").digest(width * height * 3))
-
-
-def _progressive(
-    extra_scans: int, *, noisy: bool = False, after_app0: bytes = b"", between: bytes = b""
-) -> tuple[bytes, int]:
-    """A fictional progressive JPEG whose final scan is repeated ``extra_scans`` more times.
-
-    ``after_app0`` is inserted right after the JFIF segment and ``between`` before each repeated
-    scan: layouts libjpeg and Pillow tolerate (they skip the bytes and decode every scan).
-    Returns the file and its count of scan-start markers.
-    """
-
-    picture = _noise((64, 48)) if noisy else Image.new("RGB", (64, 48), "white")
-    options = {"restart_marker_rows": 1} if noisy else {}
-    data = _encode(picture, "JPEG", progressive=True, **options)
-    last = data.rindex(b"\xff\xda")
-    data = data[:-2] + (between + data[last:-2]) * extra_scans + b"\xff\xd9"
-    app0_end = 4 + int.from_bytes(data[4:6], "big")
-    data = data[:app0_end] + after_app0 + data[app0_end:]
-    return data, data.count(b"\xff\xda")
-
-
-def _blocked(stage: str) -> Callable[..., None]:
-    def refuse(*args: object, **kwargs: object) -> None:
-        raise AssertionError(f"the ceiling must refuse before {stage}")
-
-    return refuse
-
-
-def _exif_with_thumbnail() -> bytes:
-    """Fictional EXIF whose IFD1 holds a small JPEG thumbnail: one more FF DA in the file."""
-
-    thumbnail = _encode(Image.new("RGB", (16, 12), "white"), "JPEG")
-    ifd1 = 8 + 2 + 12 + 4
-    offset = ifd1 + 2 + 2 * 12 + 4
-    tiff = b"MM\x00*" + struct.pack(">I", 8)
-    tiff += struct.pack(">HHHIHH", 1, 0x0112, 3, 1, 1, 0) + struct.pack(">I", ifd1)
-    tiff += struct.pack(">HHHII", 2, 0x0201, 4, 1, offset)
-    tiff += struct.pack(">HHII", 0x0202, 4, 1, len(thumbnail)) + struct.pack(">I", 0)
-    return b"Exif\x00\x00" + tiff + thumbnail
-
-
-def test_ordinary_jpegs_pass_the_raw_byte_scan_bound(tmp_path: Path) -> None:
-    normal, scans = _progressive(0)
-    assert scans == 10, "libjpeg's progressive script for a colour page"
-    thumbnailed = _encode(_receipt((400, 1000), "RGB"), "JPEG", exif=_exif_with_thumbnail())
-    assert thumbnailed.count(b"\xff\xda") == 2, "the EXIF thumbnail's own scan is counted too"
-    for ordinal, data in enumerate((normal, thumbnailed), start=1):
-        (page,) = _pages(tmp_path, _asset(tmp_path, data, "jpeg"), asset_ordinal=ordinal)
-        assert page.path.is_file()
-
-
-def test_the_scan_ceiling_counts_exactly_through_stuffed_bytes_and_restart_markers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    ceiling = receipt_geometry.NORMALIZATION.max_jpeg_scans
-    at_ceiling, counted = _progressive(ceiling - 10, noisy=True)
-    assert counted == ceiling
-    assert b"\xff\x00" in at_ceiling, "the fixture must carry stuffed bytes"
-    assert any(bytes([0xFF, 0xD0 + n]) in at_ceiling for n in range(8)), "and restart markers"
-    (page,) = _pages(tmp_path, _asset(tmp_path, at_ceiling, "jpeg"))
-    assert (page.width, page.height) == (64, 48)
-    over, _ = _progressive(ceiling - 10 + 1, noisy=True)
-    monkeypatch.setattr(ImageFile.ImageFile, "load", _blocked("any decode"))
-    with pytest.raises(receipt_pages.ReceiptPageError, match="too many scans"):
-        _pages(tmp_path, _asset(tmp_path, over, "jpeg"), asset_ordinal=2)
-    lowered = dataclasses.replace(receipt_pages.NORMALIZATION, max_jpeg_scans=9)
-    monkeypatch.setattr(receipt_pages, "NORMALIZATION", lowered)
-    with pytest.raises(receipt_pages.ReceiptPageError, match="too many scans"):
-        _pages(tmp_path, _asset(tmp_path, _progressive(0)[0], "jpeg"), asset_ordinal=3)
-
-
-_LENIENT_LAYOUTS = {
-    "junk_after_app0": {"after_app0": b"\x00"},
-    "stuffed_pair_at_a_segment_boundary": {"after_app0": b"\xff\x00"},
-    "zero_length_app15": {"after_app0": b"\xff\xef\x00\x00"},
-    "length_one_app15": {"after_app0": b"\xff\xef\x00\x01"},
-    "junk_between_repeated_scans": {"between": b"\x00"},
-}
-
-
-@pytest.mark.parametrize("layout", sorted(_LENIENT_LAYOUTS))
-def test_layouts_the_decoder_tolerates_cannot_hide_scans_from_the_ceiling(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, layout: str
-) -> None:
-    # Regression: a marker walk stopped counting at these bytes while the decoder skipped them
-    # and ran every scan. The bound must stay an upper bound on the decoder's work.
-    ceiling = receipt_geometry.NORMALIZATION.max_jpeg_scans
-    data, counted = _progressive(ceiling - 10 + 1, **_LENIENT_LAYOUTS[layout])
-    assert counted == ceiling + 1
-    monkeypatch.setattr(ImageFile.ImageFile, "load", _blocked("any decode"))
-    with pytest.raises(receipt_pages.ReceiptPageError, match="too many scans"):
-        _pages(tmp_path, _asset(tmp_path, data, "jpeg"))
-    assert _files(tmp_path) == []
-
-
-def _app_segment(marker: int, body: bytes) -> bytes:
-    return bytes([0xFF, marker]) + struct.pack(">H", len(body) + 2) + body
-
-
-def test_a_full_size_exif_segment_still_normalizes(tmp_path: Path) -> None:
-    exif = Image.Exif()
-    exif[0x0112] = 1
-    exif[0x927C] = bytes(60_000)  # a fictional maker note
-    blob = exif.tobytes()
-    assert 60_000 < len(blob) <= 65_533 <= receipt_geometry.NORMALIZATION.max_exif_bytes
-    data = _encode(_receipt((400, 1000), "RGB"), "JPEG", exif=blob)
-    (page,) = _pages(tmp_path, _asset(tmp_path, data, "jpeg"))
-    assert page.path.is_file()
-
-
-def _oversized_metadata(carrier: str) -> tuple[bytes, str]:
-    picture = _receipt((40, 100), "RGB")
-    padding = bytes(40_000)
-    if carrier == "jpeg_exif_segments":
-        # Each segment is legal on its own; Pillow concatenates them past the ceiling.
-        segment = _app_segment(0xE1, b"Exif\x00\x00MM\x00*\x00\x00\x00\x08" + padding)
-        data = _encode(picture, "JPEG")
-        return data[:2] + segment + segment + data[2:], "jpeg"
-    if carrier == "jpeg_mpf_index":
-        data = _encode(picture, "JPEG")
-        mpf = _app_segment(0xE2, b"MPF\x00MM\x00*\x00\x00\x00\x08" + bytes(5_000))
-        return data[:2] + mpf + data[2:], "jpeg"
-    if carrier == "png_exif_chunk":
-        blob = b"Exif\x00\x00MM\x00*\x00\x00\x00\x08" + bytes(70_000)
-        return _encode(picture, "PNG", exif=blob), "png"
-    text = PngImagePlugin.PngInfo()
-    text.add_text("Raw profile type exif", "\nexif\n   70000\n" + "00" * 70_000)
-    return _encode(picture, "PNG", pnginfo=text), "png"
-
-
-@pytest.mark.parametrize(
-    "carrier", ["jpeg_exif_segments", "jpeg_mpf_index", "png_exif_chunk", "png_raw_profile"]
-)
-def test_oversized_exif_or_multi_picture_metadata_is_refused_before_it_is_parsed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, carrier: str
-) -> None:
-    data, media_type = _oversized_metadata(carrier)
-    # Pillow's EXIF and MP-index loaders both run through this one directory parser.
-    monkeypatch.setattr(
-        TiffImagePlugin.ImageFileDirectory_v2, "load", _blocked("metadata is parsed")
-    )
-    with pytest.raises(receipt_pages.ReceiptPageError, match="too much EXIF or multi-picture"):
-        _pages(tmp_path, _asset(tmp_path, data, media_type))
-    assert _files(tmp_path) == []
-
-
-@pytest.mark.parametrize("ordinal", [0, -1, True, 1.0], ids=["zero", "negative", "bool", "float"])
-def test_an_invalid_asset_ordinal_is_a_caller_bug_never_a_recorded_refusal(
-    tmp_path: Path, ordinal: object
-) -> None:
-    with pytest.raises(ValueError, match="asset_ordinal") as caught:
-        _pages(tmp_path, _asset(tmp_path, _encode(_receipt(), "PNG")), asset_ordinal=ordinal)
-    assert not isinstance(caught.value, receipt_pages.ReceiptPageError)
-    assert _files(tmp_path) == []
-
-
-@pytest.mark.filterwarnings("error::PIL.Image.DecompressionBombWarning")
-def test_a_bomb_warning_raised_as_an_error_still_reports_too_many_pixels(tmp_path: Path) -> None:
-    with pytest.raises(receipt_pages.ReceiptPageError, match="too many pixels"):
-        _pages(tmp_path, _asset(tmp_path, _png_header(10000, 10000)))
-
-
-def test_bilevel_pages_are_flattened_before_a_lanczos_downscale(tmp_path: Path) -> None:
-    # One-pixel stripes: LANCZOS on 8-bit gray averages them; a bilevel or nearest-neighbour
-    # resize would leave pure black and white.
-    stripes = Image.new("1", (4400, 100), 1)
-    for x in range(0, 4400, 2):
-        stripes.paste(0, (x, 0, x + 1, 100))
-    (page,) = _pages(tmp_path, _asset(tmp_path, _encode(stripes, "PNG")))
-    with Image.open(page.path) as output:
-        assert output.size == (2200, 50)
-        middle = output.crop((100, 10, 2100, 40)).tobytes()
-    assert sum(64 <= value <= 192 for value in middle) > 0.9 * len(middle)
 
 
 def test_a_page_published_mid_write_with_identical_bytes_is_a_no_op(
@@ -914,6 +769,14 @@ def test_a_failed_temporary_file_cleanup_never_changes_the_outcome(
     assert [event.page for event in seen] == [page] and page.path.is_file()
 
 
+def test_an_unusable_pages_directory_aborts_with_its_own_error(tmp_path: Path) -> None:
+    (tmp_path / "receipt-pages").write_text("a file where the pages directory belongs")
+    with pytest.raises(receipt_pages.ReceiptPagesDirectoryError, match="not writable") as caught:
+        _pages(tmp_path, _asset(tmp_path, _encode(_receipt(), "PNG")))
+    assert not isinstance(caught.value, receipt_pages.ReceiptPageError), "must abort the stage"
+    assert str(tmp_path) not in str(caught.value)
+
+
 def test_a_pages_directory_without_hard_links_aborts_naming_the_requirement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -925,3 +788,512 @@ def test_a_pages_directory_without_hard_links_aborts_naming_the_requirement(
     with pytest.raises(receipt_pages.ReceiptPagesDirectoryError, match="hard links") as caught:
         _pages(tmp_path, asset)
     assert "fictional" not in str(caught.value) and str(tmp_path) not in str(caught.value)
+
+
+# --- Per-asset refusals ----------------------------------------------------------------------
+
+_REFUSALS = {
+    "pdf": ("PDF receipt assets", "pdf-not-rendered"),
+    "unknown_type": ("must be PNG, JPEG or PDF", "unreadable"),
+    "digest": ("no longer matches its asset id", "digest-mismatch"),
+    "malformed_id": ("asset id is malformed", "digest-mismatch"),
+    "missing_file": ("missing or unreadable", "digest-mismatch"),
+    "unsafe_ref": ("safe receipt page id", "bad-ticket-ref"),
+    "over_source_byte_cap": ("larger than the source size cap", "too-large"),
+    "svg_as_png": ("not a readable image", "unreadable"),
+    "text_as_jpeg": ("not a readable image", "unreadable"),
+    "png_as_jpeg": ("not a readable image", "unreadable"),
+    "truncated": ("not a readable image", "unreadable"),
+    "over_pixel_ceiling": ("too many pixels", "too-many-pixels"),
+    "header_over_ceiling": ("too many pixels", "too-many-pixels"),
+    "pillow_bomb": ("too many pixels", "too-many-pixels"),
+    "over_edge_ceiling": ("side too long", "source-edge"),
+    "sixteen_bit": ("unsupported pixel format", "unsupported-mode"),
+    "animated_png": ("animated PNG", "animated"),
+}
+# These are refused before any decode child exists.
+_PRE_SPAWN = {
+    "pdf",
+    "unknown_type",
+    "digest",
+    "malformed_id",
+    "missing_file",
+    "unsafe_ref",
+    "over_source_byte_cap",
+}
+
+
+@pytest.mark.parametrize("problem", sorted(_REFUSALS))
+def test_refusals_name_the_problem_and_write_no_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    good = _encode(_receipt(), "PNG")
+    asset = _asset(tmp_path, good)
+    options: dict[str, Any] = {}
+    shared = receipt_geometry.NORMALIZATION
+    if problem == "pdf":
+        asset = _asset(tmp_path, b"%PDF-1.7\n% fictional\n", "pdf")
+    elif problem == "unknown_type":
+        asset = _asset(tmp_path, b"GIF89a fictional", "gif")
+    elif problem == "digest":
+        asset = _Asset("asset:v1:" + "0" * 64, "png", asset.path)
+    elif problem == "malformed_id":
+        asset = _Asset("asset:v1:not-a-digest", "png", asset.path)
+    elif problem == "missing_file":
+        asset = _Asset(asset.asset_id, "png", tmp_path / "cache" / "absent.png")
+    elif problem == "unsafe_ref":
+        options["ticket_ref"] = "../EX-01"
+    elif problem == "over_source_byte_cap":
+        lowered = dataclasses.replace(shared, max_source_bytes=len(good) - 1)
+        monkeypatch.setattr(receipt_pages, "NORMALIZATION", lowered)
+    elif problem == "svg_as_png":
+        asset = _asset(tmp_path, b'<svg onload="alert(1)"></svg>')
+    elif problem == "text_as_jpeg":
+        asset = _asset(tmp_path, b"fictional plain text", "jpeg")
+    elif problem == "png_as_jpeg":
+        asset = _asset(tmp_path, good, "jpeg")
+    elif problem == "truncated":
+        asset = _asset(tmp_path, good[: len(good) // 2])
+    elif problem == "over_pixel_ceiling":
+        # A valid, decodable page: only the ceiling the request carries can refuse it.
+        lowered = dataclasses.replace(shared, max_source_pixels=400 * 1000 - 1)
+        monkeypatch.setattr(receipt_pages, "NORMALIZATION", lowered)
+    elif problem == "header_over_ceiling":
+        asset = _asset(tmp_path, _png_header(9000, 9000))  # 81 MP, below Pillow's own error
+    elif problem == "pillow_bomb":
+        asset = _asset(tmp_path, _png_header(15000, 15000))  # Pillow's own bomb error
+    elif problem == "over_edge_ceiling":
+        asset = _asset(tmp_path, _png_header(70_000, 1))  # few pixels, one long side
+    elif problem == "sixteen_bit":
+        # Header only: refused from the header, before any pixel could be decoded.
+        asset = _asset(tmp_path, _png_header(40, 40, depth=16))
+    elif problem == "animated_png":
+        # Browsers would show the animation; one fixed frame is not evidence of what they show.
+        still, frame = Image.new("RGB", (40, 20), "white"), Image.new("RGB", (40, 20), "black")
+        asset = _asset(tmp_path, _encode(still, "PNG", save_all=True, append_images=[frame]))
+    if problem in _PRE_SPAWN:
+        monkeypatch.setattr(receipt_pages.subprocess, "Popen", _no_spawn)
+    message, reason = _REFUSALS[problem]
+    with pytest.raises(receipt_pages.ReceiptPageError, match=message) as caught:
+        _pages(tmp_path, asset, **options)
+    assert caught.value.reason == reason
+    assert (caught.value.usage is None) == (problem in _PRE_SPAWN)
+    assert str(tmp_path) not in str(caught.value)
+    assert _files(tmp_path) == []
+
+
+def test_a_cached_file_one_byte_over_the_source_cap_is_refused_before_any_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cap = receipt_geometry.NORMALIZATION.max_source_bytes
+    over = _asset(tmp_path, bytes(cap + 1))
+    monkeypatch.setattr(receipt_pages.subprocess, "Popen", _no_spawn)
+    with pytest.raises(receipt_pages.ReceiptPageError, match="source size cap") as caught:
+        _pages(tmp_path, over)
+    assert caught.value.reason == "too-large" and caught.value.usage is None
+    # Exactly at the cap the file is read and reaches the child, which refuses its bytes.
+    monkeypatch.undo()
+    with pytest.raises(receipt_pages.ReceiptPageError) as at_cap:
+        _pages(tmp_path, _asset(tmp_path, bytes(cap)))
+    assert at_cap.value.reason == "unreadable"
+
+
+def test_a_page_over_the_viewer_page_cap_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(receipt_pages, "MAX_PAGE_BYTES", 64)
+    with pytest.raises(receipt_pages.ReceiptPageError, match="page limit"):
+        _pages(tmp_path, _asset(tmp_path, _encode(_receipt(), "PNG")))
+    assert _files(tmp_path) == []
+
+
+@pytest.mark.parametrize("ordinal", [0, -1, True, 1.0], ids=["zero", "negative", "bool", "float"])
+def test_an_invalid_asset_ordinal_is_a_caller_bug_never_a_recorded_refusal(
+    tmp_path: Path, ordinal: object
+) -> None:
+    with pytest.raises(ValueError, match="asset_ordinal") as caught:
+        _pages(tmp_path, _asset(tmp_path, _encode(_receipt(), "PNG")), asset_ordinal=ordinal)
+    assert not isinstance(caught.value, receipt_pages.ReceiptPageError)
+    assert _files(tmp_path) == []
+
+
+def test_every_refusal_reason_is_a_closed_ledger_value() -> None:
+    assert receipt_decode.REFUSAL_REASONS <= receipt_pages.REFUSAL_REASONS
+    assert {"budget", "child-error", "failed-validation", "too-large"} <= (
+        receipt_pages.REFUSAL_REASONS
+    )
+    with pytest.raises(ValueError):
+        receipt_pages.ReceiptPageError("fictional", reason="paged")
+
+
+# --- The decode child cannot start: a stage abort, never N per-asset refusals --------------
+
+
+def test_an_unsupported_host_aborts_before_any_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asset = _asset(tmp_path, _encode(_receipt(), "PNG"))
+    monkeypatch.setattr(receipt_pages.subprocess, "Popen", _no_spawn)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    with pytest.raises(receipt_pages.ReceiptDecodeUnavailableError, match="Windows or Linux") as e:
+        _pages(tmp_path, asset)
+    assert not isinstance(e.value, (receipt_pages.ReceiptPageError, OSError, ValueError))
+    monkeypatch.undo()
+    assert _files(tmp_path) == []
+
+
+@pytest.mark.parametrize("state", ["missing", "outdated"])
+def test_a_missing_or_outdated_pillow_aborts_naming_the_receipts_extra(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str
+) -> None:
+    asset = _asset(tmp_path, _encode(_receipt(), "PNG"))
+    monkeypatch.setattr(receipt_pages.subprocess, "Popen", _no_spawn)
+    if state == "missing":
+        monkeypatch.setitem(sys.modules, "PIL", None)
+    else:
+        monkeypatch.setattr(sys.modules["PIL"], "__version__", "12.1.0")
+    with pytest.raises(receipt_pages.ReceiptDecodeUnavailableError, match="'receipts' extra"):
+        _pages(tmp_path, asset)
+    assert _files(tmp_path) == []
+
+
+def test_a_pillow_mismatch_on_the_ready_line_aborts_the_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The real child reports its own Pillow; a broker expecting another build must not send it
+    # a byte, because the pages would no longer be byte-identical.
+    asset = _asset(tmp_path, _encode(_receipt(), "PNG"))
+    monkeypatch.setattr(receipt_pages, "_broker_pillow_version", lambda: "99.0.0")
+    with pytest.raises(receipt_pages.ReceiptDecodeUnavailableError, match="different Pillow"):
+        _pages(tmp_path, asset)
+    assert _files(tmp_path) == []
+
+
+def test_the_module_imports_without_pillow() -> None:
+    script = (
+        "import sys; sys.modules['PIL'] = None\n"
+        "import pta_finance.receipt_pages, pta_finance.receipt_decode"
+    )
+    subprocess.run([sys.executable, "-c", script], check=True, capture_output=True)
+
+
+def test_the_decode_child_imports_only_the_standard_library_and_the_leaf() -> None:
+    source = (_ROOT / "pta_finance" / "receipt_decode.py").read_text(encoding="utf-8")
+    top_level: set[str] = set()
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.Import):
+            top_level |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            top_level |= {f"{node.module}.{alias.name}" for alias in node.names}
+    project = {name for name in top_level if name.startswith("pta_finance")}
+    assert project == {"pta_finance.process_limits"}
+    assert all(name.split(".")[0] in sys.stdlib_module_names for name in top_level - project)
+    assert not any(name.startswith("PIL") for name in top_level), "Pillow loads in main() only"
+
+
+def test_the_broker_never_opens_an_image() -> None:
+    # No in-process seam: the broker hands untrusted bytes only to the child, and its Pillow
+    # calls see validated pixels alone (Image.frombytes in pixels_to_page).
+    source = (_ROOT / "pta_finance" / "receipt_pages.py").read_text(encoding="utf-8")
+    assert "Image.open" not in source and "_decode(" not in source
+    assert "receipt_decode import" in source
+
+
+def test_pillow_floor_matches_the_receipts_extra() -> None:
+    project = tomllib.loads((_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    (requirement,) = project["project"]["optional-dependencies"]["receipts"]
+    major, minor = receipt_pages._PILLOW_FLOOR
+    assert requirement == f"pillow>={major}.{minor}"
+
+
+def test_the_child_is_launched_minimally_and_its_directory_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    launches: list[tuple[list[str], dict[str, Any]]] = []
+    real_popen = subprocess.Popen
+
+    def recording(command: list[str], **options: Any) -> Any:
+        launches.append((command, options))
+        return real_popen(command, **options)
+
+    monkeypatch.setattr(receipt_pages.subprocess, "Popen", recording)
+    # 81 MP: the child's Pillow warns before the child refuses; nothing may reach our output.
+    with pytest.raises(receipt_pages.ReceiptPageError, match="too many pixels"):
+        _pages(tmp_path, _asset(tmp_path, _png_header(9000, 9000)))
+    ((command, options),) = launches
+    assert command[1:] == ["-I", "-m", "pta_finance.receipt_decode"]
+    assert options["stderr"] is subprocess.DEVNULL and options["close_fds"] is True
+    assert options["stdin"] is subprocess.PIPE and options["stdout"] is subprocess.PIPE
+    if sys.platform == "win32":
+        assert command[0] == sys._base_executable
+        assert set(options["env"]) == {"SYSTEMROOT", "__PYVENV_LAUNCHER__"}
+        assert options["env"]["__PYVENV_LAUNCHER__"] == sys.executable
+        assert options["creationflags"] == 0x08000000
+    else:
+        assert command[0] == sys.executable
+        assert options["env"] == {} and options["start_new_session"] is True
+    workdir = Path(options["cwd"])
+    assert not workdir.exists(), "the empty working directory is removed after the reap"
+    assert receipt_pages.cleanup_warning_count() == 0
+    assert capfd.readouterr().err == ""
+
+
+# --- Direct broker tests: crafted bytes and exit outcomes; nothing here decodes -------------
+
+
+def _decoded_header(**changes: Any) -> dict[str, Any]:
+    header: dict[str, Any] = {
+        "status": "decoded",
+        "mode": "L",
+        "width": 40,
+        "height": 20,
+        "source_width": 40,
+        "source_height": 20,
+        "orientation": 1,
+        "scale": 1.0,
+    }
+    header.update(changes)
+    return header
+
+
+def _response(header: dict[str, Any] | bytes, body: bytes = bytes(800)) -> bytes:
+    line = header if isinstance(header, bytes) else receipt_decode.encode_line(header)
+    return line + body
+
+
+def _malformed_response(case: str) -> bytes:
+    valid = receipt_decode.encode_line(_decoded_header())
+    if case == "wrong-length":
+        return _response(_decoded_header(), bytes(799))
+    if case == "extra-field":
+        return _response(_decoded_header(extra=1))
+    if case == "missing-field":
+        header = _decoded_header()
+        del header["orientation"]
+        return _response(header)
+    if case == "bool-int":
+        return _response(_decoded_header(orientation=True))  # True == 1
+    if case == "float-int":
+        return _response(_decoded_header(width=40.0))  # 40.0 == 40
+    if case == "nan-scale":
+        return _response(valid.replace(b'"scale":1.0', b'"scale":NaN'))
+    if case == "duplicate-key":
+        return _response(valid.replace(b'{"status":"decoded"', b'{"status":"decoded","mode":"L"'))
+    if case == "crlf-terminator":
+        return _response(valid[:-1] + b"\r\n")
+    if case == "oversize-header":
+        return _response(valid[:-2] + b" " * 1100 + b"}\n")
+    raise AssertionError(case)
+
+
+_MALFORMED_RESPONSES = [
+    "wrong-length",
+    "extra-field",
+    "missing-field",
+    "bool-int",
+    "float-int",
+    "nan-scale",
+    "duplicate-key",
+    "crlf-terminator",
+    "oversize-header",
+]
+
+
+def test_broker_accepts_an_exact_decode_response_and_its_refusals() -> None:
+    request = _request()
+    decoded = receipt_pages._parse_decode_response(_response(_decoded_header()), request)
+    assert isinstance(decoded, receipt_pages._Decoded)
+    assert (decoded.mode, decoded.width, decoded.height, decoded.pixels) == (
+        "L",
+        40,
+        20,
+        bytes(800),
+    )
+    for reason in sorted(receipt_decode.REFUSAL_REASONS):
+        refused = receipt_decode.encode_line({"status": "refused", "reason": reason})
+        assert receipt_pages._parse_decode_response(refused, request) == reason
+
+
+@pytest.mark.parametrize("case", _MALFORMED_RESPONSES)
+def test_broker_rejects_malformed_decode_response(case: str) -> None:
+    with pytest.raises(receipt_pages.ReceiptPageError) as caught:
+        receipt_pages._parse_decode_response(_malformed_response(case), _request())
+    assert caught.value.reason == "failed-validation"
+
+
+@pytest.mark.parametrize(
+    "header",
+    [
+        _decoded_header(width=41),
+        _decoded_header(scale=0.5),
+        _decoded_header(orientation=9),
+        _decoded_header(source_width=70_000, width=2200, height=1, scale=2200 / 70_000),
+        _decoded_header(mode="RGBA"),
+        {"status": "refused", "reason": "budget"},
+        {"status": "rendered"},
+    ],
+    ids=["width", "scale", "orientation", "source-edge", "mode", "reason", "status"],
+)
+def test_broker_rederives_every_response_value(header: dict[str, Any]) -> None:
+    body = b"" if header["status"] != "decoded" else bytes(800)
+    with pytest.raises(receipt_pages.ReceiptPageError) as caught:
+        receipt_pages._parse_decode_response(_response(header, body), _request())
+    assert caught.value.reason == "failed-validation"
+
+
+def _ready(**changes: Any) -> dict[str, Any]:
+    line: dict[str, Any] = {"status": "ready", "protocol": "receipt-decode/1", "pid": 1}
+    line["pillow"] = "12.2.0"
+    line.update(changes)
+    return line
+
+
+_BAND = {"memory_bytes": 1 << 30, "max_as_baseline": 1 << 28}
+_MALFORMED_READY = {
+    "bool-pid": (_ready(pid=True), "win32"),  # True == 1
+    "extra-key": (_ready(extra=1), "win32"),
+    "oversize": (receipt_decode.encode_line(_ready())[:-2] + b" " * 300 + b"}\n", "win32"),
+    "rlimit-out-of-band": (_ready(rlimit_as=(1 << 30) + (1 << 28) + 1), "linux"),
+    "rlimit-below-the-budget": (_ready(rlimit_as=(1 << 30) - 1), "linux"),
+    "rlimit-missing-on-linux": (_ready(), "linux"),
+    "pid-mismatch": (_ready(pid=2), "win32"),
+    "pillow-mismatch": (_ready(pillow="12.3.0"), "win32"),
+    "crlf-terminator": (receipt_decode.encode_line(_ready())[:-1] + b"\r\n", "win32"),
+    "none-came": (None, "win32"),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_MALFORMED_READY))
+def test_broker_rejects_malformed_ready_line(case: str) -> None:
+    value, platform = _MALFORMED_READY[case]
+    line = receipt_decode.encode_line(value) if isinstance(value, dict) else value
+    with pytest.raises(receipt_pages.ReceiptDecodeUnavailableError):
+        receipt_pages._parse_ready_line(
+            line, expected_pid=1, pillow="12.2.0", platform=platform, **_BAND
+        )
+
+
+def test_broker_accepts_an_exact_ready_line_on_each_host() -> None:
+    windows = receipt_decode.encode_line(_ready())
+    assert (
+        receipt_pages._parse_ready_line(
+            windows, expected_pid=1, pillow="12.2.0", platform="win32", **_BAND
+        )
+        is None
+    )
+    for rlimit_as in ((1 << 30), (1 << 30) + (1 << 28)):
+        linux = receipt_decode.encode_line(_ready(rlimit_as=rlimit_as))
+        assert (
+            receipt_pages._parse_ready_line(
+                linux, expected_pid=1, pillow="12.2.0", platform="linux", **_BAND
+            )
+            == rlimit_as
+        )
+
+
+def _pumped(stream: bytes, cap: int) -> tuple[receipt_pages._StdoutPump, int]:
+    """Run the capped reader over a fictional child stdout; it and the bytes it took."""
+
+    delivered = 0
+
+    def read(size: int) -> bytes:
+        nonlocal delivered
+        chunk = stream[delivered : delivered + size]
+        delivered += len(chunk)
+        return chunk
+
+    pump = receipt_pages._StdoutPump(read, response_cap=cap)
+    reader = threading.Thread(target=pump.run, daemon=True)
+    reader.start()
+    reader.join(60)
+    assert not reader.is_alive(), "the capped reader must stop by itself"
+    return pump, delivered
+
+
+def test_broker_stdout_read_is_capped() -> None:
+    request = _request()
+    cap = receipt_pages._stdout_cap(request)
+    assert cap == 1024 + 2200 * 2200 * 3
+    ready = receipt_decode.encode_line(_ready())
+    # One byte over the cap derived from the request: the reader stops there and the stream is
+    # the budget, never failed validation (which is for a bad header or body within the cap).
+    pump, delivered = _pumped(ready + bytes(cap + 1) + bytes(1 << 20), cap)
+    assert pump.overflowed and pump.finished
+    assert delivered == len(ready) + cap + 1, "it stops one byte past the cap, never later"
+    result = receipt_pages._ChildResult(
+        returncode=0,
+        timed_out=False,
+        overflowed=pump.overflowed,
+        body_written=True,
+        stream=pump.response(),
+    )
+    assert receipt_pages._map_child_exit(result, request) == "budget"
+    # Exactly at the cap nothing overflows: the same bytes are judged as a response instead.
+    at_cap, _ = _pumped(ready + bytes(cap), cap)
+    assert not at_cap.overflowed and len(at_cap.response()) == cap
+
+
+def test_a_test_lowered_long_edge_lowers_the_stdout_cap() -> None:
+    assert receipt_pages._stdout_cap(_request(max_long_edge=100)) == 1024 + 100 * 100 * 3
+
+
+_EXIT_CASES: dict[str, tuple[dict[str, Any], str]] = {
+    "exit-0-valid": ({"returncode": 0, "stream": _response(_decoded_header())}, "page"),
+    "exit-0-refusal": (
+        {"returncode": 0, "stream": b'{"status":"refused","reason":"source-edge"}\n'},
+        "source-edge",
+    ),
+    "exit-0-malformed": ({"returncode": 0, "stream": b"{}\n"}, "failed-validation"),
+    "exit-0-short-body-write": (
+        {"returncode": 0, "stream": _response(_decoded_header()), "body_written": False},
+        "failed-validation",
+    ),
+    "exit-budget": ({"returncode": receipt_decode.EXIT_BUDGET}, "budget"),
+    "exit-child-error": ({"returncode": receipt_decode.EXIT_CHILD_ERROR}, "child-error"),
+    "other-nonzero": ({"returncode": 1816}, "budget"),
+    "signal": ({"returncode": -9}, "budget"),
+    "wall-clock": ({"returncode": receipt_decode.EXIT_CHILD_ERROR, "timed_out": True}, "budget"),
+    "oversize-stream": ({"returncode": 0, "overflowed": True}, "budget"),
+}
+
+
+@pytest.mark.parametrize("case", list(_EXIT_CASES))
+def test_broker_maps_child_exit_status(case: str) -> None:
+    fields, expected = _EXIT_CASES[case]
+    result = receipt_pages._ChildResult(
+        **{
+            "returncode": None,
+            "timed_out": False,
+            "overflowed": False,
+            "body_written": True,
+            "stream": b"",
+            **fields,
+        }
+    )
+    outcome = receipt_pages._map_child_exit(result, _request())
+    if expected == "page":
+        assert isinstance(outcome, receipt_pages._Decoded)
+    else:
+        assert outcome == expected
+    assert receipt_decode.EXIT_BUDGET == 3 and receipt_decode.EXIT_CHILD_ERROR == 4
+
+
+# --- pixels_to_page, the one pixels-to-page step ---------------------------------------------
+
+
+def test_pixels_to_page_encodes_validated_pixels_only() -> None:
+    pixels = bytes(range(256)) * 100
+    first = receipt_pages.pixels_to_page(pixels, mode="L", width=160, height=160)
+    second = receipt_pages.pixels_to_page(pixels, mode="L", width=160, height=160)
+    assert first == second and (first.width, first.height, first.scale) == (160, 160, 1.0)
+    _assert_clean_jpeg(first.data)
+    # A producer's page larger than the limit (a PDF render) is downscaled like an upload.
+    wide = receipt_pages.pixels_to_page(bytes(4400 * 30 * 3), mode="RGB", width=4400, height=30)
+    assert (wide.width, wide.height, wide.scale) == (2200, 15, 0.5)
+    for bad in (
+        {"mode": "L", "width": 160, "height": 161},
+        {"mode": "RGBA", "width": 160, "height": 160},
+        {"mode": "L", "width": 0, "height": 160},
+    ):
+        with pytest.raises(ValueError):
+            receipt_pages.pixels_to_page(pixels, **bad)

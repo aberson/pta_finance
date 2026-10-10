@@ -1,14 +1,15 @@
-"""The one definition of the Python-side receipt page geometry.
+"""The one definition of the Python-side receipt page geometry and decode budget.
 
 Two groups live here and nowhere else; every producer imports them rather than restating a
 number:
 
-* :data:`NORMALIZATION` — how a producer turns a receipt image into a display page: long edge
-  at most 2200 px, baseline JPEG at quality 85, flattened onto white. These are the measured
-  defaults in ``documentation/receipt-autofill-plan.md`` § 2 and § 6.6. The PNG→JPEG threshold
-  is zero by design, so it has no field: every page, whatever its source format or size, is
-  re-encoded as JPEG, which is the variant that was measured. No size floor below which a PNG
-  stays lossless was measured, so none is invented.
+* :data:`NORMALIZATION` — how a producer turns a receipt image into a display page (long edge
+  at most 2200 px, baseline JPEG at quality 85, flattened onto white), the fast-path ceilings
+  an upload's header is checked against, and the budget the image decode child runs under.
+  The page values are the measured defaults in ``documentation/receipt-autofill-plan.md`` § 2
+  and § 6.6; the decode budget is calibrated per § 5A and recorded in § 6.3. The PNG→JPEG
+  threshold is zero by design, so it has no field: every page, whatever its source format or
+  size, is re-encoded as JPEG, which is the variant that was measured.
 * :data:`BOX_PADDING` — the documented **mirror** of the viewer's ellipse inflation. The viewer
   draws its outlines in the browser from JavaScript
   (``pta_finance/reports/templates/receipt_viewer.js.j2``:
@@ -36,31 +37,37 @@ __all__ = ["BOX_PADDING", "NORMALIZATION", "BoxPadding", "PageNormalization"]
 
 @dataclass(frozen=True)
 class PageNormalization:
-    """Deterministic display-page limits shared by every receipt page producer.
+    """Deterministic display-page limits and the decode budget shared by every producer.
 
-    ``max_long_edge`` — a page whose longer side exceeds this many pixels is downscaled so that
-    side is exactly this long. ``jpeg_quality`` and ``jpeg_subsampling`` — the baseline JPEG
-    every display page is re-encoded as; subsampling is stated so an encoder default cannot
-    drift. ``max_source_pixels`` — decode ceiling (width x height) for an uploaded image,
-    refused from its header before pixels are read. ``max_jpeg_scans`` — ceiling on the scans in
-    an uploaded JPEG: the pixel ceiling bounds one scan's memory, not how many times a
-    progressive file makes the decoder sweep it. ``max_exif_bytes`` — ceiling on the EXIF a
-    source carries (summed over a JPEG's EXIF segments, which Pillow concatenates); its IFD
-    loader costs grow with the square of the EXIF size. ``max_mpf_bytes`` — ceiling on a JPEG's
-    multi-picture (MPF) index segment, an IFD Pillow fully materializes while opening the file.
-    The JPEG ceilings are bounded from the raw bytes before anything is parsed, so they
-    over-count rather than under-count what the decoder will do. ``background`` — the colour
-    transparent pixels are flattened onto.
+    Page shape: ``max_long_edge`` — a page whose longer side exceeds this many pixels is
+    downscaled so that side is exactly this long; ``jpeg_quality`` and ``jpeg_subsampling`` —
+    the baseline JPEG every display page is re-encoded as (subsampling is stated so an encoder
+    default cannot drift); ``background`` — the colour transparent pixels are flattened onto.
+
+    Source ceilings: ``max_source_bytes`` — the largest asset file that is read at all (the
+    fetch cap and the read cap share it); ``max_source_pixels`` and ``max_source_edge`` —
+    header fast paths (width x height, and either side) checked by the decode child before any
+    pixel is decoded. These are cheap policy, not the safety bound: the bound is the budget.
+
+    Decode budget, enforced by the operating system on the decode child (Windows Job Object,
+    Linux rlimits): ``memory_bytes`` and ``cpu_seconds``; and by the broker alone, never sent to
+    the child: ``wall_seconds`` from spawn to exit, ``ready_seconds`` from spawn to the child's
+    ready line, and ``max_as_baseline``, the widest Linux interpreter baseline the broker
+    accepts above ``memory_bytes`` in the ready line's ``rlimit_as``.
     """
 
     max_long_edge: int
     jpeg_quality: int
     jpeg_subsampling: str
-    max_source_pixels: int
-    max_jpeg_scans: int
-    max_exif_bytes: int
-    max_mpf_bytes: int
     background: tuple[int, int, int]
+    max_source_bytes: int
+    max_source_pixels: int
+    max_source_edge: int
+    memory_bytes: int
+    cpu_seconds: int
+    wall_seconds: int
+    ready_seconds: int
+    max_as_baseline: int
 
 
 @dataclass(frozen=True)
@@ -81,17 +88,23 @@ NORMALIZATION: Final[PageNormalization] = PageNormalization(
     max_long_edge=2200,
     jpeg_quality=85,
     jpeg_subsampling="4:2:0",
-    # Above a 48-megapixel phone sensor, and below Pillow's own decompression-bomb warning.
-    max_source_pixels=80_000_000,
-    # Encoders emit 1 scan (baseline) or about 10 (libjpeg's progressive script); far above both.
-    max_jpeg_scans=64,
-    # One full JPEG APP1 segment always fits. Measured worst case of Pillow's IFD loader at this
-    # size: 362 MiB peak in 0.13 s; at twice the size, 1.4 GiB (plan § 6.3).
-    max_exif_bytes=64 * 1024,
-    # Real MP index segments are a few hundred bytes. Measured worst case at this size: 30 MiB
-    # in 0.05 s; at 64 KiB, 2.4 GiB in 13.5 s (plan § 6.3).
-    max_mpf_bytes=4 * 1024,
     background=(255, 255, 255),
+    # Matches the PDF worker's own max_pdf_bytes, so a fetched asset never exceeds what any
+    # renderer accepts (plan § 5A, config block).
+    max_source_bytes=25 * 1024 * 1024,
+    # Above a 48-megapixel phone sensor, and below Pillow's own decompression-bomb error.
+    max_source_pixels=80_000_000,
+    # JPEG's own format limit; a longer edge exists only to amplify the resampler's cost.
+    max_source_edge=65_535,
+    # The § 5A starting values. They become § 5A's exact calibrated values (1.5x the largest
+    # measured need over every host, rounded up) once the CI-runner records join the dev-box
+    # record in plan § 6.3; each known-good anchor must then finish within 80% of each limit.
+    memory_bytes=1536 * 1024 * 1024,
+    cpu_seconds=15,
+    wall_seconds=30,
+    ready_seconds=5,
+    # Pinned, not calibrated: at least 4x the measured Pillow-loaded interpreter baseline.
+    max_as_baseline=256 * 1024 * 1024,
 )
 
 BOX_PADDING: Final[BoxPadding] = BoxPadding(
