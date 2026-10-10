@@ -11,6 +11,8 @@ when an extraction is requested.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import importlib
 import json
@@ -20,9 +22,11 @@ import stat
 import threading
 import time
 import unicodedata
-from dataclasses import dataclass
+import zlib
+from collections.abc import Buffer
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
-from decimal import ROUND_CEILING, ROUND_HALF_EVEN, Decimal, InvalidOperation
+from decimal import ROUND_CEILING, ROUND_HALF_EVEN, ROUND_HALF_UP, Decimal, InvalidOperation
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
@@ -93,6 +97,20 @@ _HARD_MAX_NATIVE_PAGE_WIRE_BYTES = 16 * 1024 * 1024
 _HARD_MAX_NATIVE_EXTRACTION_SECONDS = 15
 _HARD_MAX_NATIVE_WORKER_MEMORY_BYTES = 512 * 1024 * 1024
 _HARD_MAX_NATIVE_WORKER_CPU_SECONDS = 10
+
+# The worker envelope's request selector (receipt-autofill plan, section 5A).  Step 41's
+# render spike adds only the three render fields it needs -- ``operation``,
+# ``render_page_first`` and ``render_scale_permille`` -- and bounds the rendered page by
+# the existing ``max_rendered_pixels_per_page`` and ``max_wire_bytes`` ceilings.  Step 43
+# completes the envelope (``render_page_count``, ``max_render_raw_bytes_per_page``,
+# ``max_render_wire_bytes``) and adds the render dimension gate and named refusals.
+OPERATION_EXTRACT = 1
+OPERATION_RENDER = 2
+RENDER_SCALE_PERMILLE = 2_778
+_HARD_MAX_OPERATION = 2
+_HARD_MAX_RENDER_PAGE_FIRST = 25
+_HARD_MAX_RENDER_SCALE_PERMILLE = 4_167
+_RENDER_FORMAT_GRAY8 = "gray8"
 
 _LETTER_WIDTH_POINTS = Decimal("612")
 _LETTER_HEIGHT_POINTS = Decimal("792")
@@ -826,6 +844,17 @@ class _PdfDocument(Protocol):
     def close(self) -> None: ...
 
 
+class _PdfBitmap(Protocol):
+    @property
+    def buffer(self) -> Buffer: ...
+
+    def fill_rect(
+        self, color: tuple[int, int, int, int], left: int, top: int, width: int, height: int
+    ) -> None: ...
+
+    def close(self) -> None: ...
+
+
 @dataclass(frozen=True)
 class _RawCharacter:
     index: int
@@ -876,6 +905,9 @@ class _NativeExtractionLimits:
     wall_seconds: int
     worker_memory_bytes: int
     worker_cpu_seconds: int
+    operation: int
+    render_page_first: int
+    render_scale_permille: int
 
 
 class _NativeWorkerConnection(Protocol):
@@ -910,6 +942,24 @@ class StatementExtractionError(TreasurerSlidesError):
 
 class SlidesDependencyError(TreasurerSlidesError):
     """The caller requested optional native-PDF support without its dependency extra."""
+
+
+class ReceiptRenderError(Exception):
+    """A receipt PDF render failed, or its worker response failed broker validation.
+
+    Deliberately not a :class:`StatementExtractionError`.  Step 41's render spike raises
+    only this base class; Step 43 adds the four named subclasses of section 5A.
+    """
+
+
+@dataclass(frozen=True)
+class RenderedPage:
+    """One broker-validated raw gray8 page: ``len(pixels) == width * height``, top row first."""
+
+    page_number: int
+    width: int
+    height: int
+    pixels: bytes
 
 
 @runtime_checkable
@@ -1034,6 +1084,18 @@ def _native_extraction_limits(document_ordinal: int) -> _NativeExtractionLimits:
             ceiling=_HARD_MAX_NATIVE_WORKER_CPU_SECONDS,
             document_ordinal=document_ordinal,
         ),
+        # Every request carries the render fields; extraction ignores them.
+        operation=_bounded_native_limit(
+            OPERATION_EXTRACT, ceiling=_HARD_MAX_OPERATION, document_ordinal=document_ordinal
+        ),
+        render_page_first=_bounded_native_limit(
+            1, ceiling=_HARD_MAX_RENDER_PAGE_FIRST, document_ordinal=document_ordinal
+        ),
+        render_scale_permille=_bounded_native_limit(
+            RENDER_SCALE_PERMILLE,
+            ceiling=_HARD_MAX_RENDER_SCALE_PERMILLE,
+            document_ordinal=document_ordinal,
+        ),
     )
 
 
@@ -1049,6 +1111,9 @@ _NATIVE_LIMIT_FIELD_CEILINGS: tuple[tuple[str, int], ...] = (
     ("wall_seconds", _HARD_MAX_NATIVE_EXTRACTION_SECONDS),
     ("worker_memory_bytes", _HARD_MAX_NATIVE_WORKER_MEMORY_BYTES),
     ("worker_cpu_seconds", _HARD_MAX_NATIVE_WORKER_CPU_SECONDS),
+    ("operation", _HARD_MAX_OPERATION),
+    ("render_page_first", _HARD_MAX_RENDER_PAGE_FIRST),
+    ("render_scale_permille", _HARD_MAX_RENDER_SCALE_PERMILLE),
 )
 
 
@@ -4057,8 +4122,15 @@ def _native_page_extraction_after_limits(
     document_ordinal: int,
     limits: _NativeExtractionLimits,
 ) -> None:
-    """Parse native bytes only after the caller has installed or preinstalled its cap."""
+    """Parse native bytes only after the caller has installed or preinstalled its cap.
 
+    The envelope's ``operation`` selects the request: 1 is statement extraction (below,
+    unchanged) and 2 is the Step 41 receipt render branch.
+    """
+
+    if limits.operation == OPERATION_RENDER:
+        _native_page_render_after_limits(request, response, limits)
+        return
     try:
         payload = request.recv_bytes(limits.max_pdf_bytes)
         if not isinstance(payload, bytes) or len(payload) > limits.max_pdf_bytes:
@@ -4077,6 +4149,132 @@ def _native_page_extraction_after_limits(
             response.send_bytes(_serialize_worker_rejection(error, document_ordinal, limits))
         except Exception:
             pass
+    except BaseException:
+        _send_worker_failure(response)
+    finally:
+        _close_quietly(request)
+        _close_quietly(response)
+
+
+def _render_edge(points: object, scale_permille: int) -> int:
+    """Return one rendered edge: page points x scale / 1,000, rounded half up (section 5A)."""
+
+    if isinstance(points, bool) or not isinstance(points, int | float):
+        raise ReceiptRenderError
+    try:
+        value = Decimal(str(points))
+    except InvalidOperation:
+        raise ReceiptRenderError from None
+    if not value.is_finite() or value <= 0:
+        raise ReceiptRenderError
+    return int((value * scale_permille / 1000).to_integral_value(rounding=ROUND_HALF_UP))
+
+
+def _render_native_page_pixels(
+    pdfium: ModuleType, payload: bytes, limits: _NativeExtractionLimits
+) -> tuple[int, RenderedPage]:
+    """Rasterize ``render_page_first`` to packed gray8 within the existing worker ceilings.
+
+    This is the worker side of the ``operation`` 2 request, so it runs inside the LPAC.
+    The Step 41 spike also calls it in-process to render its outside-LPAC anchors through
+    the very same code.  Returns the document's page count and the rendered page.  Step 43
+    adds the render dimension gate and section 5A's named refusals.
+    """
+
+    if limits.operation != OPERATION_RENDER:
+        raise ReceiptRenderError
+    document: _PdfDocument | None = None
+    page: _PdfPage | None = None
+    bitmap: _PdfBitmap | None = None
+    try:
+        document = cast(_PdfDocument, pdfium.PdfDocument(payload))
+        page_count = len(document)
+        if (
+            not isinstance(page_count, int)
+            or isinstance(page_count, bool)
+            or not 1 <= page_count <= limits.max_pages
+            or limits.render_page_first > page_count
+        ):
+            raise ReceiptRenderError
+        page = document.get_page(limits.render_page_first - 1)
+        raw_size = page.get_size()
+        if not isinstance(raw_size, tuple) or len(raw_size) != 2:
+            raise ReceiptRenderError
+        width = _render_edge(raw_size[0], limits.render_scale_permille)
+        height = _render_edge(raw_size[1], limits.render_scale_permille)
+        # The existing per-page pixel ceiling is checked before any bitmap is allocated.
+        if width < 1 or height < 1 or width * height > limits.max_rendered_pixels_per_page:
+            raise ReceiptRenderError
+        raw_api = pdfium.raw
+        # A Python-owned packed buffer (stride == width), so the bytes are row-major gray8.
+        bitmap = cast(
+            _PdfBitmap, pdfium.PdfBitmap.new_native(width, height, raw_api.FPDFBitmap_Gray)
+        )
+        bitmap.fill_rect((255, 255, 255, 255), 0, 0, width, height)
+        raw_api.FPDF_RenderPageBitmap(
+            bitmap, page, 0, 0, width, height, 0, raw_api.FPDF_GRAYSCALE | raw_api.FPDF_ANNOT
+        )
+        pixels = bytes(bitmap.buffer)
+        if len(pixels) != width * height:
+            raise ReceiptRenderError
+        return page_count, RenderedPage(
+            page_number=limits.render_page_first, width=width, height=height, pixels=pixels
+        )
+    except ReceiptRenderError:
+        raise
+    except Exception:
+        raise ReceiptRenderError from None
+    finally:
+        _close_quietly(bitmap)
+        _close_quietly(page)
+        _close_quietly(document)
+
+
+def _serialize_rendered_page(
+    page_count: int, page: RenderedPage, limits: _NativeExtractionLimits
+) -> bytes:
+    """Encode section 5A's ``rendered`` response: one frame, exact keys, raw gray8 + zlib."""
+
+    value: dict[str, object] = {
+        "status": "rendered",
+        "page_count": page_count,
+        "pages": [
+            {
+                "page_number": page.page_number,
+                "width": page.width,
+                "height": page.height,
+                "format": _RENDER_FORMAT_GRAY8,
+                "raw_sha256": hashlib.sha256(page.pixels).hexdigest(),
+                "raw_length": len(page.pixels),
+                "zlib": base64.b64encode(zlib.compress(page.pixels)).decode("ascii"),
+            }
+        ],
+    }
+    encoded = json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+    if len(encoded) > limits.max_wire_bytes:
+        raise ReceiptRenderError
+    return encoded
+
+
+def _native_page_render_after_limits(
+    request: _NativeWorkerConnection,
+    response: _NativeWorkerConnection,
+    limits: _NativeExtractionLimits,
+) -> None:
+    """Render one page only after the worker's limits are installed (``operation`` 2).
+
+    Every refusal answers the existing ``{"status":"failed"}`` frame; Step 43 splits them
+    into section 5A's ``rejected`` reasons.
+    """
+
+    try:
+        payload = request.recv_bytes(limits.max_pdf_bytes)
+        if not isinstance(payload, bytes) or len(payload) > limits.max_pdf_bytes:
+            raise ReceiptRenderError
+        _close_quietly(request)
+        pdfium = _require_pdfium()
+        page_count, page = _render_native_page_pixels(pdfium, payload, limits)
+        response.send_bytes(_serialize_rendered_page(page_count, page, limits))
     except BaseException:
         _send_worker_failure(response)
     finally:
@@ -4226,6 +4424,171 @@ def _extract_native_pages_in_worker(
             response_complete.wait(timeout=0.25)
         if succeeded and cleanup_failed:
             raise _page_error(document_ordinal)
+
+
+# --- Step 41 render spike: broker side ------------------------------------------------
+# The smallest broker exchange that issues an ``operation`` 2 request through the real,
+# attested LPAC worker and validates its ``rendered`` frame.  Step 43 extends it into
+# ``render_receipt_pdf`` (one launch per page, the dimension gate, named refusals).
+
+
+def _native_render_limits(page_number: int, scale_permille: int) -> _NativeExtractionLimits:
+    """Return the public envelope for one render launch; a bad argument is a caller bug."""
+
+    for value, ceiling in (
+        (page_number, _HARD_MAX_RENDER_PAGE_FIRST),
+        (scale_permille, _HARD_MAX_RENDER_SCALE_PERMILLE),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= ceiling:
+            raise ValueError("render page and scale must be bounded positive integers")
+    return replace(
+        _native_extraction_limits(document_ordinal=1),
+        operation=OPERATION_RENDER,
+        render_page_first=page_number,
+        render_scale_permille=scale_permille,
+    )
+
+
+def _wire_render_integer(value: object, *, maximum: int) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= maximum:
+        raise ReceiptRenderError
+    return value
+
+
+def _deserialize_rendered_page(
+    payload: bytes, limits: _NativeExtractionLimits
+) -> tuple[int, RenderedPage]:
+    """Accept only an exact ``rendered`` frame whose pixels match its length and digest."""
+
+    if not isinstance(payload, bytes) or not 1 <= len(payload) <= limits.max_wire_bytes:
+        raise ReceiptRenderError
+    try:
+        root: object = json.loads(payload.decode("ascii"))
+    except (UnicodeError, ValueError):
+        raise ReceiptRenderError from None
+    if (
+        not isinstance(root, dict)
+        or set(root) != {"status", "page_count", "pages"}
+        or root["status"] != "rendered"
+        or not isinstance(root["pages"], list)
+        or len(root["pages"]) != 1
+    ):
+        raise ReceiptRenderError
+    page_count = _wire_render_integer(root["page_count"], maximum=limits.max_pages)
+    entry: object = root["pages"][0]
+    if not isinstance(entry, dict) or set(entry) != {
+        "page_number",
+        "width",
+        "height",
+        "format",
+        "raw_sha256",
+        "raw_length",
+        "zlib",
+    }:
+        raise ReceiptRenderError
+    page_number = _wire_render_integer(entry["page_number"], maximum=limits.max_pages)
+    width = _wire_render_integer(entry["width"], maximum=limits.max_rendered_pixels_per_page)
+    height = _wire_render_integer(entry["height"], maximum=limits.max_rendered_pixels_per_page)
+    raw_length = _wire_render_integer(
+        entry["raw_length"], maximum=limits.max_rendered_pixels_per_page
+    )
+    digest = entry["raw_sha256"]
+    encoded = entry["zlib"]
+    if (
+        page_number != limits.render_page_first
+        or page_count < page_number
+        or entry["format"] != _RENDER_FORMAT_GRAY8
+        or width * height > limits.max_rendered_pixels_per_page
+        or raw_length != width * height
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+        or not isinstance(encoded, str)
+    ):
+        raise ReceiptRenderError
+    try:
+        compressed = base64.b64decode(encoded.encode("ascii"), validate=True)
+        decompressor = zlib.decompressobj()
+        # Bounded: never inflate more than one byte past the declared length.
+        pixels = decompressor.decompress(compressed, raw_length + 1)
+    except (UnicodeError, binascii.Error, zlib.error):
+        raise ReceiptRenderError from None
+    if (
+        len(pixels) != raw_length
+        or not decompressor.eof
+        or decompressor.unconsumed_tail
+        or decompressor.unused_data
+        or hashlib.sha256(pixels).hexdigest() != digest
+    ):
+        raise ReceiptRenderError
+    return page_count, RenderedPage(
+        page_number=page_number, width=width, height=height, pixels=pixels
+    )
+
+
+def _render_native_page_in_worker(
+    pdf: bytes, *, page_number: int = 1, scale_permille: int = RENDER_SCALE_PERMILLE
+) -> tuple[int, RenderedPage]:
+    """Render one page of ``pdf`` inside a fresh, ready-attested LPAC worker.
+
+    Returns the document's page count and the validated page.  A worker that cannot start
+    or attest raises :class:`NativeSandboxUnavailable` unchanged (never a page error);
+    every later failure raises :class:`ReceiptRenderError`.
+    """
+
+    if not isinstance(pdf, bytes) or not 1 <= len(pdf) <= MAX_PDF_BYTES:
+        raise ValueError("render input must be non-empty PDF bytes within MAX_PDF_BYTES")
+    limits = _native_render_limits(page_number, scale_permille)
+    from pta_finance.treasurer_slides.native_sandbox import start_native_pdf_worker
+
+    deadline = time.monotonic() + limits.wall_seconds
+    session = start_native_pdf_worker(
+        document_ordinal=1,
+        limits_json=_serialize_native_limits(limits),
+        worker_memory_bytes=limits.worker_memory_bytes,
+        worker_cpu_seconds=limits.worker_cpu_seconds,
+        ready_timeout_seconds=float(min(limits.wall_seconds, 5)),
+    )
+    request_sender: _NativeWorkerConnection = session.request_sender
+    response_receiver: _NativeWorkerConnection = session.response_receiver
+    worker: _NativeWorkerProcess = session.process
+    request_complete = threading.Event()
+    response_complete = threading.Event()
+    request_result = _NativeWorkerIoResult()
+    response_result = _NativeWorkerIoResult()
+    deadline_breached = False
+    succeeded = False
+    try:
+        threading.Thread(
+            target=_read_native_worker_response,
+            args=(response_receiver, limits.max_wire_bytes, response_result, response_complete),
+            daemon=True,
+        ).start()
+        threading.Thread(
+            target=_write_native_worker_request,
+            args=(request_sender, pdf, request_result, request_complete),
+            daemon=True,
+        ).start()
+        if not response_complete.wait(max(0, deadline - time.monotonic())):
+            deadline_breached = True
+            raise ReceiptRenderError
+        if response_result.error is not None or response_result.value is None:
+            raise ReceiptRenderError
+        rendered = _deserialize_rendered_page(response_result.value, limits)
+        succeeded = True
+        return rendered
+    except ReceiptRenderError:
+        raise
+    except Exception:
+        raise ReceiptRenderError from None
+    finally:
+        cleanup_failed = _stop_native_page_worker(worker, terminate_immediately=deadline_breached)
+        _close_quietly(request_sender)
+        _close_quietly(response_receiver)
+        if deadline_breached:
+            request_complete.wait(timeout=0.25)
+            response_complete.wait(timeout=0.25)
+        if succeeded and cleanup_failed:
+            raise ReceiptRenderError
 
 
 def _normalized_token(token: _LayoutToken) -> str:

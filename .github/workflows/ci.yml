@@ -78,6 +78,11 @@ jobs:
           }
           assert required_budget <= {case.attrib['name'] for case in budget}, 'Decode budget cases were not collected'
           assert all(case.find('skipped') is None for case in budget), 'Decode budget coverage was omitted'
+          spike = [case for case in everything
+                   if case.attrib['classname'] == 'tests.test_treasurer_slides_lpac_render_spike'
+                   and case.attrib['name'] == 'test_lpac_render_spike_scores_the_real_lpac_render']
+          assert len(spike) == 1, 'LPAC render spike case was not collected'
+          assert spike[0].find('skipped') is not None, 'LPAC render spike claimed a measurement off Windows'
           PY
           uv run pytest -q tests/test_treasurer_slides_bank_statements_native.py -k "extractor_never_reads_a_pdf_if_the_sandbox_cannot_start"
 
@@ -172,12 +177,13 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --extra dev --extra slides --extra receipts
 
-      - name: Native sandbox, statement parser, process limits and receipt decode tests
+      - name: Native sandbox, statement parser, LPAC render spike, process limits and receipt decode tests
         shell: bash
         run: |
           uv run pytest -q --junitxml=windows-results.xml \
             tests/test_treasurer_slides_native_sandbox.py \
             tests/test_treasurer_slides_bank_statements_native.py \
+            tests/test_treasurer_slides_lpac_render_spike.py \
             tests/test_process_limits.py \
             tests/test_receipt_pages.py \
             tests/test_receipt_decode_budget.py
@@ -213,6 +219,10 @@ jobs:
                   'test_a_real_job_limits_accounts_and_ends_a_child_process',
                   'test_job_structures_match_the_native_worker_copy_recursively',
               },
+              'tests.test_treasurer_slides_lpac_render_spike': {
+                  'test_lpac_render_spike_scores_the_real_lpac_render',
+                  'test_render_request_answers_one_validated_gray8_page_through_the_worker_entry',
+              },
           }
           for classname, names in required.items():
               cases = named(classname)
@@ -221,6 +231,15 @@ jobs:
               assert all(found[name].find('skipped') is None for name in names), f'{classname} required cases were skipped'
           assert all(case.find('skipped') is None for case in named('tests.test_receipt_decode_budget')), 'Decode budget coverage was omitted'
           assert all(case.find('skipped') is None for case in named('tests.test_receipt_pages')), 'Receipt page coverage was omitted'
+          assert all(case.find('skipped') is None for case in named('tests.test_treasurer_slides_lpac_render_spike')), 'LPAC render spike coverage was omitted'
+          spike = {prop.attrib['name']: prop.attrib['value']
+                   for prop in ElementTree.parse('windows-results.xml').getroot().iter('property')
+                   if prop.attrib['name'].startswith('lpac_render_spike.')}
+          for name in sorted(spike):
+              print(f'{name}={spike[name]}')
+          for anchor in ('known_good', 'all_white', 'box_glyph', 'lpac'):
+              assert {f'lpac_render_spike.{anchor}.ink', f'lpac_render_spike.{anchor}.ncc'} <= set(spike), f'LPAC render spike recorded no {anchor} measurement'
+          assert spike.get('lpac_render_spike.verdict') in {'pass', 'blocked'}, 'LPAC render spike produced no verdict'
           PY
 
       - name: Receipt sidecar headroom tests (Windows drive and UNC rules)
