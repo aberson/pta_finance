@@ -26,6 +26,7 @@ from test_reimbursement_report import _bundle, _write_bundle
 
 from pta_finance import (
     process_limits,
+    receipt_assets,
     receipt_decode,
     receipt_geometry,
     receipt_pages,
@@ -242,6 +243,7 @@ def test_geometry_and_page_budget_are_imported_not_restated() -> None:
     assert receipt_pages.NORMALIZATION is receipt_geometry.NORMALIZATION
     assert receipt_pages.MAX_PAGE_BYTES is receipt_viewer.MAX_PAGE_BYTES
     assert receipt_pages.scaled_size is receipt_decode.scaled_size
+    assert receipt_pages.ASSET_ID is receipt_assets.ASSET_ID
     normalization = receipt_geometry.NORMALIZATION
     assert {field.name for field in dataclasses.fields(normalization)} == _NORMALIZATION_FIELDS
     assert (normalization.max_long_edge, normalization.jpeg_quality) == (2200, 85)
