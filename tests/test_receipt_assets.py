@@ -140,15 +140,17 @@ class _FakeWeb:
         self.clock = clock
         self.calls: list[str] = []
         self.timeouts: list[float] = []
+        self.deadlines: list[float] = []
         self.header_reads: list[str] = []
         self.read_requests: list[int] = []
         self.responses: list[_FakeResponse] = []
         self._lock = threading.Lock()
 
-    def open(self, url: str, *, timeout: float) -> _FakeResponse:
+    def open(self, url: str, *, timeout: float, deadline: float) -> _FakeResponse:
         with self._lock:
             self.calls.append(url)
             self.timeouts.append(timeout)
+            self.deadlines.append(deadline)
             queue = self._routes.get(url)
             if queue is None:
                 raise AssertionError("the fetcher requested a URL no route serves")
@@ -167,7 +169,7 @@ def _refuse_socket(*args: object, **kwargs: object) -> None:
     raise AssertionError("a test tried to open a network socket")
 
 
-def _never_open(url: str, *, timeout: float) -> None:
+def _never_open(url: str, *, timeout: float, deadline: float) -> None:
     raise AssertionError("the network seam was called")
 
 
@@ -533,6 +535,75 @@ def test_harmless_url_forms_are_normalized_rather_than_refused(
     assert result.canonical_key == receipt_assets.canonical_key(opened)
 
 
+def test_a_lone_surrogate_is_a_per_asset_malformed_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Reachable from a ledger "\ud800" JSON escape or a surrogateescape-decoded mail string.
+    in_path, in_query = _url("/u/scan\ud800.pdf"), _url("/u/scan.pdf?name=\udfff")
+    in_host, good = "https://cdn\ud800.example-forms.invalid/u/1", _url("/u/good")
+    web = _FakeWeb({good: _Reply(body=_PDF)})
+    _harness(monkeypatch, web)
+    cache = tmp_path / "cache"
+    results = _fetch([in_path, in_query, in_host, good], cache)
+    for result in results[:3]:
+        _assert_failed(result, "refused", "malformed url")
+    assert results[3].outcome == "fetched"
+    assert web.calls == [good]
+    # The ledger round-trips the surrogates (as JSON escapes) and still loads and validates.
+    assert [row["url"] for row in _rows(cache)] == [in_path, in_query, in_host, good]
+    monkeypatch.setattr(receipt_assets, "_open", _never_open)
+    again = _fetch([in_path, in_query, in_host, good], cache, offline=True)
+    assert [result.outcome for result in again] == ["uncached"] * 3 + ["cached"]
+
+
+def test_a_lone_surrogate_in_a_redirect_target_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start = _url("/u/1")
+    # A hop can only come from a header, which http.client decodes as Latin-1, so a surrogate
+    # cannot arrive this way; the hop check is the same _prepare, so it still refuses cleanly.
+    monkeypatch.setattr(receipt_assets, "_redirect_target", lambda current, location: location)
+    web = _FakeWeb({start: _redirect(_url("/u/\ud800"))})
+    _harness(monkeypatch, web)
+    [result] = _fetch([start], tmp_path / "cache")
+    _assert_failed(result, "refused", "redirect target: malformed url")
+
+
+def test_canonical_key_never_raises_on_a_lone_surrogate() -> None:
+    assert receipt_assets.canonical_key(_url("/u/a\ud800")) == (
+        "cdn.example-forms.invalid/u/a%ED%A0%80"
+    )
+    assert receipt_assets.canonical_key(_url("/u/a?q=\ud800")) == "cdn.example-forms.invalid/u/a"
+    host_key = receipt_assets.canonical_key("https://cdn\ud800.example-forms.invalid/u/1")
+    assert host_key == "cdn\ud800.example-forms.invalid/u/1"
+
+
+@pytest.mark.parametrize(
+    ("error", "on_read", "outcome", "detail"),
+    [
+        (UnicodeError("label too long"), False, "refused", "malformed url"),
+        (ValueError("unknown url type"), False, "refused", "malformed url"),
+        (ValueError("I/O operation on closed file"), True, "unreachable", "connection error"),
+    ],
+    ids=["idna-at-open", "value-error-at-open", "value-error-mid-body"],
+)
+def test_a_library_value_error_stays_inside_the_per_asset_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+    on_read: bool,
+    outcome: str,
+    detail: str,
+) -> None:
+    bad, good = _url("/u/bad"), _url("/u/good")
+    reply = _Reply(read_error=error) if on_read else _Reply(error=error)
+    web = _FakeWeb({bad: reply, good: _Reply(body=_PDF)})
+    _harness(monkeypatch, web)
+    failed, fetched = _fetch([bad, good], tmp_path / "cache")
+    _assert_failed(failed, outcome, detail)
+    assert fetched.outcome == "fetched"
+
+
 def test_allowlist_rules_are_lowercased_and_deduplicated() -> None:
     rules = receipt_assets.normalize_allowlist(
         [
@@ -777,6 +848,182 @@ def test_the_deadline_covers_redirect_hops(tmp_path: Path, monkeypatch: pytest.M
     [result] = _fetch([start], tmp_path / "cache")
     _assert_failed(result, "unreachable", _DEADLINE)
     assert web.calls == [start]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        urllib.error.URLError(TimeoutError("timed out")),  # a slow connect or TLS handshake
+        TimeoutError("timed out"),  # a status line or headers trickling in
+        http.client.RemoteDisconnected("closed"),  # cut off mid-headers
+    ],
+    ids=["connect", "headers", "cut-off"],
+)
+def test_a_slow_connect_or_header_phase_is_cut_off_at_the_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: BaseException
+) -> None:
+    url = _url("/u/slow-headers")
+    clock = _Clock()
+    web = _FakeWeb({url: _Reply(error=error, open_seconds=300.0)}, clock)
+    sleeps = _harness(monkeypatch, web)
+    [result] = _fetch([url], tmp_path / "cache", max_attempts=5)
+    _assert_failed(result, "unreachable", _DEADLINE)
+    # The opener is handed the asset's deadline, which it holds every socket operation to.
+    assert web.deadlines == [float(receipt_assets.FETCH_CEILINGS.asset_deadline_s)]
+    assert (web.calls, sleeps) == ([url], [])
+
+
+def test_every_socket_operation_waits_at_most_what_the_deadline_leaves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _Clock()
+    monkeypatch.setattr(receipt_assets, "_monotonic", clock)
+    assert receipt_assets._operation_timeout(30, 300) == 30
+    clock.now = 290.0
+    assert receipt_assets._operation_timeout(30, 300) == 10
+    clock.now = 300.0
+    with pytest.raises(TimeoutError, match="deadline exceeded"):
+        receipt_assets._operation_timeout(30, 300)
+
+
+def test_the_tls_socket_narrows_each_receive_and_send_to_the_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _Clock()
+    monkeypatch.setattr(receipt_assets, "_monotonic", clock)
+    calls: list[str] = []
+
+    def record(name: str, value: Any) -> Any:
+        def method(self: Any, *args: Any) -> Any:
+            calls.append(name)
+            return value
+
+        return method
+
+    monkeypatch.setattr(ssl.SSLSocket, "recv_into", record("recv_into", 1))
+    monkeypatch.setattr(ssl.SSLSocket, "recv", record("recv", b"x"))
+    monkeypatch.setattr(ssl.SSLSocket, "send", record("send", 1))
+    # No socket is opened: the instance is never connected, and its timeout is recorded.
+    sock = receipt_assets._DeadlineSSLSocket.__new__(receipt_assets._DeadlineSSLSocket)
+    timeouts: list[float | None] = []
+    sock.settimeout = timeouts.append  # type: ignore[method-assign]
+    sock.recv_into(bytearray(4))
+    assert timeouts == []  # unbound (during the handshake) it is a plain SSL socket
+    sock.bind_deadline(per_operation=30.0, deadline=300.0)
+    sock.recv_into(bytearray(4))  # the status line
+    clock.now = 290.0
+    sock.send(b"GET / HTTP/1.1")
+    sock.recv(4)
+    clock.now = 300.0
+    with pytest.raises(TimeoutError, match="deadline exceeded"):
+        sock.recv_into(bytearray(4))  # a header byte that arrives too late is never awaited
+    assert timeouts == [30.0, 10.0, 10.0]
+    assert calls == ["recv_into", "recv_into", "send", "recv"]
+
+
+class _FakeSocket:
+    """A stand-in TCP socket whose connect only advances the fake clock."""
+
+    def __init__(self, clock: _Clock, connect_seconds: list[float], log: list[Any]) -> None:
+        self._clock, self._connect_seconds, self.log = clock, connect_seconds, log
+        self.closed = False
+
+    def settimeout(self, value: float) -> None:
+        self.log.append(("settimeout", value))
+
+    def connect(self, address: Any) -> None:
+        timeout = self.log[-1][1]
+        seconds = self._connect_seconds.pop(0)
+        self._clock.now += min(seconds, timeout)
+        if seconds >= timeout:
+            raise TimeoutError("timed out")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _fake_network(
+    monkeypatch: pytest.MonkeyPatch, clock: _Clock, connect_seconds: list[float]
+) -> tuple[list[Any], list[_FakeSocket]]:
+    """Resolve to three fictional addresses and hand out fake sockets; no real socket."""
+
+    _forbid_sockets(monkeypatch)
+    monkeypatch.setattr(receipt_assets, "_monotonic", clock)
+    addresses = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.1", 443))] * 3
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: addresses)
+    log: list[Any] = []
+    created: list[_FakeSocket] = []
+
+    def fake_socket(*args: Any) -> _FakeSocket:
+        created.append(_FakeSocket(clock, connect_seconds, log))
+        return created[-1]
+
+    monkeypatch.setattr(socket, "socket", fake_socket)
+    return log, created
+
+
+def test_each_connect_attempt_is_bounded_by_the_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = _Clock()
+    clock.now = 250.0
+    log, created = _fake_network(monkeypatch, clock, [60.0, 60.0, 1.0])
+    with pytest.raises(TimeoutError):
+        receipt_assets._connect_within_deadline(("cdn.example-forms.invalid", 443), 30.0, 300.0)
+    # 30 s allowed at t=250 (timed out at 280), then only the 20 s left; at t=300 the third
+    # address is never tried, although create_connection would give each a fresh 30 s.
+    assert log == [("settimeout", 30.0), ("settimeout", 20.0)]
+    assert clock.now == 300.0
+    assert len(created) == 2 and all(sock.closed for sock in created)
+
+
+def test_a_connected_socket_leaves_with_the_remaining_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = _Clock()
+    clock.now = 280.0
+    log, created = _fake_network(monkeypatch, clock, [5.0])
+    connected = receipt_assets._connect_within_deadline(
+        ("cdn.example-forms.invalid", 443), 30.0, 300.0
+    )
+    # The TLS handshake that follows runs under the 15 s left, not a fresh 30 s.
+    assert log == [("settimeout", 20.0), ("settimeout", 15.0)]
+    assert connected is created[0] and not created[0].closed
+
+
+def test_the_production_connection_carries_the_deadline_to_every_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _forbid_sockets(monkeypatch)
+    captured: dict[str, Any] = {}
+
+    def fake_do_open(self: Any, http_class: Any, req: Any, **kwargs: Any) -> Any:
+        captured["connection"] = http_class("cdn.example-forms.invalid", timeout=30.0, **kwargs)
+        return None
+
+    monkeypatch.setattr(urllib.request.AbstractHTTPHandler, "do_open", fake_do_open)
+    handler = receipt_assets._DeadlineHTTPSHandler(250.0)
+    handler.https_open(urllib.request.Request(_url("/u/1")))
+    connection = captured["connection"]
+    assert isinstance(connection, receipt_assets._DeadlineHTTPSConnection)
+    assert connection._deadline == 250.0
+
+    # connect() opens its TCP socket through the deadline-bounded connector, then binds the
+    # deadline on the TLS socket the context wraps it in (a _DeadlineSSLSocket).
+    tls = receipt_assets._DeadlineSSLSocket.__new__(receipt_assets._DeadlineSSLSocket)
+    connector: list[tuple[Any, ...]] = []
+
+    def fake_connect_within(address: Any, per_operation: float, deadline: float) -> str:
+        connector.append((address, per_operation, deadline))
+        return "tcp"
+
+    def fake_https_connect(self: Any) -> None:
+        assert self._create_connection(("cdn.example-forms.invalid", 443), 30.0) == "tcp"
+        self.sock = tls
+
+    monkeypatch.setattr(receipt_assets, "_connect_within_deadline", fake_connect_within)
+    monkeypatch.setattr(http.client.HTTPSConnection, "connect", fake_https_connect)
+    connection.connect()
+    assert connector == [(("cdn.example-forms.invalid", 443), 30.0, 250.0)]
+    assert (tls._per_operation, tls._deadline) == (30.0, 250.0)
 
 
 def test_the_deadline_outlasts_the_slowest_legitimate_retry_schedule() -> None:
@@ -1432,7 +1679,7 @@ def test_at_most_max_parallel_fetches_run_at_once(
     lock = threading.Lock()
     state = {"running": 0, "peak": 0, "calls": 0}
 
-    def opener(url: str, *, timeout: float) -> _FakeResponse:
+    def opener(url: str, *, timeout: float, deadline: float) -> _FakeResponse:
         with lock:
             state["running"] += 1
             state["peak"] = max(state["peak"], state["running"])
@@ -1442,7 +1689,7 @@ def test_at_most_max_parallel_fetches_run_at_once(
             if first_wave:
                 barrier.wait()  # a fetcher that never runs max_parallel at once times out here
             time.sleep(0.01)
-            return web.open(url, timeout=timeout)
+            return web.open(url, timeout=timeout, deadline=deadline)
         finally:
             with lock:
                 state["running"] -= 1
@@ -1457,15 +1704,20 @@ def test_the_production_opener_speaks_https_only_and_follows_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _forbid_sockets(monkeypatch)
-    opener = receipt_assets._build_opener()
-    assert [type(handler) for handler in opener.handlers] == [urllib.request.HTTPSHandler]
+    opener = receipt_assets._build_opener(math.inf)
+    assert [type(handler) for handler in opener.handlers] == [receipt_assets._DeadlineHTTPSHandler]
+    assert isinstance(opener.handlers[0], urllib.request.HTTPSHandler)
     assert set(opener.handle_open) == {"https"}
     # No redirect or error handler and no response processor: a 30x or 4xx comes back as-is.
     assert opener.handle_error == {} and opener.process_response == {}
-    context: ssl.SSLContext = opener.handlers[0]._context  # type: ignore[attr-defined]
+    context = receipt_assets._tls_context()
     assert context.verify_mode is ssl.CERT_REQUIRED and context.check_hostname
+    assert context.sslsocket_class is receipt_assets._DeadlineSSLSocket
     with pytest.raises(urllib.error.URLError):
-        receipt_assets._open("http://cdn.example-forms.invalid/u/1", timeout=1)
+        receipt_assets._open("http://cdn.example-forms.invalid/u/1", timeout=1, deadline=math.inf)
+    # Nothing starts once the deadline has passed, not even the connect.
+    with pytest.raises(TimeoutError, match="deadline exceeded"):
+        receipt_assets._open(_url("/u/1"), timeout=30, deadline=receipt_assets._monotonic() - 1)
 
 
 def test_the_production_response_type_offers_the_read_the_fetcher_uses() -> None:

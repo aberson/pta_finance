@@ -48,16 +48,21 @@ producer re-verifies the bytes against the asset id when it reads them, because 
 is free of a check-then-use race, and records ``digest-mismatch``.
 
 **Per-asset isolation.** Every per-asset outcome — refused, unreachable, oversize, gone — is
-recorded and returned, never raised, so one bad asset never aborts the batch.
+recorded and returned, never raised, so one bad asset never aborts the batch. That includes
+hostile text: a URL that cannot be split, normalized or encoded (a lone surrogate, say) is a
+``refused`` outcome with detail ``malformed url``, and :func:`canonical_key` never raises.
 :class:`ReceiptAssetError` is raised only when the stage cannot run at all: invalid arguments
 or allowlist rules, an unwritable cache directory, or a malformed ledger. Even then, the ledger
 records every outcome already resolved before the error propagates.
 
 **Politeness and time.** At most ``max_parallel`` fetches run at once. A 429 or 5xx response is
 retried after ``2**attempt`` seconds (capped at 30) until ``max_attempts`` attempts have been
-made; every other status is final. ``timeout`` bounds each socket operation, and
-:data:`FETCH_CEILINGS`'s ``asset_deadline_s`` bounds the whole fetch of one URL — attempts,
-redirects, body reads and backoff together; past it the asset is ``unreachable``. Upload URLs on
+made; every other status is final. :data:`FETCH_CEILINGS`'s ``asset_deadline_s`` bounds the
+whole fetch of one URL — attempts, redirects, backoff and every socket operation within them:
+each connect, TLS handshake, send and receive (status line, headers and body included) waits at
+most ``min(timeout, time left)``, and none starts once the deadline has passed. Past it the asset
+is ``unreachable`` (``deadline exceeded``). Only name resolution cannot be interrupted; it is
+bounded by the system resolver's own timeout. Upload URLs on
 a third-party CDN may expire: a 404 or 410 is the ``gone`` outcome, a link-rot finding about the
 evidence, not a toolkit bug.
 
@@ -75,6 +80,7 @@ import json
 import math
 import os
 import re
+import socket
 import ssl
 import tempfile
 import time
@@ -86,10 +92,13 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 from pta_finance.receipt_geometry import NORMALIZATION
+
+if TYPE_CHECKING:
+    from _typeshed import ReadableBuffer, WriteableBuffer
 
 __all__ = [
     "ACCEPTED_OUTCOMES",
@@ -310,15 +319,143 @@ class _Refusal(Exception):
 # --- Seams: the only places that touch the network or the clock --------------------------
 
 
+_sleep: Callable[[float], None] = time.sleep
+_monotonic: Callable[[], float] = time.monotonic
+
+
+def _operation_timeout(per_operation: float, deadline: float) -> float:
+    """The timeout one socket operation may use: what is left of ``deadline``, capped.
+
+    Raises :class:`TimeoutError` once nothing is left, so no operation starts past the
+    deadline. Recomputed before every operation, which is what bounds a server that trickles
+    its handshake, status line, headers or body: each wait is at most the time remaining.
+    """
+
+    remaining = deadline - _monotonic()
+    if remaining <= 0:
+        raise TimeoutError(_DEADLINE)
+    return min(per_operation, remaining)
+
+
+class _DeadlineSSLSocket(ssl.SSLSocket):
+    """A TLS socket whose every receive and send is bounded by the asset's deadline.
+
+    The TLS handshake runs before :meth:`bind_deadline` and is bounded by the socket timeout
+    the connection set from the deadline (CPython applies one timeout to the whole handshake).
+    After binding, each ``recv_into``/``recv``/``send`` — the calls ``http.client`` makes for
+    the request, the status line, the headers and the body — first narrows the timeout to what
+    remains. Unbound, it behaves exactly like :class:`ssl.SSLSocket`.
+    """
+
+    _per_operation: float | None = None
+    _deadline: float = math.inf
+
+    def bind_deadline(self, *, per_operation: float, deadline: float) -> None:
+        self._per_operation = per_operation
+        self._deadline = deadline
+
+    def _bound(self) -> None:
+        if self._per_operation is not None:
+            self.settimeout(_operation_timeout(self._per_operation, self._deadline))
+
+    def recv_into(self, buffer: WriteableBuffer, nbytes: int | None = None, flags: int = 0) -> int:
+        self._bound()
+        return super().recv_into(buffer, nbytes, flags)
+
+    def recv(self, buflen: int = 1024, flags: int = 0) -> bytes:
+        self._bound()
+        return super().recv(buflen, flags)
+
+    def send(self, data: ReadableBuffer, flags: int = 0) -> int:
+        self._bound()
+        return super().send(data, flags)
+
+
+def _connect_within_deadline(
+    address: tuple[str, int], per_operation: float, deadline: float
+) -> socket.socket:
+    """``socket.create_connection`` with each address's connect bounded by the deadline.
+
+    The connected socket leaves with its timeout narrowed to what remains, so the TLS handshake
+    that follows is bounded too. Name resolution itself cannot be interrupted; it is bounded by
+    the system resolver's own timeout.
+    """
+
+    host, port = address
+    error: OSError = OSError("no address to connect to")
+    for family, kind, proto, _, sockaddr in socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM):
+        connection = socket.socket(family, kind, proto)
+        try:
+            connection.settimeout(_operation_timeout(per_operation, deadline))
+            connection.connect(sockaddr)
+            connection.settimeout(_operation_timeout(per_operation, deadline))
+        except OSError as exc:  # TimeoutError included
+            connection.close()
+            error = exc
+            if _monotonic() >= deadline:
+                break
+            continue
+        return connection
+    raise error
+
+
+class _DeadlineHTTPSConnection(http.client.HTTPSConnection):
+    """An HTTPS connection whose connect, handshake, request and response obey one deadline."""
+
+    def __init__(self, host: str, *, deadline: float, **kwargs: Any) -> None:
+        super().__init__(host, **kwargs)
+        self._deadline = deadline
+
+    def connect(self) -> None:
+        # urllib always passes a number; anything else (the module's default-timeout sentinel)
+        # leaves the deadline as the only bound.
+        timeout: object = self.timeout
+        per_operation = float(timeout) if isinstance(timeout, int | float) else math.inf
+        deadline = self._deadline
+
+        def create(
+            address: tuple[str, int], timeout: object = None, source_address: object = None
+        ) -> socket.socket:
+            return _connect_within_deadline(address, per_operation, deadline)
+
+        # HTTPConnection.connect opens its socket through this attribute.
+        self._create_connection = create
+        super().connect()
+        if isinstance(self.sock, _DeadlineSSLSocket):
+            self.sock.bind_deadline(per_operation=per_operation, deadline=deadline)
+
+
+class _DeadlineHTTPSHandler(urllib.request.HTTPSHandler):
+    """The HTTPS handler, opening :class:`_DeadlineHTTPSConnection` for one asset's deadline."""
+
+    def __init__(self, deadline: float) -> None:
+        super().__init__(context=_tls_context())
+        self._deadline = deadline
+
+    def https_open(self, req: urllib.request.Request) -> http.client.HTTPResponse:
+        deadline = self._deadline
+
+        def connection(host: str, **kwargs: Any) -> http.client.HTTPConnection:
+            return _DeadlineHTTPSConnection(host, deadline=deadline, **kwargs)
+
+        return self.do_open(connection, req, context=_tls_context())
+
+
 @functools.cache
 def _tls_context() -> ssl.SSLContext:
-    """Certificate and hostname verification, the platform trust store, TLS 1.2 or later."""
+    """Certificate and hostname verification, the platform trust store, TLS 1.2 or later.
 
-    return ssl.create_default_context()
+    Its sockets are :class:`_DeadlineSSLSocket`, which a deadline-free caller cannot tell apart
+    from :class:`ssl.SSLSocket`.
+    """
+
+    context = ssl.create_default_context()
+    context.sslsocket_class = _DeadlineSSLSocket
+    return context
 
 
-def _build_opener() -> urllib.request.OpenerDirector:
-    """An opener that speaks HTTPS only and follows nothing.
+def _build_opener(deadline: float) -> urllib.request.OpenerDirector:
+    """An opener that speaks HTTPS only, follows nothing and keeps one asset's deadline.
 
     Built from a bare :class:`~urllib.request.OpenerDirector` rather than ``build_opener``, so
     it holds exactly one handler: no HTTP, FTP, file or data handler, no proxy handler (proxy
@@ -328,27 +465,27 @@ def _build_opener() -> urllib.request.OpenerDirector:
 
     opener = urllib.request.OpenerDirector()
     opener.addheaders = [("User-Agent", _USER_AGENT)]
-    opener.add_handler(urllib.request.HTTPSHandler(context=_tls_context()))
+    opener.add_handler(_DeadlineHTTPSHandler(deadline))
     return opener
 
 
-def _open(url: str, *, timeout: float) -> _Response:
+def _open(url: str, *, timeout: float, deadline: float) -> _Response:
     """THE network seam: one HTTPS GET, redirects not followed, any status returned.
 
     Tests substitute this function; they never allowlist ``http://`` or a loopback host.
-    ``timeout`` bounds each socket operation.
+    ``timeout`` caps each socket operation and ``deadline`` (a :func:`_monotonic` instant) caps
+    them all: every connect, TLS handshake, send and receive waits at most
+    ``min(timeout, deadline - now)``, and none starts once the deadline has passed.
     """
 
     request = urllib.request.Request(url, method="GET")
     # OpenerDirector.open returns None when no handler accepts the scheme: anything but https.
-    response: _Response | None = _build_opener().open(request, timeout=timeout)
+    response: _Response | None = _build_opener(deadline).open(
+        request, timeout=_operation_timeout(timeout, deadline)
+    )
     if response is None:
         raise urllib.error.URLError("only https URLs can be opened")
     return response
-
-
-_sleep: Callable[[float], None] = time.sleep
-_monotonic: Callable[[], float] = time.monotonic
 
 
 def _utc_now() -> str:
@@ -358,8 +495,10 @@ def _utc_now() -> str:
 # --- Identity and allowlist ----------------------------------------------------------------
 
 
-def _encode(component: str) -> str:
-    return quote(component, safe=_COMPONENT_SAFE)
+def _encode(component: str, *, errors: str = "strict") -> str:
+    """Percent-encode as UTF-8; strict by default, so a lone surrogate raises ``ValueError``."""
+
+    return quote(component, safe=_COMPONENT_SAFE, errors=errors)
 
 
 def canonical_key(url: str) -> str:
@@ -369,15 +508,18 @@ def canonical_key(url: str) -> str:
     key. The host also loses a fully-qualified trailing dot, and the path is percent-encoded
     exactly as a fetch would send it (case kept), so raw and encoded spellings of one upload
     share a key. Total by design: the linker numbers asset ordinals with it before anything is
-    fetched, so a URL that cannot be split keeps its text up to the first ``?`` or ``#`` (such
-    a URL is refused at fetch time anyway).
+    fetched, and the ledger validator calls it on every stored row. A lone surrogate in the
+    path is encoded with ``surrogatepass`` rather than raising, and a URL that cannot be split
+    keeps its text up to the first ``?`` or ``#``; either URL is refused at fetch time anyway.
     """
 
     try:
         parts = urlsplit(url)
-    except ValueError:
+        return (parts.hostname or "").removesuffix(".") + _encode(
+            parts.path, errors="surrogatepass"
+        )
+    except ValueError:  # UnicodeError included
         return url.split("#", 1)[0].split("?", 1)[0]
-    return (parts.hostname or "").removesuffix(".") + _encode(parts.path)
 
 
 def _is_hostname(host: str) -> bool:
@@ -430,8 +572,20 @@ def _host_allowed(host: str, allowlist: Sequence[str]) -> bool:
 
 
 def _prepare(url: str, allowlist: Sequence[str]) -> str:
-    """The URL to open, rebuilt from checked parts; raises :class:`_Refusal`. Every hop."""
+    """The URL to open, rebuilt from checked parts; raises :class:`_Refusal`. Every hop.
 
+    Any other failure while splitting, normalizing or encoding hostile text — a lone surrogate
+    that UTF-8 cannot encode, a netloc ``urlsplit`` rejects — is this URL's ``malformed url``
+    refusal, never an exception that escapes the per-asset boundary.
+    """
+
+    try:
+        return _checked_url(url, allowlist)
+    except ValueError:  # UnicodeError included
+        raise _Refusal("malformed url") from None
+
+
+def _checked_url(url: str, allowlist: Sequence[str]) -> str:
     if _CONTROLS.search(url):
         raise _Refusal("malformed url")
     try:
@@ -485,6 +639,12 @@ def _transport_detail(exc: BaseException) -> str:
     return "connection error"
 
 
+def _failure_detail(exc: BaseException, deadline: float) -> str:
+    """A transport failure's detail; any failure once the deadline has passed is the deadline."""
+
+    return _DEADLINE if _monotonic() >= deadline else _transport_detail(exc)
+
+
 def _read_capped(response: _Response, cap: int, deadline: float) -> bytes | None:
     """The ``read(cap + 1)`` rule: take at most ``cap + 1`` body bytes, so oversize shows.
 
@@ -509,7 +669,7 @@ def _read_capped(response: _Response, cap: int, deadline: float) -> bytes | None
 def _close(response: _Response) -> None:
     try:
         response.close()
-    except _TRANSPORT_ERRORS:
+    except (*_TRANSPORT_ERRORS, ValueError):
         pass
 
 
@@ -544,9 +704,11 @@ def _attempt(url: str, policy: _Policy, deadline: float) -> _Fetch:
         if remaining <= 0:
             return _Fetch("unreachable", _DEADLINE, 0)
         try:
-            response = _open(target, timeout=min(policy.timeout, remaining))
+            response = _open(target, timeout=min(policy.timeout, remaining), deadline=deadline)
         except _TRANSPORT_ERRORS as exc:
-            return _Fetch("unreachable", _transport_detail(exc), 0)
+            return _Fetch("unreachable", _failure_detail(exc, deadline), 0)
+        except ValueError:  # the library rejected the prepared request itself
+            return _Fetch("refused", "malformed url", 0)
         try:
             status = response.status
             if status in _REDIRECT_STATUSES:
@@ -570,8 +732,8 @@ def _attempt(url: str, policy: _Policy, deadline: float) -> _Fetch:
             if status == 429 or 500 <= status <= 599:
                 return _Fetch(_RETRYABLE, f"status {status}", 0)
             return _Fetch("unreachable", f"status {status}", 0)
-        except _TRANSPORT_ERRORS as exc:
-            return _Fetch("unreachable", _transport_detail(exc), 0)
+        except (*_TRANSPORT_ERRORS, ValueError) as exc:
+            return _Fetch("unreachable", _failure_detail(exc, deadline), 0)
         finally:
             _close(response)
     return _Fetch("refused", "too many redirects", 0)
