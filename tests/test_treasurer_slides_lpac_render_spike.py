@@ -1,4 +1,4 @@
-"""Step 41 spike: prove a real LPAC render of a non-embedded-font PDF yields legible glyphs.
+"""LPAC render spike: prove a real LPAC render of a non-embedded-font PDF yields legible glyphs.
 
 pdfium rasterizes on the CPU, but its Win32 font mapper reaches system fonts through GDI and
 the LPAC worker has no window-station grant, so a degraded mapper could draw blank or boxed
@@ -27,6 +27,7 @@ import json
 import math
 import operator
 import os
+import time
 import zlib
 from collections.abc import Callable
 from pathlib import Path
@@ -48,8 +49,9 @@ INK_COVERAGE_THRESHOLD = 0.75
 GLYPH_NCC_THRESHOLD = 0.80
 
 # The verdict recorded in documentation/findings/step-41-lpac-render.md.  The measurement
-# must reproduce it; "blocked" additionally requires the blocked findings file that
-# Step 42's predicate reads.
+# must reproduce it: "pass" means both LPAC scores are above their thresholds, "blocked"
+# means at least one is not.  A blocked verdict also requires the non-empty blocked
+# findings file, and a pass verdict requires its absence.
 RECORDED_VERDICT = "pass"
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -305,7 +307,18 @@ def test_lpac_render_spike_scores_the_real_lpac_render(
 
     # A pass-through observer only: the real attested launcher still runs.
     monkeypatch.setattr(native_sandbox, "start_native_pdf_worker", observed_start)
-    page_count, lpac = bank_statements._render_native_page_in_worker(subject)
+    # The whole launch, staging, render and validation shares the worker's existing
+    # wall-clock ceiling, so the margin is recorded even when the render fails.
+    started = time.monotonic()
+    try:
+        page_count, lpac = bank_statements._render_native_page_in_worker(subject)
+    finally:
+        record(
+            {
+                "lpac_elapsed_s": round(time.monotonic() - started, 2),
+                "lpac_wall_seconds_limit": _render_limits().wall_seconds,
+            }
+        )
     assert launches == [bank_statements.OPERATION_RENDER]
     assert page_count == 1
     assert (lpac.page_number, lpac.width, lpac.height) == (1, reference.width, reference.height)
@@ -329,10 +342,8 @@ def test_lpac_render_spike_scores_the_real_lpac_render(
         f"measured {verdict!r} but the findings record {RECORDED_VERDICT!r}: {summary}"
     )
     if verdict == "pass":
-        assert all(scores["lpac"][metric] > threshold for metric, _, threshold in _METRICS)
-        assert not _BLOCKED_FINDINGS.exists(), "a pass verdict must not leave Step 42's trigger"
+        assert not _BLOCKED_FINDINGS.exists(), "a pass verdict must not leave a blocked file"
     else:
-        assert failing, "the blocked verdict needs a metric below its threshold"
         assert _BLOCKED_FINDINGS.stat().st_size > 0, "the blocked verdict needs its findings"
     findings = _FINDINGS.read_text(encoding="utf-8")
     assert f"T_INK = {INK_COVERAGE_THRESHOLD:.2f}" in findings
@@ -437,7 +448,7 @@ def test_render_request_answers_one_validated_gray8_page_through_the_worker_entr
     }
     assert root["pages"][0]["format"] == "gray8"
     assert page_count == 1
-    # US Letter at 2,778 permille is exactly 1,700 x 2,200 (half-up rounding, section 5A).
+    # US Letter at 2,778 permille is exactly 1,700 x 2,200 (half-up rounding).
     assert (page.page_number, page.width, page.height) == (1, 1_700, 2_200)
     assert len(page.pixels) == page.width * page.height
     assert page == _render_outside_lpac(subject)

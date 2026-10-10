@@ -70,8 +70,13 @@ The host is Windows 11 (build 26200) with Python 3.12, pypdfium2 5.13.0 and PDFi
   the outside-LPAC subject render (gray8 sha256 `48d00b9a6d4fa66a…`). The LPAC worker's font
   mapper therefore resolved the same face for `/Helvetica` as an unsandboxed process. The
   render was not a degraded fallback.
-- **Wall time:** about 10 s per LPAC render, mostly worker launch and staging, within the
-  existing 15 s `wall_seconds`.
+- **Wall time:** 9.14 s, 8.47 s, 8.86 s and 9.50 s over four runs. The test measures from just
+  before the launch to the validated response, and records the value as
+  `lpac_render_spike.lpac_elapsed_s`. Most of the time is worker launch and runtime staging.
+  The whole exchange shares the existing 15 s `wall_seconds` ceiling
+  (`lpac_render_spike.lpac_wall_seconds_limit`), which leaves at least 5.5 s of margin on
+  this host. The test records the elapsed time even when the render fails, so a timeout on a
+  slower runner shows its reading.
 
 **Exploratory context (not gated).** These readings came from a scratch probe outside the
 committed test, using the same render settings.
@@ -84,20 +89,27 @@ committed test, using the same render settings.
 
 ## CI windows-2022 runner readings
 
-The `windows-native-sandbox` job runs this measurement. Its pytest step prints every
-`lpac_render_spike.*` JUnit testsuite property: each anchor score, the LPAC scores, the
-thresholds and the verdict. If the measured verdict disagrees with the recorded one, pytest
-also prints the `LPAC_RENDER_SPIKE` summary line in its failure output.
+These are the readings from gating CI run 38081622465 on commit `1aecbb4`, 2026-10-10. All
+three jobs succeeded. The `windows-native-sandbox` job's pytest step printed them from the
+`lpac_render_spike.*` JUnit testsuite properties. If a later measurement fails or disagrees
+with the recorded verdict, pytest also prints the `LPAC_RENDER_SPIKE` summary line in its
+failure output.
 
-The orchestrator records the readings from the gating CI run here. Until then, this section
-contains no numbers.
+| render | ink coverage | glyph NCC | result |
+|---|---|---|---|
+| known-good: subject outside the LPAC | 0.9991 | 0.9549 | above both thresholds |
+| garbage: all-white page | 0.0 | 0.0 | below both thresholds |
+| garbage: box-glyph page | 0.4357 | 0.654 | below both thresholds |
+| **subject inside the real LPAC** | **0.9991** | **0.9549** | **pass** |
 
-| render | ink coverage | glyph NCC |
-|---|---|---|
-| known-good: subject outside the LPAC | pending: from the gating CI run | pending: from the gating CI run |
-| garbage: all-white page | pending: from the gating CI run | pending: from the gating CI run |
-| garbage: box-glyph page | pending: from the gating CI run | pending: from the gating CI run |
-| subject inside the real LPAC | pending: from the gating CI run | pending: from the gating CI run |
+- **Thresholds** printed: `threshold.ink=0.75` and `threshold.ncc=0.8`. Calibration held on
+  both metrics, and the runner's verdict was `pass`.
+- **LPAC render:** `1700x2200`, with `lpac_identical_to_known_good=True` and
+  `lpac_raw_sha256=48d00b9a6d4fa66ad7d841597e90c7764f0c564800d5c1b6ea4ecb61b7e54924`. These
+  are the same pixels the dev box produced.
+- **Wall time:** the runner passed within the same 15 s `wall_seconds` ceiling. That run
+  predates the `lpac_elapsed_s` property, so its elapsed time was not recorded. Later runs
+  of the job print it.
 
 ## Scope of the render branch
 

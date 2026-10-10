@@ -98,12 +98,11 @@ _HARD_MAX_NATIVE_EXTRACTION_SECONDS = 15
 _HARD_MAX_NATIVE_WORKER_MEMORY_BYTES = 512 * 1024 * 1024
 _HARD_MAX_NATIVE_WORKER_CPU_SECONDS = 10
 
-# The worker envelope's request selector (receipt-autofill plan, section 5A).  Step 41's
-# render spike adds only the three render fields it needs -- ``operation``,
-# ``render_page_first`` and ``render_scale_permille`` -- and bounds the rendered page by
-# the existing ``max_rendered_pixels_per_page`` and ``max_wire_bytes`` ceilings.  Step 43
-# completes the envelope (``render_page_count``, ``max_render_raw_bytes_per_page``,
-# ``max_render_wire_bytes``) and adds the render dimension gate and named refusals.
+# Every worker request carries a selector and the render fields.  ``operation`` 1 runs
+# statement extraction, which ignores the render fields; ``operation`` 2 renders the
+# 1-based ``render_page_first`` at ``render_scale_permille`` pixels per thousand points
+# (2,778 is 200 DPI, so US Letter renders at 1,700 x 2,200).  A rendered page stays within
+# the existing ``max_rendered_pixels_per_page`` and ``max_wire_bytes`` ceilings.
 OPERATION_EXTRACT = 1
 OPERATION_RENDER = 2
 RENDER_SCALE_PERMILLE = 2_778
@@ -947,8 +946,9 @@ class SlidesDependencyError(TreasurerSlidesError):
 class ReceiptRenderError(Exception):
     """A receipt PDF render failed, or its worker response failed broker validation.
 
-    Deliberately not a :class:`StatementExtractionError`.  Step 41's render spike raises
-    only this base class; Step 43 adds the four named subclasses of section 5A.
+    Deliberately a plain ``Exception``: it is neither a :class:`StatementExtractionError` nor
+    a :class:`TreasurerSlidesError`, which is a ``ValueError``, so no generic
+    ``except ValueError`` or statement-extraction handler can swallow a render failure.
     """
 
 
@@ -4124,8 +4124,8 @@ def _native_page_extraction_after_limits(
 ) -> None:
     """Parse native bytes only after the caller has installed or preinstalled its cap.
 
-    The envelope's ``operation`` selects the request: 1 is statement extraction (below,
-    unchanged) and 2 is the Step 41 receipt render branch.
+    The envelope's ``operation`` selects the request: 1 is statement extraction (below)
+    and 2 renders one receipt page.
     """
 
     if limits.operation == OPERATION_RENDER:
@@ -4157,7 +4157,7 @@ def _native_page_extraction_after_limits(
 
 
 def _render_edge(points: object, scale_permille: int) -> int:
-    """Return one rendered edge: page points x scale / 1,000, rounded half up (section 5A)."""
+    """Return one rendered edge: page points x scale / 1,000, rounded half up."""
 
     if isinstance(points, bool) or not isinstance(points, int | float):
         raise ReceiptRenderError
@@ -4175,10 +4175,10 @@ def _render_native_page_pixels(
 ) -> tuple[int, RenderedPage]:
     """Rasterize ``render_page_first`` to packed gray8 within the existing worker ceilings.
 
-    This is the worker side of the ``operation`` 2 request, so it runs inside the LPAC.
-    The Step 41 spike also calls it in-process to render its outside-LPAC anchors through
-    the very same code.  Returns the document's page count and the rendered page.  Step 43
-    adds the render dimension gate and section 5A's named refusals.
+    This is the worker side of the ``operation`` 2 request, so in production it runs inside
+    the LPAC.  The document must have 1 to ``max_pages`` pages, and the rendered page at most
+    ``max_rendered_pixels_per_page`` pixels.  Returns the document's page count and the
+    rendered page.
     """
 
     if limits.operation != OPERATION_RENDER:
@@ -4233,7 +4233,7 @@ def _render_native_page_pixels(
 def _serialize_rendered_page(
     page_count: int, page: RenderedPage, limits: _NativeExtractionLimits
 ) -> bytes:
-    """Encode section 5A's ``rendered`` response: one frame, exact keys, raw gray8 + zlib."""
+    """Encode the ``rendered`` response: one frame, exact keys, raw gray8 + zlib."""
 
     value: dict[str, object] = {
         "status": "rendered",
@@ -4263,8 +4263,7 @@ def _native_page_render_after_limits(
 ) -> None:
     """Render one page only after the worker's limits are installed (``operation`` 2).
 
-    Every refusal answers the existing ``{"status":"failed"}`` frame; Step 43 splits them
-    into section 5A's ``rejected`` reasons.
+    Every refusal or failure answers the existing ``{"status":"failed"}`` frame.
     """
 
     try:
@@ -4426,10 +4425,9 @@ def _extract_native_pages_in_worker(
             raise _page_error(document_ordinal)
 
 
-# --- Step 41 render spike: broker side ------------------------------------------------
-# The smallest broker exchange that issues an ``operation`` 2 request through the real,
-# attested LPAC worker and validates its ``rendered`` frame.  Step 43 extends it into
-# ``render_receipt_pdf`` (one launch per page, the dimension gate, named refusals).
+# --- Receipt page render: broker side ---------------------------------------------------
+# One ``operation`` 2 request per launch through the real, attested LPAC worker; the
+# broker accepts only a ``rendered`` frame whose pixels match its length and digest.
 
 
 def _native_render_limits(page_number: int, scale_permille: int) -> _NativeExtractionLimits:
