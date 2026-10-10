@@ -864,13 +864,14 @@ its engineering plan follows acceptance of the live queue and does not expand St
 
 ---
 
-## Phase 9 — Automatic source-receipt filling — planned (Steps 38–49)
+## Phase 9 — Automatic source-receipt filling — in progress; Step 39 blocked (Steps 38–49)
 
 **Objective:** Make the reimbursement refresh *produce* receipt evidence instead of only
 consuming it, so newly arrived queue items stop rendering "Receipt not linked" until someone
 hand-builds a sidecar.
 
-**Status: STEP 38 DONE (2026-09-23); Steps 39–49 planned.** The scoped source of truth is
+**Status: STEP 38 DONE (2026-09-23); Step 39 BLOCKED (2026-10-09) after stop-and-audit, with the
+Option A1 decision recorded the same day and the step ready to resume; Steps 40–49 planned.** The scoped source of truth is
 [documentation/receipt-autofill-plan.md](documentation/receipt-autofill-plan.md). Reserve
 Steps 38–49. The refresh gains a fill stage that fetches each ticket's own uploaded receipt
 assets from a configured host allowlist into a private cache, renders them to display pages
@@ -886,13 +887,41 @@ unproven and its failure mode is silent blank glyphs rather than a crash. Steps 
 Step 49 (M9) is the attended operator run. A local HTML picker for confirming multi-asset tickets is
 deliberately deferred to Step 50.
 
+**Decision A1 (2026-10-09).** Step 39's stop-and-audit (issue #73) found that guards predicting
+image-decoder cost from untrusted bytes do not converge: each review round found another
+amplifier, and each new guard either failed open or false-refused real phone photos. Every PNG/JPEG
+upload is therefore decoded in a short-lived child (`receipt_decode`) under OS-enforced memory and
+CPU limits — a Windows Job Object or Linux rlimits; any other host aborts the stage — plus a broker
+wall clock. The broker never decodes an untrusted image byte; it validates the raw pixels the child
+returns and encodes the page. Any breach is a per-asset refusal recorded in a private fetch ledger.
+The Job Object primitive moves from `native_sandbox.py` into a shared stdlib-only leaf,
+`process_limits.py`, behind a behavior-preserving wrapper. Step 39 calibrates the limits per host
+and pins them with a standing decode-budget corpus test. The residual is an ordinary user-level
+child, the same class as the Step 42 PDF fallback. Hosting it in the LPAC worker is a deferred
+upgrade.
+
+**Step 39's current state.** BLOCKED with A1 recorded; the operator kept it as one step. Its
+prior-iteration payload is staged, uncommitted, in the paused worktree
+`worktree_build-step-1791571847`. It resumes with `/build-step 39` after `/plan-wrap` and
+`/repo-sync`, following the exact resume order in its brief: restore the worktree's stale plan copy,
+commit the remaining payload as WIP, then merge `main`.
+
 Sequencing is already resolved — no operator gate. [treasurer-summary Wave 1](documentation/treasurer-summary-wave-1-plan.md)
-Step 16 (issue #43, still OPEN) claims the same three native-worker files and the same
-`windows-native-sandbox` job. Step 43's brief checks whether #43 has landed and rebases or leaves
-a note accordingly; whichever lands second rebases. No decision is required before dispatch.
+Step 16 (issue #43, still OPEN) claims `bank_statements.py`, `native_sandbox.py`, `native_worker.py`
+and the `windows-native-sandbox` job. Three Phase 9 steps touch those files: Step 39's
+`process_limits` wrapper refactor of `native_sandbox.py`, and Step 41's minimal render branch and
+Step 43's render protocol in `bank_statements.py`. Each checks whether #43 has landed. If it has,
+the step rebases and runs both native suites; if not, it lands first and comments on issue #43.
+Step 16's brief carries a reciprocal note (2026-10-09) to create its Job through the same wrapper.
+Phase 6 (board summary) also shares `cli.py`, its CLI tests, and the CI, lock and docs files;
+Phase 10 (action queue) shares `cli.py`, its CLI tests, `README.md` and `CLAUDE.md`, but no CI or
+lock file. Whichever phase lands second rebases (feature plan § 8). No decision is
+required before dispatch.
 
 Plan sync completed 2026-09-16: umbrella [#71](https://github.com/aberson/pta_finance/issues/71),
 automated Steps 38–48 in #72–#82, attended Step 49 (M9) in #83. Step 38 is complete; receipt autofill implementation begins at Step 39.
+The 2026-10-09 amendment changes the briefs behind #73 and #75–#83. The next `/repo-sync` re-syncs
+those issues, and it also syncs the Wave 1 plan's Step 16 note to #43.
 
 ---
 

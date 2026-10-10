@@ -887,6 +887,11 @@ step.
   raster bytes to the input pipe. The OCR process has no network or caller-profile/worktree access and
   never writes private raster/OCR data to ambient disk. Windows CI installs Tesseract and executes the
   real OCR fixture; Linux runs only portable OCR-contract and fail-closed coverage.
+- **Coordination (2026-10-09):** receipt-autofill Phase 9 Step 39 (issue #73) moves the Job Object
+  primitive from `native_sandbox._make_job_object` into the shared leaf `pta_finance/process_limits.py`,
+  keeping `_make_job_object` as a thin wrapper (`documentation/receipt-autofill-plan.md` § 4, § 5A).
+  Create the Tesseract Job through that wrapper, never by restating the primitive. Whichever step
+  lands second rebases and runs both native suites; if Phase 9 lands first, it comments on #43.
 - **Depends on:** Step 15
 - **Status:** PENDING
 
