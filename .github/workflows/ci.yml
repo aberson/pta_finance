@@ -54,6 +54,11 @@ jobs:
               'test_broker_rejects_malformed_decode_response[extra-field]',
               'test_broker_stdout_read_is_capped',
               'test_broker_maps_child_exit_status[exit-child-error]',
+              'test_an_empty_asset_is_a_per_asset_refusal_before_any_spawn[png]',
+              'test_an_empty_asset_is_a_per_asset_refusal_before_any_spawn[jpeg]',
+              'test_limits_the_child_would_refuse_abort_the_stage_before_any_spawn[memory-not-whole-pages]',
+              'test_the_child_refuses_a_memory_limit_that_is_not_whole_pages',
+              'test_an_abort_before_the_ready_line_kills_and_reaps_the_child_promptly',
           }
           assert required <= {case.attrib['name'] for case in pages}, 'Receipt page tests were not collected'
           assert all(case.find('skipped') is None for case in pages), 'Receipt page coverage was omitted'
@@ -198,6 +203,11 @@ jobs:
                   'test_rotated_exif_jpeg_normalizes_to_displayed_orientation[orientation-6]',
                   'test_two_runs_produce_byte_identical_pages',
                   'test_broker_stdout_read_is_capped',
+                  'test_an_empty_asset_is_a_per_asset_refusal_before_any_spawn[png]',
+                  'test_an_empty_asset_is_a_per_asset_refusal_before_any_spawn[jpeg]',
+                  'test_limits_the_child_would_refuse_abort_the_stage_before_any_spawn[memory-not-whole-pages]',
+                  'test_the_child_refuses_a_memory_limit_that_is_not_whole_pages',
+                  'test_an_abort_before_the_ready_line_kills_and_reaps_the_child_promptly',
               },
               'tests.test_process_limits': {
                   'test_a_real_job_limits_accounts_and_ends_a_child_process',
