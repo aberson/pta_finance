@@ -2,18 +2,26 @@
 
 Transport only: this module turns a ticket's upload URLs into cached bytes and records what
 happened to each one. It never decodes, renders or links anything (that is
-:mod:`pta_finance.receipt_pages` and the linker), and it never imports either of them.
+:mod:`pta_finance.receipt_pages` and the linker), and it never imports either of them. It owns
+the asset identifier format (:data:`ASSET_ID`), which the page
+producer imports rather than restates.
 
 **The allowlist is the whole safety property of this lane**, so every URL handed to the network
-— the requested one and every redirect hop — passes the same full check first:
+— the requested one and every redirect hop — passes the same full check first, and what is
+opened is rebuilt from the checked parts:
 
 * the scheme is ``https`` and the port is the default (an explicit ``:443`` is the default);
-* the URL carries no userinfo (``https://allowed@elsewhere/`` is refused, never "repaired");
+* the URL carries no userinfo (``https://allowed@elsewhere/`` is refused, never "repaired"), and
+  its authority holds no space, backslash, control or non-ASCII character;
 * the host is a name, never an IP literal — dotted, bracketed, integer, hex or shortened forms
   (``127.1``) are all refused rather than resolved;
 * the host matches an operator rule: an exact host name, or a leading-dot suffix
   (``.uploads.example.net``) that matches only at a label boundary, so it covers
   ``a.uploads.example.net`` but never ``evil-uploads.example.net`` nor the bare apex.
+
+A fully-qualified trailing dot is dropped from the host before matching, and raw spaces or
+non-ASCII characters in the path or query are percent-encoded (UTF-8) rather than refused;
+control characters anywhere are refused.
 
 Automatic redirect following is disabled in the opener itself: a 30x response comes back to
 this module, which re-checks the target and follows at most ``max_redirects`` hops. The
@@ -23,28 +31,35 @@ by construction even if a check above were wrong.
 
 **Bytes decide the type.** A body is accepted only when it starts with one of three magic
 signatures — ``%PDF-``, the PNG signature or the JPEG SOI marker — and ``Content-Type`` is never
-read. The body is read with a hard cap: at most ``max_bytes + 1`` bytes are ever requested, so
-an oversize body is detected rather than silently truncated. ``max_bytes`` is the configured
-``max_asset_mib``, bounded above by :data:`pta_finance.receipt_geometry.NORMALIZATION`'s
-``max_source_bytes`` (the cap every later reader of a cached asset applies), and deliberately
-not the viewer's page caps, which bound rendered pages rather than source files.
+read. At most ``max_bytes + 1`` body bytes are ever taken, so an oversize body is detected
+rather than silently truncated. ``max_bytes`` is the configured ``max_asset_mib``, bounded above
+by :data:`pta_finance.receipt_geometry.NORMALIZATION`'s ``max_source_bytes`` (the cap every
+later reader of a cached asset applies), and deliberately not the viewer's page caps, which
+bound rendered pages rather than source files.
 
 **Content-addressed cache.** An accepted body is stored as ``<sha256 hex>.<pdf|png|jpg>`` in
 ``cache_dir`` — named from its bytes, never from a URL or an upload filename — and identified as
 ``asset:v1:<sha256 hex>``. The private fetch ledger ``<cache_dir>/fill-ledger.json`` maps each
-requested URL to its digest; before any socket opens, a URL whose ledger row names an existing
-cache file is a ``cached`` hit. ``offline=True`` never opens a socket at all: a miss is
-``uncached``.
+requested URL to its digest. Before anything else, in both modes, a URL whose ledger row names
+an existing cache file is a ``cached`` hit and opens no socket, even if its host has since left
+the allowlist: serving cached bytes contacts no host. ``offline=True`` never opens a socket at
+all: a miss is ``uncached``. A hit is trusted on existence, as the plan specifies; the page
+producer re-verifies the bytes against the asset id when it reads them, because only that read
+is free of a check-then-use race, and records ``digest-mismatch``.
 
 **Per-asset isolation.** Every per-asset outcome — refused, unreachable, oversize, gone — is
 recorded and returned, never raised, so one bad asset never aborts the batch.
 :class:`ReceiptAssetError` is raised only when the stage cannot run at all: invalid arguments
-or allowlist rules, an unwritable cache directory, or a malformed ledger.
+or allowlist rules, an unwritable cache directory, or a malformed ledger. Even then, the ledger
+records every outcome already resolved before the error propagates.
 
-**Politeness.** At most ``max_parallel`` fetches run at once. A 429 or 5xx response is retried
-after ``2**attempt`` seconds (capped at 30) until ``max_attempts`` attempts have been made;
-every other status is final. Upload URLs on a third-party CDN may expire: a 404 or 410 is the
-``gone`` outcome, a link-rot finding about the evidence, not a toolkit bug.
+**Politeness and time.** At most ``max_parallel`` fetches run at once. A 429 or 5xx response is
+retried after ``2**attempt`` seconds (capped at 30) until ``max_attempts`` attempts have been
+made; every other status is final. ``timeout`` bounds each socket operation, and
+:data:`FETCH_CEILINGS`'s ``asset_deadline_s`` bounds the whole fetch of one URL — attempts,
+redirects, body reads and backoff together; past it the asset is ``unreachable``. Upload URLs on
+a third-party CDN may expire: a 404 or 410 is the ``gone`` outcome, a link-rot finding about the
+evidence, not a toolkit bug.
 
 Messages and ``detail`` strings carry paths, status codes and reason classes only — never a URL,
 host name, vendor or requestor. The URLs themselves live only in the private ledger.
@@ -72,13 +87,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Final, Protocol
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
 from pta_finance.receipt_geometry import NORMALIZATION
 
 __all__ = [
     "ACCEPTED_OUTCOMES",
-    "ASSET_ID_PREFIX",
+    "ASSET_ID",
     "ASSET_OUTCOMES",
     "ASSET_ROW_KEYS",
     "CACHE_SUFFIXES",
@@ -86,6 +101,7 @@ __all__ = [
     "LEDGER_KEYS",
     "LEDGER_NAME",
     "LEDGER_SCHEMA_VERSION",
+    "AssetIdFormat",
     "AssetResult",
     "FetchCeilings",
     "ReceiptAssetError",
@@ -94,7 +110,24 @@ __all__ = [
     "normalize_allowlist",
 ]
 
-ASSET_ID_PREFIX: Final = "asset:v1:"
+
+@dataclass(frozen=True)
+class AssetIdFormat:
+    """THE asset identifier format: ``prefix`` + the sha256 hex of the fetched bytes.
+
+    ``pattern`` full-matches an identifier, and its group 1 is the digest. Grouped in a frozen
+    instance so a consumer that imports it can be held to it with ``is``: ``re`` caches
+    compiled patterns, so two modules compiling the same pattern text get the same object, and
+    an identity check on the bare pattern could never fail.
+    """
+
+    prefix: str
+    pattern: re.Pattern[str]
+
+
+ASSET_ID: Final[AssetIdFormat] = AssetIdFormat(
+    prefix="asset:v1:", pattern=re.compile(r"asset:v1:([0-9a-f]{64})")
+)
 LEDGER_NAME: Final = "fill-ledger.json"
 LEDGER_SCHEMA_VERSION: Final = 1
 # The ledger's exact top-level key set. This module owns assets[]; the linker owns
@@ -102,7 +135,9 @@ LEDGER_SCHEMA_VERSION: Final = 1
 LEDGER_KEYS: Final = frozenset(
     {"schema_version", "updated_at", "assets", "page_outcomes", "unjoinable_tickets"}
 )
-# The exact key set of one assets[] row, in the order rows are written.
+# The exact key set of one assets[] row, in the order rows are written. Rows are keyed by
+# (canonical_key, asset_id); "url" is the URL that last resolved to that row, and "attempts"
+# is the cumulative number of network attempts made for the row across runs.
 ASSET_ROW_KEYS: Final = (
     "url",
     "canonical_key",
@@ -135,14 +170,15 @@ CACHE_SUFFIXES: Final[Mapping[str, str]] = MappingProxyType(
 
 @dataclass(frozen=True)
 class FetchCeilings:
-    """Hard bounds the fetcher enforces on its own arguments, whatever a caller passes.
+    """Hard bounds the fetcher enforces, whatever a caller passes.
 
     ``timeout_s`` — the per-operation socket timeout; ``max_redirects`` — redirect hops
     followed per attempt; ``max_parallel`` — concurrent fetches; ``max_attempts`` — attempts per
-    URL, retries included; ``backoff_cap_s`` — the longest wait between attempts. Grouped in a
-    frozen instance so a config parser that imports it can be held to it with ``is``: CPython
-    shares small integers between modules, so an identity check on a bare ``5`` would still
-    pass after the number had been restated.
+    URL, retries included; ``backoff_cap_s`` — the longest wait between attempts;
+    ``asset_deadline_s`` — the wall-clock budget for one URL's whole fetch, attempts, redirects,
+    body reads and backoff included. Grouped in a frozen instance so a config parser that
+    imports it can be held to it with ``is``: CPython shares small integers between modules, so
+    an identity check on a bare ``5`` would still pass after the number had been restated.
     """
 
     timeout_s: int
@@ -150,6 +186,7 @@ class FetchCeilings:
     max_parallel: int
     max_attempts: int
     backoff_cap_s: int
+    asset_deadline_s: int
 
 
 FETCH_CEILINGS: Final[FetchCeilings] = FetchCeilings(
@@ -158,6 +195,9 @@ FETCH_CEILINGS: Final[FetchCeilings] = FetchCeilings(
     max_parallel=8,
     max_attempts=5,
     backoff_cap_s=30,
+    # Room for a 25 MiB upload at about 1 Mbit/s plus the worst backoff (2+4+8+16 s), while
+    # a stalled or trickling server can hold one worker for no longer than this.
+    asset_deadline_s=300,
 )
 
 # Magic signatures, the only bytes that decide an asset's type.
@@ -169,17 +209,24 @@ _SIGNATURES: Final = (
 _REDIRECT_STATUSES: Final = frozenset({301, 302, 303, 307, 308})
 _GONE_STATUSES: Final = frozenset({404, 410})
 _RETRYABLE: Final = "retryable"  # internal marker; never returned or recorded
+_DEADLINE: Final = "deadline exceeded"
 _READ_CHUNK: Final = 1 << 16
 _USER_AGENT: Final = "pta-finance-receipt-fetch/1"
-# RFC 3986 characters only: no whitespace, controls, quotes, angle brackets or backslashes,
-# which parsers disagree about and which urllib would otherwise strip or unwrap.
-_URL_CHARS: Final = re.compile(r"[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+")
-_LABEL: Final = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+# Refused anywhere in a URL: urlsplit silently deletes tab, CR and LF, and a raw control
+# character must never reach a request line.
+_CONTROLS: Final = re.compile(r"[\x00-\x1f\x7f]")
+# The authority (host and port) is never repaired: no space, backslash, quote or non-ASCII.
+_AUTHORITY_CHARS: Final = re.compile(r"[A-Za-z0-9\-._~!$&'()*+,;=:%\[\]@]*")
+# Path and query characters left as they are; anything else (a space, a non-ASCII character)
+# is percent-encoded as UTF-8. "%" is kept, so an already-encoded URL is unchanged.
+_COMPONENT_SAFE: Final = "-._~!$&'()*+,;=:@/?%[]"
+# DNS labels; "_" is accepted because real CDN host names carry it. No label character can
+# form an authority delimiter, so it widens no escape.
+_LABEL: Final = re.compile(r"[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?")
 # A final label that is all digits or hex is an address in some inet_aton form, never a name:
 # no top-level domain is numeric.
 _NUMERIC_LABEL: Final = re.compile(r"[0-9]+|0x[0-9a-f]*")
-_ASSET_ID_RE: Final = re.compile(re.escape(ASSET_ID_PREFIX) + r"([0-9a-f]{64})")
-_TIMESTAMP_RE: Final = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+_TIMESTAMP_RE: Final = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 _TRANSPORT_ERRORS: Final = (OSError, http.client.HTTPException)
 
 
@@ -214,20 +261,26 @@ class AssetResult:
 
 
 class _Response(Protocol):
-    """The part of an HTTP response the fetcher reads: status, one header, the body."""
+    """The part of an HTTP response the fetcher reads: status, one header, the body.
+
+    ``read1`` returns after at most one underlying socket read, so the per-URL deadline is
+    checked between reads even when a server trickles its body.
+    """
 
     @property
     def status(self) -> int: ...
 
     def getheader(self, name: str) -> str | None: ...
 
-    def read(self, amt: int, /) -> bytes: ...
+    def read1(self, amt: int, /) -> bytes: ...
 
     def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
 class _Policy:
+    """The validated arguments every attempt for every URL of one call shares."""
+
     allowlist: tuple[str, ...]
     max_bytes: int
     timeout: float
@@ -244,6 +297,14 @@ class _Fetch:
     attempts: int
     body: bytes | None = None
     media_type: str | None = None
+
+
+class _Refusal(Exception):
+    """A URL that must not be opened; ``reason`` becomes the result's ``detail``."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 # --- Seams: the only places that touch the network or the clock --------------------------
@@ -278,15 +339,16 @@ def _open(url: str, *, timeout: float) -> _Response:
     ``timeout`` bounds each socket operation.
     """
 
-    response: _Response | None = _build_opener().open(
-        urllib.request.Request(url, method="GET"), timeout=timeout
-    )
+    request = urllib.request.Request(url, method="GET")
+    # OpenerDirector.open returns None when no handler accepts the scheme: anything but https.
+    response: _Response | None = _build_opener().open(request, timeout=timeout)
     if response is None:
         raise urllib.error.URLError("only https URLs can be opened")
     return response
 
 
 _sleep: Callable[[float], None] = time.sleep
+_monotonic: Callable[[], float] = time.monotonic
 
 
 def _utc_now() -> str:
@@ -296,20 +358,26 @@ def _utc_now() -> str:
 # --- Identity and allowlist ----------------------------------------------------------------
 
 
+def _encode(component: str) -> str:
+    return quote(component, safe=_COMPONENT_SAFE)
+
+
 def canonical_key(url: str) -> str:
     """THE one canonicalization of an upload URL: ``<lowercased host><path>``.
 
     The query string and fragment are discarded, so two size variants of one upload share a
-    key; the path keeps its case. Total by design: the linker numbers asset ordinals with it
-    before anything is fetched, so a URL that cannot be split keeps its text up to the first
-    ``?`` or ``#`` (such a URL is refused at fetch time anyway).
+    key. The host also loses a fully-qualified trailing dot, and the path is percent-encoded
+    exactly as a fetch would send it (case kept), so raw and encoded spellings of one upload
+    share a key. Total by design: the linker numbers asset ordinals with it before anything is
+    fetched, so a URL that cannot be split keeps its text up to the first ``?`` or ``#`` (such
+    a URL is refused at fetch time anyway).
     """
 
     try:
         parts = urlsplit(url)
     except ValueError:
         return url.split("#", 1)[0].split("?", 1)[0]
-    return (parts.hostname or "") + parts.path
+    return (parts.hostname or "").removesuffix(".") + _encode(parts.path)
 
 
 def _is_hostname(host: str) -> bool:
@@ -361,32 +429,35 @@ def _host_allowed(host: str, allowlist: Sequence[str]) -> bool:
     return False
 
 
-def _url_refusal(url: str, allowlist: Sequence[str]) -> str | None:
-    """Why this URL must not be opened, or ``None``; run on every hop."""
+def _prepare(url: str, allowlist: Sequence[str]) -> str:
+    """The URL to open, rebuilt from checked parts; raises :class:`_Refusal`. Every hop."""
 
-    if not _URL_CHARS.fullmatch(url):
-        return "malformed url"
+    if _CONTROLS.search(url):
+        raise _Refusal("malformed url")
     try:
         parts = urlsplit(url)
         port = parts.port
     except ValueError:
-        return "malformed url"
+        raise _Refusal("malformed url") from None
     if parts.scheme != "https":
-        return "not https"
+        raise _Refusal("not https")
+    if not _AUTHORITY_CHARS.fullmatch(parts.netloc):
+        raise _Refusal("malformed url")
     if "@" in parts.netloc:
-        return "userinfo in url"
+        raise _Refusal("userinfo in url")
     if port is not None and port != 443:
-        return "non-default port"
-    host = parts.hostname
+        raise _Refusal("non-default port")
+    host = (parts.hostname or "").removesuffix(".")
     if not host:
-        return "missing host"
+        raise _Refusal("missing host")
     if _is_ip_literal(host):
-        return "ip-literal host"
+        raise _Refusal("ip-literal host")
     if not _is_hostname(host):
-        return "malformed host"
+        raise _Refusal("malformed host")
     if not _host_allowed(host, allowlist):
-        return "host not allowlisted"
-    return None
+        raise _Refusal("host not allowlisted")
+    # No userinfo, no port (only the default passed), no fragment (never sent).
+    return urlunsplit(("https", host, _encode(parts.path), _encode(parts.query), ""))
 
 
 # --- Transport -----------------------------------------------------------------------------
@@ -414,15 +485,20 @@ def _transport_detail(exc: BaseException) -> str:
     return "connection error"
 
 
-def _read_capped(response: _Response, cap: int) -> bytes:
-    """The ``read(cap + 1)`` rule: take at most ``cap + 1`` body bytes, so oversize shows."""
+def _read_capped(response: _Response, cap: int, deadline: float) -> bytes | None:
+    """The ``read(cap + 1)`` rule: take at most ``cap + 1`` body bytes, so oversize shows.
+
+    Returns ``None`` when the deadline passes first; it is checked before every read.
+    """
 
     limit = cap + 1
     chunks: list[bytes] = []
     total = 0
     while total < limit:
+        if _monotonic() >= deadline:
+            return None
         want = min(_READ_CHUNK, limit - total)
-        chunk = response.read(want)[:want]
+        chunk = response.read1(want)[:want]
         if not chunk:
             break
         chunks.append(chunk)
@@ -438,24 +514,37 @@ def _close(response: _Response) -> None:
 
 
 def _redirect_target(current: str, location: str) -> str | None:
+    """Resolve a ``Location`` against the URL that sent it; validated by the next hop."""
+
+    try:
+        # http.client decodes header bytes as Latin-1; a raw UTF-8 Location is restored so
+        # its characters are percent-encoded once, not twice.
+        location = location.encode("latin-1").decode("utf-8")
+    except UnicodeError:
+        pass
     try:
         return urljoin(current, location)
     except ValueError:
         return None
 
 
-def _attempt(url: str, policy: _Policy) -> _Fetch:
+def _attempt(url: str, policy: _Policy, deadline: float) -> _Fetch:
     """One attempt: the redirect chain from ``url``, every hop re-checked before it opens."""
 
     current: str | None = url
     for hop in range(policy.max_redirects + 1):
         if current is None:
             return _Fetch("refused", "redirect target: malformed url", 0)
-        refusal = _url_refusal(current, policy.allowlist)
-        if refusal is not None:
-            return _Fetch("refused", refusal if hop == 0 else f"redirect target: {refusal}", 0)
         try:
-            response = _open(current, timeout=policy.timeout)
+            target = _prepare(current, policy.allowlist)
+        except _Refusal as refusal:
+            detail = refusal.reason if hop == 0 else f"redirect target: {refusal.reason}"
+            return _Fetch("refused", detail, 0)
+        remaining = deadline - _monotonic()
+        if remaining <= 0:
+            return _Fetch("unreachable", _DEADLINE, 0)
+        try:
+            response = _open(target, timeout=min(policy.timeout, remaining))
         except _TRANSPORT_ERRORS as exc:
             return _Fetch("unreachable", _transport_detail(exc), 0)
         try:
@@ -464,10 +553,12 @@ def _attempt(url: str, policy: _Policy) -> _Fetch:
                 location = response.getheader("Location")
                 if not location:
                     return _Fetch("unreachable", f"status {status} without location", 0)
-                current = _redirect_target(current, location)
+                current = _redirect_target(target, location)
                 continue
             if status == 200:
-                body = _read_capped(response, policy.max_bytes)
+                body = _read_capped(response, policy.max_bytes, deadline)
+                if body is None:
+                    return _Fetch("unreachable", _DEADLINE, 0)
                 if len(body) > policy.max_bytes:
                     return _Fetch("oversize", "body over the size cap", 0)
                 media_type = _sniff(body)
@@ -487,17 +578,21 @@ def _attempt(url: str, policy: _Policy) -> _Fetch:
 
 
 def _fetch_one(url: str, policy: _Policy) -> _Fetch:
-    """Attempts for one URL, retrying only 429/5xx, with backoff, up to the attempt ceiling."""
+    """Attempts for one URL: 429/5xx retried with backoff, up to the ceiling and the deadline."""
 
+    deadline = _monotonic() + FETCH_CEILINGS.asset_deadline_s
     attempt = 0
     while True:
         attempt += 1
-        result = _attempt(url, policy)
+        result = _attempt(url, policy, deadline)
         if result.outcome != _RETRYABLE:
             return replace(result, attempts=attempt)
         if attempt >= policy.max_attempts:
             return _Fetch("unreachable", result.detail, attempt)
-        _sleep(_backoff(attempt))
+        delay = _backoff(attempt)
+        if _monotonic() + delay >= deadline:
+            return _Fetch("unreachable", _DEADLINE, attempt)
+        _sleep(delay)
 
 
 # --- Cache -----------------------------------------------------------------------------------
@@ -524,7 +619,7 @@ def _publish(root: Path, body: bytes, media_type: str) -> tuple[str, Path]:
     digest = hashlib.sha256(body).hexdigest()
     target = root / f"{digest}{CACHE_SUFFIXES[media_type]}"
     if _holds(target, digest):
-        return ASSET_ID_PREFIX + digest, target
+        return ASSET_ID.prefix + digest, target
     temp: str | None = None
     try:
         fd, temp = tempfile.mkstemp(prefix=".fetch-", suffix=".tmp", dir=root)
@@ -544,7 +639,7 @@ def _publish(root: Path, body: bytes, media_type: str) -> tuple[str, Path]:
                 os.unlink(temp)
             except OSError:
                 pass
-    return ASSET_ID_PREFIX + digest, target
+    return ASSET_ID.prefix + digest, target
 
 
 def _cache_hit(url: str, key: str, ledger: Mapping[str, Any], root: Path) -> AssetResult | None:
@@ -561,7 +656,7 @@ def _cache_hit(url: str, key: str, ledger: Mapping[str, Any], root: Path) -> Ass
     row = best[1]
     asset_id: str = row["asset_id"]
     media_type: str = row["media_type"]
-    path = root / (asset_id.removeprefix(ASSET_ID_PREFIX) + CACHE_SUFFIXES[media_type])
+    path = root / (asset_id.removeprefix(ASSET_ID.prefix) + CACHE_SUFFIXES[media_type])
     try:
         size = path.stat().st_size if path.is_file() else 0
     except OSError:
@@ -615,7 +710,7 @@ def _valid_asset_row(row: object) -> bool:
     if row["outcome"] in ACCEPTED_OUTCOMES:
         return (
             isinstance(row["asset_id"], str)
-            and _ASSET_ID_RE.fullmatch(row["asset_id"]) is not None
+            and ASSET_ID.pattern.fullmatch(row["asset_id"]) is not None
             and row["media_type"] in CACHE_SUFFIXES
             and _is_count(row["byte_count"], 1)
         )
@@ -762,6 +857,37 @@ def _failure(url: str, key: str, fetch: _Fetch) -> AssetResult:
     return AssetResult(url, key, None, None, None, 0, fetch.outcome, fetch.detail)
 
 
+def _fetch_pending(
+    pending: Sequence[str],
+    policy: _Policy,
+    parallel: int,
+    root: Path,
+    resolved: dict[str, AssetResult],
+    attempts: dict[str, int],
+) -> None:
+    """Fetch on at most ``parallel`` workers; publish each body as it arrives, in this thread."""
+
+    executor = ThreadPoolExecutor(
+        max_workers=min(parallel, len(pending)), thread_name_prefix="receipt-fetch"
+    )
+    try:
+        futures = {executor.submit(_fetch_one, url, policy): url for url in pending}
+        for future in as_completed(futures):
+            url = futures[future]
+            fetch = future.result()
+            key = canonical_key(url)
+            if fetch.body is None or fetch.media_type is None:
+                resolved[url] = _failure(url, key, fetch)
+            else:
+                asset_id, path = _publish(root, fetch.body, fetch.media_type)
+                resolved[url] = AssetResult(
+                    url, key, asset_id, fetch.media_type, path, len(fetch.body), "fetched", ""
+                )
+            attempts[url] = fetch.attempts
+    finally:
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
 def fetch_assets(
     urls: Iterable[str],
     *,
@@ -777,14 +903,15 @@ def fetch_assets(
     """Resolve each URL to cached bytes, a network fetch or a recorded failure.
 
     Returns one :class:`AssetResult` per input URL, in input order; a URL listed twice is
-    resolved once. Each URL is checked against the allowlist first, in both modes. Then the
-    ledger is consulted before any socket opens: the row whose ``url`` is exactly this URL with
-    an accepted outcome (the latest ``last_seen`` when several match) names an asset id, and an
-    existing cache file for it is a ``cached`` hit. On a miss, ``offline=True`` records
-    ``uncached`` and opens no socket; otherwise the URL is fetched, at most ``max_parallel`` at
-    a time. ``max_bytes`` caps a body (at most ``NORMALIZATION.max_source_bytes``); ``timeout``
-    bounds each socket operation. Every outcome is written to the ledger's ``assets[]``
-    before this returns; the other ledger lists are preserved as they are.
+    resolved once. The ledger is consulted first, in both modes and before any socket: the row
+    whose ``url`` is exactly this URL with an accepted outcome (the latest ``last_seen`` when
+    several match) names an asset id, and an existing cache file for it is a ``cached`` hit.
+    On a miss, ``offline=True`` records ``uncached`` and opens no socket; otherwise the URL must
+    pass the allowlist (``refused`` if not) and is fetched, at most ``max_parallel`` at a time.
+    ``max_bytes`` caps a body (at most ``NORMALIZATION.max_source_bytes``); ``timeout`` bounds
+    each socket operation and ``FETCH_CEILINGS.asset_deadline_s`` each URL's whole fetch. Every
+    resolved outcome is written to the ledger's ``assets[]`` before this returns or raises;
+    the other ledger lists are preserved as they are.
 
     Raises :class:`ReceiptAssetError` only when the stage cannot run: invalid arguments or
     allowlist rules, an unwritable cache directory or ledger, or a malformed ledger.
@@ -817,47 +944,35 @@ def fetch_assets(
     pending: list[str] = []
     for url in unique:
         key = canonical_key(url)
-        refusal = _url_refusal(url, policy.allowlist)
-        hit = None if refusal is not None else _cache_hit(url, key, ledger, root)
-        if refusal is not None:
-            resolved[url] = _failure(url, key, _Fetch("refused", refusal, 0))
-        elif hit is not None:
+        hit = _cache_hit(url, key, ledger, root)
+        if hit is not None:
             resolved[url] = hit
         elif offline:
             resolved[url] = _failure(url, key, _Fetch("uncached", "not in cache", 0))
         else:
-            pending.append(url)
+            try:
+                _prepare(url, policy.allowlist)
+            except _Refusal as refusal:
+                resolved[url] = _failure(url, key, _Fetch("refused", refusal.reason, 0))
+            else:
+                pending.append(url)
 
-    if pending:
-        executor = ThreadPoolExecutor(
-            max_workers=min(parallel, len(pending)), thread_name_prefix="receipt-fetch"
-        )
+    aborted = True
+    try:
+        if pending:
+            _fetch_pending(pending, policy, parallel, root, resolved, attempts)
+        aborted = False
+    finally:
+        # Record every outcome resolved so far, even when the batch is aborting: those rows
+        # are still true, and a cached file without its row would only be re-fetched.
+        now = _utc_now()
+        for url in unique:
+            if url in resolved:
+                _record(ledger["assets"], resolved[url], attempts.get(url, 0), now)
+        ledger["updated_at"] = now
         try:
-            futures = {executor.submit(_fetch_one, url, policy): url for url in pending}
-            for future in as_completed(futures):
-                url = futures[future]
-                fetch = future.result()
-                attempts[url] = fetch.attempts
-                if fetch.body is None or fetch.media_type is None:
-                    resolved[url] = _failure(url, canonical_key(url), fetch)
-                    continue
-                asset_id, path = _publish(root, fetch.body, fetch.media_type)
-                resolved[url] = AssetResult(
-                    url,
-                    canonical_key(url),
-                    asset_id,
-                    fetch.media_type,
-                    path,
-                    len(fetch.body),
-                    "fetched",
-                    "",
-                )
-        finally:
-            executor.shutdown(wait=True, cancel_futures=True)
-
-    now = _utc_now()
-    for url in unique:
-        _record(ledger["assets"], resolved[url], attempts.get(url, 0), now)
-    ledger["updated_at"] = now
-    _write_ledger(ledger_path, ledger)
+            _write_ledger(ledger_path, ledger)
+        except ReceiptAssetError:
+            if not aborted:
+                raise
     return [resolved[url] for url in requested]

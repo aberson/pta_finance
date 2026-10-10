@@ -71,6 +71,7 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from pta_finance import process_limits
+from pta_finance.receipt_assets import ASSET_ID
 from pta_finance.receipt_decode import (
     DECODED_KEYS,
     EXIT_BUDGET,
@@ -150,7 +151,6 @@ _RECEIPTS_EXTRA = (
 _DECODE_MODULE = "pta_finance.receipt_decode"
 _WINDOWS_CREATE_NO_WINDOW = 0x08000000
 _PIPE_CHUNK = 1 << 16
-_ASSET_ID_RE = re.compile(r"asset:v1:([0-9a-f]{64})")
 _TICKET_REF_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _CHANNELS = {"L": 1, "RGB": 3}
 _MESSAGES = {
@@ -359,7 +359,7 @@ def to_pages(
         )
     if asset.media_type not in ("png", "jpeg"):
         raise ReceiptPageError("receipt asset type must be PNG, JPEG or PDF", reason="unreadable")
-    match = _ASSET_ID_RE.fullmatch(asset.asset_id or "")
+    match = ASSET_ID.pattern.fullmatch(asset.asset_id or "")
     if match is None:
         raise ReceiptPageError("receipt asset id is malformed", reason="digest-mismatch")
     if sys.platform not in SUPPORTED_DECODE_PLATFORMS:

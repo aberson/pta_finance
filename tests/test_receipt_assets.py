@@ -12,6 +12,7 @@ import hashlib
 import http.client
 import json
 import math
+import re
 import socket
 import ssl
 import struct
@@ -38,6 +39,7 @@ _JPEG = b"\xff\xd8\xff\xe0" + bytes(16) + b"\xff\xd9"
 _SVG = b'<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
 _TEXT = b"This is a plain text body, not an image.\n"
 _STAMP = "2026-01-02T03:04:05Z"
+_DEADLINE = "deadline exceeded"
 
 
 def _url(path: str, host: str = _EXACT) -> str:
@@ -63,15 +65,32 @@ def _png(width: int = 4, height: int = 3) -> bytes:
     )
 
 
+class _Clock:
+    """A fake monotonic clock that the fake web and the fake sleep advance."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 @dataclass
 class _Reply:
-    """One scripted response (or transport failure) from the fake web."""
+    """One scripted response (or transport failure) from the fake web.
+
+    ``open_seconds`` and ``read_seconds`` advance the fake clock, when one is installed, on
+    open and on every body read; ``drip`` caps the bytes each read hands over.
+    """
 
     status: int = 200
     body: bytes = b""
     headers: dict[str, str] = field(default_factory=dict)
     error: BaseException | None = None
     read_error: BaseException | None = None
+    open_seconds: float = 0.0
+    read_seconds: float = 0.0
+    drip: int | None = None
 
 
 class _FakeResponse:
@@ -89,11 +108,14 @@ class _FakeResponse:
         self._web.header_reads.append(name)
         return self._reply.headers.get(name)
 
-    def read(self, amt: int) -> bytes:
+    def read1(self, amt: int) -> bytes:
         self._web.read_requests.append(amt)
+        if self._web.clock is not None:
+            self._web.clock.now += self._reply.read_seconds
         if self._reply.read_error is not None:
             raise self._reply.read_error
-        chunk = self._reply.body[self.consumed : self.consumed + amt]
+        size = amt if self._reply.drip is None else min(amt, self._reply.drip)
+        chunk = self._reply.body[self.consumed : self.consumed + size]
         self.consumed += len(chunk)
         return chunk
 
@@ -108,11 +130,14 @@ class _FakeWeb:
     repeating). A request for any other URL fails the test.
     """
 
-    def __init__(self, routes: dict[str, _Reply | list[_Reply]]) -> None:
+    def __init__(
+        self, routes: dict[str, _Reply | list[_Reply]], clock: _Clock | None = None
+    ) -> None:
         self._routes = {
             url: list(reply) if isinstance(reply, list) else [reply]
             for url, reply in routes.items()
         }
+        self.clock = clock
         self.calls: list[str] = []
         self.timeouts: list[float] = []
         self.header_reads: list[str] = []
@@ -128,6 +153,8 @@ class _FakeWeb:
             if queue is None:
                 raise AssertionError("the fetcher requested a URL no route serves")
             reply = queue.pop(0) if len(queue) > 1 else queue[0]
+        if self.clock is not None:
+            self.clock.now += reply.open_seconds
         if reply.error is not None:
             raise reply.error
         response = _FakeResponse(reply, self)
@@ -152,12 +179,25 @@ def _forbid_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _harness(monkeypatch: pytest.MonkeyPatch, web: _FakeWeb | None) -> list[float]:
-    """Forbid sockets, install the fake web (or a seam that fails when called), record sleeps."""
+    """Forbid sockets, install the fake web (or a seam that fails when called), record sleeps.
+
+    When the fake web carries a clock, it also drives the fetcher's monotonic clock, and every
+    backoff sleep advances it.
+    """
 
     _forbid_sockets(monkeypatch)
     monkeypatch.setattr(receipt_assets, "_open", web.open if web is not None else _never_open)
     sleeps: list[float] = []
-    monkeypatch.setattr(receipt_assets, "_sleep", sleeps.append)
+    clock = web.clock if web is not None else None
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if clock is not None:
+            clock.now += seconds
+
+    monkeypatch.setattr(receipt_assets, "_sleep", sleep)
+    if clock is not None:
+        monkeypatch.setattr(receipt_assets, "_monotonic", clock)
     return sleeps
 
 
@@ -207,8 +247,26 @@ def _assert_failed(result: receipt_assets.AssetResult, outcome: str, detail: str
 # --- Shared constants and the producer -> consumer contract ---------------------------------
 
 
-def test_the_size_cap_bound_is_imported_from_receipt_geometry() -> None:
+def test_shared_definitions_are_imported_not_restated() -> None:
+    # Identity on objects CPython never shares by accident: a restated copy fails here.
     assert receipt_assets.NORMALIZATION is receipt_geometry.NORMALIZATION
+    assert receipt_pages.ASSET_ID is receipt_assets.ASSET_ID
+    asset_id = receipt_assets.ASSET_ID
+    assert asset_id.pattern.fullmatch(asset_id.prefix + "0" * 64)
+    assert asset_id.pattern.pattern == re.escape(asset_id.prefix) + "([0-9a-f]{64})"
+
+
+def test_no_other_module_restates_the_asset_id_format() -> None:
+    # A local copy of the pattern would compile to the very object re caches for the owner's,
+    # so identity alone cannot see it; the literal itself must live in one module.
+    package = Path(receipt_assets.__file__).parent
+    owner = Path(receipt_assets.__file__).resolve()
+    restating = [
+        path.relative_to(package).as_posix()
+        for path in sorted(package.rglob("*.py"))
+        if path.resolve() != owner and "asset:v1" in path.read_text("utf-8")
+    ]
+    assert restating == []
 
 
 def test_media_types_are_exactly_what_the_page_producer_consumes() -> None:
@@ -235,7 +293,8 @@ def test_a_fetched_asset_satisfies_the_page_source_contract(
     source: receipt_pages.PageSource = result
     assert source.media_type == "png"
     assert source.asset_id is not None
-    assert receipt_pages._ASSET_ID_RE.fullmatch(source.asset_id)
+    match = receipt_assets.ASSET_ID.pattern.fullmatch(source.asset_id)
+    assert match is not None and match.group(1) == hashlib.sha256(_png()).hexdigest()
     assert source.path is not None and source.path.read_bytes() == _png()
 
 
@@ -287,6 +346,12 @@ def test_canonical_key_lowercases_the_host_and_drops_query_and_fragment() -> Non
     small = receipt_assets.canonical_key(_url("/u/AbC?w=200"))
     large = receipt_assets.canonical_key(_url("/u/AbC?w=1600"))
     assert small == large == key
+
+
+def test_canonical_key_unifies_a_trailing_dot_and_raw_versus_encoded_paths() -> None:
+    encoded = receipt_assets.canonical_key(_url("/u/a%20b%C3%A9"))
+    assert encoded == "cdn.example-forms.invalid/u/a%20b%C3%A9"
+    assert receipt_assets.canonical_key("https://cdn.example-forms.invalid./u/a bé") == encoded
 
 
 def test_canonical_key_is_total_for_a_url_that_cannot_be_split() -> None:
@@ -346,9 +411,7 @@ def test_a_suffix_rule_matches_only_at_a_label_boundary(
     assert web.calls == [good]
 
 
-def test_an_exact_rule_matches_only_that_host(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_an_exact_rule_matches_only_that_host() -> None:
     rules = receipt_assets.normalize_allowlist([_EXACT])
     assert receipt_assets._host_allowed(_EXACT, rules)
     assert not receipt_assets._host_allowed("a." + _EXACT, rules)
@@ -377,6 +440,7 @@ def test_a_userinfo_bearing_url_is_refused(
     "host",
     [
         "127.0.0.1",
+        "127.0.0.1.",
         "8.8.8.8",
         "[::1]",
         "[fe80::1%25eth0]",
@@ -398,26 +462,29 @@ def test_an_ip_literal_host_is_refused_rather_than_resolved(
 def test_only_the_default_https_port_is_accepted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    explicit = "https://cdn.example-forms.invalid:443/u/1"
-    web = _FakeWeb({explicit: _Reply(body=_PDF)})
+    web = _FakeWeb({_url("/u/1"): _Reply(body=_PDF)})
     _harness(monkeypatch, web)
     other, default = _fetch(
-        ["https://cdn.example-forms.invalid:8443/u/1", explicit], tmp_path / "cache"
+        ["https://cdn.example-forms.invalid:8443/u/1", "https://cdn.example-forms.invalid:443/u/1"],
+        tmp_path / "cache",
     )
     _assert_failed(other, "refused", "non-default port")
     assert default.outcome == "fetched"
-    assert web.calls == [explicit]
+    assert web.calls == [_url("/u/1")]  # what is opened is rebuilt without the port
 
 
 @pytest.mark.parametrize(
     ("url", "detail"),
     [
-        ("https://cdn.example-forms.invalid/u/a b", "malformed url"),
         ("https://cdn.example-forms.invalid\\@files.example.org/u/1", "malformed url"),
+        ("https://cdn.exa mple-forms.invalid/u/1", "malformed url"),
+        ("https://cdn.exämple-forms.invalid/u/1", "malformed url"),
+        ("https://cdn.example-forms.invalid/u/1\r\nX-Injected: yes", "malformed url"),
+        ("https://cdn.example-forms.invalid/u/\t1", "malformed url"),
         ("https://cdn.example-forms.invalid:99999/u/1", "malformed url"),
         ("https:///u/1", "missing host"),
         ("https://ex%61mple-forms.invalid/u/1", "malformed host"),
-        ("https://cdn.example-forms.invalid./u/1", "malformed host"),
+        ("https://cdn.example-forms.invalid../u/1", "malformed host"),
     ],
 )
 def test_a_malformed_url_is_refused(
@@ -430,11 +497,52 @@ def test_a_malformed_url_is_refused(
     assert web.calls == []
 
 
+@pytest.mark.parametrize(
+    ("url", "opened", "rules"),
+    [
+        ("https://cdn.example-forms.invalid./u/1", _url("/u/1"), _ALLOWLIST),
+        ("https://a.uploads.example-forms.invalid./u/1", _url("/u/1", "a" + _SUFFIX), _ALLOWLIST),
+        (
+            "https://my_bucket.example.net/u/1",
+            "https://my_bucket.example.net/u/1",
+            [".example.net"],
+        ),
+        ("https://files.example.net/u/1", "https://files.example.net/u/1", ["files.example.net"]),
+        (
+            "https://cdn.example-forms.invalid/u/scan 1 é.pdf?name=reçu 1",
+            _url("/u/scan%201%20%C3%A9.pdf?name=re%C3%A7u%201"),
+            _ALLOWLIST,
+        ),
+        (
+            "https://cdn.example-forms.invalid/u/a%20b?x=%2F&y=[1]",
+            _url("/u/a%20b?x=%2F&y=[1]"),
+            _ALLOWLIST,
+        ),
+        ("https://cdn.example-forms.invalid/u/a\\b", _url("/u/a%5Cb"), _ALLOWLIST),
+        ("https://CDN.Example-Forms.invalid/u/1#frag", _url("/u/1"), _ALLOWLIST),
+    ],
+)
+def test_harmless_url_forms_are_normalized_rather_than_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str, opened: str, rules: Any
+) -> None:
+    web = _FakeWeb({opened: _Reply(body=_PDF)})
+    _harness(monkeypatch, web)
+    [result] = _fetch([url], tmp_path / "cache", allowlist=rules)
+    assert (result.outcome, result.url) == ("fetched", url)
+    assert web.calls == [opened]
+    assert result.canonical_key == receipt_assets.canonical_key(opened)
+
+
 def test_allowlist_rules_are_lowercased_and_deduplicated() -> None:
     rules = receipt_assets.normalize_allowlist(
-        ["CDN.Example-Forms.invalid", ".Uploads.Example-Forms.INVALID", _EXACT]
+        [
+            "CDN.Example-Forms.invalid",
+            ".Uploads.Example-Forms.INVALID",
+            _EXACT,
+            "my_bucket.example.net",
+        ]
     )
-    assert rules == (_EXACT, _SUFFIX)
+    assert rules == (_EXACT, _SUFFIX, "my_bucket.example.net")
     assert receipt_assets.normalize_allowlist([]) == ()
 
 
@@ -483,6 +591,10 @@ def _redirect(location: str, status: int = 302) -> _Reply:
         ("https://user@cdn.example-forms.invalid/u/1", "redirect target: userinfo in url"),
         ("https://cdn.example-forms.invalid:8443/u/1", "redirect target: non-default port"),
         ("https://[::1/u/1", "redirect target: malformed url"),
+        (
+            "https://cdn.example-forms.invalid\\@files.example.org/",
+            "redirect target: malformed url",
+        ),
     ],
 )
 def test_a_redirect_to_a_target_the_allowlist_refuses_is_not_followed(
@@ -516,6 +628,19 @@ def test_a_redirect_between_allowed_hosts_is_followed_hop_by_hop(
     assert result.canonical_key == receipt_assets.canonical_key(start)
     assert web.calls == [start, middle, final]
     assert [row["attempts"] for row in _rows(tmp_path / "cache")] == [1]
+
+
+def test_a_raw_utf8_location_is_percent_encoded_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    start = _url("/u/1")
+    raw = "/files/reçu.pdf".encode().decode("latin-1")  # how http.client hands it over
+    final = _url("/files/re%C3%A7u.pdf")
+    web = _FakeWeb({start: _redirect(raw), final: _Reply(body=_PDF)})
+    _harness(monkeypatch, web)
+    [result] = _fetch([start], tmp_path / "cache")
+    assert result.outcome == "fetched"
+    assert web.calls == [start, final]
 
 
 @pytest.mark.parametrize("max_redirects", [0, 1, 3])
@@ -605,6 +730,61 @@ def test_magic_bytes_decide_the_type_whatever_content_type_claims(
     assert set(web.header_reads) <= {"Location"}
 
 
+# --- Per-asset deadline ----------------------------------------------------------------------
+
+
+def test_a_trickling_body_is_cut_off_at_the_per_asset_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = _url("/u/slow")
+    clock = _Clock()
+    web = _FakeWeb({url: _Reply(body=_PDF + bytes(5000), drip=1, read_seconds=1.0)}, clock)
+    sleeps = _harness(monkeypatch, web)
+    [result] = _fetch([url], tmp_path / "cache")
+    _assert_failed(result, "unreachable", _DEADLINE)
+    deadline = receipt_assets.FETCH_CEILINGS.asset_deadline_s
+    [response] = web.responses
+    assert response.consumed == deadline  # one byte per fake second, then cut off
+    assert response.closed and sleeps == []
+    [row] = _rows(tmp_path / "cache")
+    assert (row["outcome"], row["detail"], row["attempts"]) == ("unreachable", _DEADLINE, 1)
+
+
+def test_the_deadline_covers_retries_and_their_backoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = _url("/u/busy")
+    clock = _Clock()
+    web = _FakeWeb({url: _Reply(status=503, open_seconds=140.0)}, clock)
+    sleeps = _harness(monkeypatch, web)
+    [result] = _fetch([url], tmp_path / "cache", max_attempts=5)
+    # t=140 503, sleep 2; t=282 503, sleep 4; t=426 503: an 8 s backoff cannot fit, so give up.
+    _assert_failed(result, "unreachable", _DEADLINE)
+    assert sleeps == [2, 4]
+    # Each socket operation is also clamped to what is left of the deadline (14 s at t=286).
+    assert web.timeouts == [30.0, 30.0, 14.0]
+    [row] = _rows(tmp_path / "cache")
+    assert row["attempts"] == 3
+
+
+def test_the_deadline_covers_redirect_hops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    start, final = _url("/u/1"), _url("/u/2")
+    clock = _Clock()
+    web = _FakeWeb(
+        {start: _Reply(status=302, headers={"Location": final}, open_seconds=301.0)}, clock
+    )
+    _harness(monkeypatch, web)
+    [result] = _fetch([start], tmp_path / "cache")
+    _assert_failed(result, "unreachable", _DEADLINE)
+    assert web.calls == [start]
+
+
+def test_the_deadline_outlasts_the_slowest_legitimate_retry_schedule() -> None:
+    ceilings = receipt_assets.FETCH_CEILINGS
+    worst_backoff = sum(receipt_assets._backoff(n) for n in range(1, ceilings.max_attempts))
+    assert worst_backoff + ceilings.timeout_s < ceilings.asset_deadline_s
+
+
 # --- Cache -------------------------------------------------------------------------------------
 
 
@@ -667,6 +847,29 @@ def test_two_urls_with_identical_bytes_share_one_cache_file(
         receipt_assets.canonical_key(one),
         receipt_assets.canonical_key(two),
     ]
+    monkeypatch.setattr(receipt_assets, "_open", _never_open)
+    assert [result.outcome for result in _fetch([one, two], cache, offline=True)] == [
+        "cached",
+        "cached",
+    ]
+
+
+def test_same_bytes_under_one_key_share_one_row_that_the_latest_url_resolves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The plan keys assets[] rows by (canonical_key, asset_id) and gives each row one url, so
+    # two query variants of one upload that return identical bytes share one row: the latest
+    # url resolves offline and the earlier one is re-fetched online (dev report, deviations).
+    first, second = _url("/u/scan?dl=0"), _url("/u/scan?dl=1")
+    web = _FakeWeb({first: _Reply(body=_PDF), second: _Reply(body=_PDF)})
+    _harness(monkeypatch, web)
+    cache = tmp_path / "cache"
+    _fetch([first, second], cache, max_parallel=1)
+    [row] = _rows(cache)
+    assert (row["url"], row["outcome"]) == (second, "fetched")
+    monkeypatch.setattr(receipt_assets, "_open", _never_open)
+    stale, latest = _fetch([first, second], cache, offline=True)
+    assert (stale.outcome, latest.outcome) == ("uncached", "cached")
 
 
 def test_a_url_listed_twice_is_fetched_once(
@@ -681,7 +884,7 @@ def test_a_url_listed_twice_is_fetched_once(
     assert len(_rows(tmp_path / "cache")) == 1
 
 
-# --- Offline mode ------------------------------------------------------------------------------
+# --- Offline mode and the ledger-first lookup ------------------------------------------------
 
 
 def _seed(cache: Path, url: str, body: bytes, media_type: str, suffix: str) -> str:
@@ -746,15 +949,26 @@ def test_offline_a_ledger_row_whose_cache_file_is_gone_is_uncached(
     _assert_failed(result, "uncached", "not in cache")
 
 
-def test_offline_still_refuses_a_url_the_allowlist_refuses(
+@pytest.mark.parametrize("offline", [False, True])
+def test_cached_bytes_are_served_after_their_host_leaves_the_allowlist(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, offline: bool
+) -> None:
+    _harness(monkeypatch, None)  # serving cached bytes contacts no host, in either mode
+    cache = tmp_path / "cache"
+    url = _url("/u/mapped")
+    asset_id = _seed(cache, url, _PDF, "pdf", ".pdf")
+    [result] = _fetch([url], cache, offline=offline, allowlist=[".other.example.net"])
+    assert (result.outcome, result.asset_id) == ("cached", asset_id)
+
+
+def test_an_offline_miss_is_uncached_whatever_the_allowlist_says(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _harness(monkeypatch, None)
-    cache = tmp_path / "cache"
-    url = _url("/u/mapped")
-    _seed(cache, url, _PDF, "pdf", ".pdf")
-    [result] = _fetch([url], cache, offline=True, allowlist=[".other.example.net"])
-    _assert_failed(result, "refused", "host not allowlisted")
+    urls = ["http://cdn.example-forms.invalid/u/1", _url("/u/1", host="files.example.org")]
+    results = _fetch(urls, tmp_path / "cache", offline=True)
+    for result in results:
+        _assert_failed(result, "uncached", "not in cache")
 
 
 def test_online_a_ledger_mapped_cache_file_is_served_without_the_opener(
@@ -833,6 +1047,27 @@ def test_one_failing_asset_does_not_abort_the_batch(
     assert [result.url for result in results] == [good, gone, slow, refused, big, other]
     _assert_private(results, tmp_path)
     assert len(_rows(tmp_path / "cache")) == 6
+
+
+def test_a_cache_write_failure_aborts_but_records_what_was_already_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    good, bad, refused = _url("/u/good"), _url("/u/bad"), "http://cdn.example-forms.invalid/u/x"
+    web = _FakeWeb({good: _Reply(body=_PDF), bad: _Reply(body=_JPEG)})
+    _harness(monkeypatch, web)
+    real_publish = receipt_assets._publish
+
+    def failing_publish(root: Path, body: bytes, media_type: str) -> tuple[str, Path]:
+        if media_type == "jpeg":
+            raise receipt_assets._cache_error(root)
+        return real_publish(root, body, media_type)
+
+    monkeypatch.setattr(receipt_assets, "_publish", failing_publish)
+    cache = tmp_path / "cache"
+    with pytest.raises(receipt_assets.ReceiptAssetError, match="not writable"):
+        _fetch([good, bad, refused], cache, max_parallel=1)
+    rows = {row["url"]: (row["outcome"], row["attempts"]) for row in _rows(cache)}
+    assert rows == {good: ("fetched", 1), refused: ("refused", 0)}
 
 
 @pytest.mark.parametrize("status", [404, 410])
@@ -1075,6 +1310,8 @@ def _corrupt(kind: str, url: str) -> str:
         row["canonical_key"] = "cdn.example-forms.invalid/u/other"
     elif kind == "duplicate-row-key":
         doc["assets"].append(dict(row))
+    elif kind == "non-ascii-digit-timestamp":
+        row["first_seen"] = "٢٠٢٦-01-02T03:04:05Z"  # Arabic-Indic digits
     return json.dumps(doc)
 
 
@@ -1094,6 +1331,7 @@ def _corrupt(kind: str, url: str) -> str:
         "extra-row-key",
         "canonical-key-mismatch",
         "duplicate-row-key",
+        "non-ascii-digit-timestamp",
     ],
 )
 def test_a_malformed_ledger_aborts_before_any_request_and_is_left_untouched(
@@ -1228,3 +1466,8 @@ def test_the_production_opener_speaks_https_only_and_follows_nothing(
     assert context.verify_mode is ssl.CERT_REQUIRED and context.check_hostname
     with pytest.raises(urllib.error.URLError):
         receipt_assets._open("http://cdn.example-forms.invalid/u/1", timeout=1)
+
+
+def test_the_production_response_type_offers_the_read_the_fetcher_uses() -> None:
+    # The deadline needs reads that return after one socket read; http.client provides read1.
+    assert callable(getattr(http.client.HTTPResponse, "read1", None))
