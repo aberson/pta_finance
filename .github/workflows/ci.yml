@@ -76,13 +76,6 @@ jobs:
           PY
           uv run pytest -q tests/test_treasurer_slides_bank_statements_native.py -k "extractor_never_reads_a_pdf_if_the_sandbox_cannot_start"
 
-      # TEMPORARY (Phase 9 Step 39): prints the Linux calibration record for plan § 6.3.
-      # Remove this step before merge; the merged workflow carries no calibration step.
-      - name: Calibrate decode limits
-        if: always()
-        continue-on-error: true
-        run: uv run python scripts/calibrate_receipt_decode.py
-
       - name: Identity / secret guard
         run: uv run python scripts/check_no_identity.py
 
@@ -222,10 +215,3 @@ jobs:
 
       - name: Receipt sidecar headroom tests (Windows drive and UNC rules)
         run: uv run pytest -q tests/test_receipt_viewer.py -k headroom
-
-      # TEMPORARY (Phase 9 Step 39): prints the Windows calibration record for plan § 6.3.
-      # Remove this step before merge; the merged workflow carries no calibration step.
-      - name: Calibrate decode limits
-        if: always()
-        continue-on-error: true
-        run: uv run python scripts/calibrate_receipt_decode.py
