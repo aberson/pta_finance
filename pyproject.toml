@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 pdf = ["weasyprint"]
 slides = ["pypdfium2>=5.13.0"]
+receipts = ["pillow>=12.2"]
 web = ["fastapi", "uvicorn", "google-cloud-firestore", "cryptography"]
 dev = [
     "pytest",

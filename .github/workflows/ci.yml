@@ -19,7 +19,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --locked --extra dev --extra slides
+        run: uv sync --locked --extra dev --extra slides --extra receipts
 
       - name: Ruff lint
         run: uv run ruff check .
@@ -42,6 +42,17 @@ jobs:
           }
           assert len(cases) == 2 and {case.attrib['name'] for case in cases} == expected
           assert all(case.find('skipped') is not None for case in cases), 'Receipt browser cases ran in lint-type-test'
+          pages = [case for case in ElementTree.parse('lint-results.xml').getroot().iter('testcase')
+                   if case.attrib['classname'] == 'tests.test_receipt_pages']
+          required = {
+              'test_geometry_and_page_budget_are_imported_not_restated',
+              'test_box_padding_mirrors_the_viewer_template',
+              'test_rotated_exif_jpeg_normalizes_to_displayed_orientation[orientation-6]',
+              'test_two_runs_produce_byte_identical_pages',
+              'test_source_metadata_never_reaches_the_page[jpeg]',
+          }
+          assert required <= {case.attrib['name'] for case in pages}, 'Receipt page tests were not collected'
+          assert all(case.find('skipped') is None for case in pages), 'Receipt page coverage was omitted'
           PY
           uv run pytest -q tests/test_treasurer_slides_bank_statements_native.py -k "extractor_never_reads_a_pdf_if_the_sandbox_cannot_start"
 
@@ -60,7 +71,7 @@ jobs:
       - name: Install Python and dependencies
         run: |
           uv python install 3.12
-          uv sync --locked --extra dev --extra slides --extra web
+          uv sync --locked --extra dev --extra slides --extra web --extra receipts
           uv run playwright install --with-deps chromium
       - uses: actions/setup-java@v4
         with:
@@ -134,10 +145,14 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --locked --extra dev --extra slides
+        run: uv sync --locked --extra dev --extra slides --extra receipts
 
-      - name: Native sandbox and statement parser tests
+      - name: Native sandbox, statement parser and receipt page tests
         run: >-
           uv run pytest -q
           tests/test_treasurer_slides_native_sandbox.py
           tests/test_treasurer_slides_bank_statements_native.py
+          tests/test_receipt_pages.py
+
+      - name: Receipt sidecar headroom tests (Windows drive and UNC rules)
+        run: uv run pytest -q tests/test_receipt_viewer.py -k headroom

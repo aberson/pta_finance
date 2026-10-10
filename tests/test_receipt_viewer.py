@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import copy
 import hashlib
 import json
+import os
 import struct
 import zlib
 from pathlib import Path
@@ -178,6 +180,100 @@ def test_duplicate_json_keys_rejected(tmp_path: Path) -> None:
     sidecar.write_text('{"schema_version":1,"schema_version":1,"pages":[],"items":[]}')
     with pytest.raises(receipt_viewer.ReceiptViewerError):
         receipt_viewer.load_receipts(sidecar, reimbursement_report.load_bundle(bundle))
+
+
+def test_headroom_counts_raw_page_bytes_exactly_as_the_loader_embeds_them(tmp_path: Path) -> None:
+    bundle, sidecar, _ = _inputs(tmp_path)
+    assert receipt_viewer.headroom_bytes(tmp_path / "absent.receipts.json") == (
+        receipt_viewer.MAX_TOTAL_BYTES
+    )
+    loaded = receipt_viewer.load_receipts(sidecar, reimbursement_report.load_bundle(bundle))
+    embedded = sum(
+        len(base64.b64decode(page["src"].split(",", 1)[1])) for page in loaded["pages"].values()
+    )
+    # Two page entries name one file: each is embedded, so each counts.
+    assert embedded == 2 * len(_page_png())
+    assert receipt_viewer.headroom_bytes(sidecar) == receipt_viewer.MAX_TOTAL_BYTES - embedded
+
+
+_HEADROOM_REFUSALS = {
+    "escape": "inside the sidecar directory",
+    "absolute": "inside the sidecar directory",
+    "unc": "inside the sidecar directory",
+    "other_drive": "inside the sidecar directory",
+    "missing": "missing or unreadable",
+    "nul": "missing or unreadable",
+    "duplicate_key": "cannot read a valid receipt sidecar",
+    "version": "schema_version",
+    "bool_version": "schema_version",
+    "over_budget": "size limit",
+    "page_over_cap": "size limit",
+}
+
+
+@pytest.mark.parametrize("problem", sorted(_HEADROOM_REFUSALS))
+def test_headroom_refuses_rather_than_guessing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    _, sidecar, raw = _inputs(tmp_path)
+    page = raw["pages"][0]
+    if problem == "escape":
+        # The escaped target exists, so only the containment check can refuse it.
+        sidecar = tmp_path / "nested" / sidecar.name
+        sidecar.parent.mkdir()
+        page["path"] = "../receipt.png"
+    elif problem == "absolute":
+        page["path"] = str(tmp_path / "receipt.png")
+    elif problem == "unc":
+        page["path"] = "//fictional-host/share/receipt.png"
+    elif problem == "other_drive":
+        if os.name != "nt":
+            pytest.skip("drive letters exist only on Windows")
+        page["path"] = ("Y:" if tmp_path.resolve().drive.upper() == "Z:" else "Z:") + "receipt.png"
+    elif problem == "missing":
+        page["path"] = "missing.png"
+    elif problem == "nul":
+        page["path"] = "receipt\x00.png"
+    elif problem == "version":
+        raw["schema_version"] = 2
+    elif problem == "bool_version":
+        raw["schema_version"] = True
+    elif problem == "over_budget":
+        # Each page fits the per-page cap; only the running total crosses its cap.
+        monkeypatch.setattr(receipt_viewer, "MAX_TOTAL_BYTES", len(_page_png()) + 1)
+    elif problem == "page_over_cap":
+        monkeypatch.setattr(receipt_viewer, "MAX_PAGE_BYTES", len(_page_png()) - 1)
+    sidecar.write_text(json.dumps(raw), encoding="utf-8")
+    if problem == "duplicate_key":
+        sidecar.write_text('{"schema_version":1,"schema_version":1,"pages":[],"items":[]}')
+    if problem in {"absolute", "unc", "other_drive"}:
+        # These must be refused before any filesystem call can reach them (a UNC path or
+        # another drive may be a network share).
+        forbidden = os.path.normcase(page["path"])
+        real_resolve = Path.resolve
+
+        def guarded(self: Path, strict: bool = False) -> Path:
+            assert forbidden not in os.path.normcase(str(self)), "resolved before refusing"
+            return real_resolve(self, strict)
+
+        monkeypatch.setattr(Path, "resolve", guarded)
+    with pytest.raises(
+        receipt_viewer.ReceiptViewerError, match=_HEADROOM_REFUSALS[problem]
+    ) as caught:
+        receipt_viewer.headroom_bytes(sidecar)
+    assert str(tmp_path) not in str(caught.value)
+
+
+def test_headroom_judges_a_same_drive_relative_path_as_the_loader_does(tmp_path: Path) -> None:
+    # "C:receipt.png" on Windows joins inside the sidecar directory; elsewhere it is a plain name.
+    bundle, sidecar, raw = _inputs(tmp_path)
+    raw["pages"][0]["path"] = tmp_path.resolve().drive + "receipt.png"
+    sidecar.write_text(json.dumps(raw), encoding="utf-8")
+    loaded = receipt_viewer.load_receipts(sidecar, reimbursement_report.load_bundle(bundle))
+    embedded = sum(
+        len(base64.b64decode(page["src"].split(",", 1)[1])) for page in loaded["pages"].values()
+    )
+    assert receipt_viewer.headroom_bytes(sidecar) == receipt_viewer.MAX_TOTAL_BYTES - embedded
 
 
 @pytest.mark.parametrize(
