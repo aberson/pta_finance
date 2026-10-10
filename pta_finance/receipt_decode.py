@@ -59,6 +59,7 @@ __all__ = [
     "MEDIA_TYPES",
     "PROTOCOL",
     "READY_KEYS",
+    "MEMORY_PAGE_BYTES",
     "READY_LINE_MAX_BYTES",
     "REFUSAL_REASONS",
     "REFUSED_KEYS",
@@ -82,6 +83,9 @@ EXIT_NOT_READY: Final = 2
 REQUEST_LINE_MAX_BYTES: Final = 4096
 READY_LINE_MAX_BYTES: Final = 256
 RESPONSE_HEADER_MAX_BYTES: Final = 1024
+# Windows rounds a Job's memory limits down to whole 4 KiB pages, so a limit that is not a
+# whole number of pages could never read back exactly in the child's attestation.
+MEMORY_PAGE_BYTES: Final = 4096
 
 REQUEST_KEYS: Final = frozenset(
     {
@@ -290,6 +294,8 @@ def parse_request(line: bytes) -> DecodeRequest:
     )
     if any(number < 1 for number in positive):
         raise WireError("request limits must be positive")
+    if request.memory_bytes % MEMORY_PAGE_BYTES:
+        raise WireError("memory_bytes must be a whole number of 4 KiB pages")
     if request.byte_count > request.max_source_bytes:
         raise WireError("asset is larger than the source-byte cap")
     return request

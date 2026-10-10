@@ -120,20 +120,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--runs", type=int, default=3, help="runs per anchor (plan: N = 3)")
     parser.add_argument("--anchor", action="append", help="limit to these anchors")
-    arguments = parser.parse_args(argv)
+    args = parser.parse_args(argv)
     if sys.platform not in ("win32", "linux"):
         raise SystemExit("calibration runs only where the decode child's limits are enforced")
     harness = _load_harness()
     from PIL import __version__ as pillow
 
     norm = harness.NORMALIZATION
-    names = arguments.anchor or list(harness.ANCHORS)
+    names = args.anchor or list(harness.ANCHORS)
     record: dict[str, Any] = {
         "host": sys.platform,
         "cpu_model": _cpu_model(),
         "python": platform.python_version(),
         "pillow": pillow,
-        "n": arguments.runs,
+        "n": args.runs,
         "production": {
             "memory_bytes": norm.memory_bytes,
             "cpu_seconds": norm.cpu_seconds,
@@ -150,7 +150,7 @@ def main(argv: list[str] | None = None) -> int:
             memory: list[float] = []
             cpu: list[float] = []
             wall: list[float] = []
-            for _ in range(arguments.runs):
+            for _ in range(args.runs):
                 result = _run(harness, name, {}, root)
                 if result.get("outcome") != "page":
                     raise SystemExit(f"{name}: no page at production limits: {result}")

@@ -1328,9 +1328,19 @@ wall 5.11 s, all from the 80 MP CMYK progressive anchor (80 MP RGBA PNG: 701.9 M
 1.42 s); spread at most 1.083 on every resolvable reading. *Linux under WSL on the same box*
 (bisected `RLIMIT_AS`, user + system): largest need 960 MiB, CPU 3.99 s, wall 3.66 s, again the
 CMYK anchor (RGBA PNG: 704 MiB, 1.56 s, 1.43 s); spread at most 1.047; Pillow-loaded interpreter
-baseline 46.8 MiB (49,115,136 B), so `max_as_baseline` (256 MiB) is 5.5× it. Readings under 0.5 s
-(the three small anchors) have spreads from Windows' 15.625 ms CPU-accounting tick, so the spread
-rule was applied to resolvable readings only. From these two hosts § 5A's formulas give
+baseline 46.8 MiB (49,115,136 B), so `max_as_baseline` (256 MiB) is 5.5× it. *Method change to
+the spread rule, recorded here for ratification (§ 5A's text is unchanged):* the "spread above 1.2
+invalidates" test was applied to every memory reading and to every CPU or wall reading whose
+smallest run is at least 0.5 s, not to sub-second time readings. The reason is resolution: Windows
+Job CPU accounting advances in 15.625 ms ticks, so a reading of a few ticks has a spread that is
+quantization, not run-to-run variance (0.5 s is 32 ticks, about 3% quantization). The readings
+this exempted were only the Windows CPU readings of the three small anchors, none of which bounds a
+limit — motion photo 0.156–0.219 s (spread 1.40), phone 0.203–0.266 s (1.31) and MPO
+0.031–0.078 s (2.50); in an earlier dev-box run 1.23, 1.33 and 2.00. Every exempted wall reading
+and every Linux reading was within 1.2 anyway (at most 1.11). Every reading that bounds a limit
+— the two 80 MP anchors — was checked and passed, and the first WSL run, invalidated by a bounding
+reading (RGBA PNG CPU spread 1.252 under concurrent load), was re-run rather than relaxed. From
+these two hosts § 5A's formulas give
 `memory_bytes` = 1,472 MiB, `cpu_seconds` = 8 and `wall_seconds` = 8. Until the
 `lint-type-test` and `windows-native-sandbox` records (the slowest runners decide CPU and wall)
 replace this partial record, the committed values stay at the starting 1.5 GiB / 15 s / 30 s.

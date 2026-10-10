@@ -12,6 +12,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 import tomllib
 import zlib
 from collections.abc import Callable
@@ -24,6 +25,7 @@ from PIL import Image, ImageCms, PngImagePlugin
 from test_reimbursement_report import _bundle, _write_bundle
 
 from pta_finance import (
+    process_limits,
     receipt_decode,
     receipt_geometry,
     receipt_pages,
@@ -967,6 +969,98 @@ def test_a_pillow_mismatch_on_the_ready_line_aborts_the_stage(
     with pytest.raises(receipt_pages.ReceiptDecodeUnavailableError, match="different Pillow"):
         _pages(tmp_path, asset)
     assert _files(tmp_path) == []
+
+
+@pytest.mark.parametrize("media_type", ["png", "jpeg"])
+def test_an_empty_asset_is_a_per_asset_refusal_before_any_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, media_type: str
+) -> None:
+    # Its asset id is the digest of no bytes, so only the broker's own check can refuse it; the
+    # child would refuse byte_count 0 before its ready line, which is a stage abort.
+    empty = _asset(tmp_path, b"", media_type)
+    assert empty.asset_id == "asset:v1:" + hashlib.sha256(b"").hexdigest()
+    monkeypatch.setattr(receipt_pages.subprocess, "Popen", _no_spawn)
+    with pytest.raises(receipt_pages.ReceiptPageError, match="not a readable image") as caught:
+        _pages(tmp_path, empty)
+    assert caught.value.reason == "unreadable" and caught.value.usage is None
+    assert _files(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("memory_bytes", 0),
+        ("memory_bytes", 256 * 1024 * 1024 + 1),
+        ("cpu_seconds", 0),
+        ("max_long_edge", 0),
+        ("max_source_pixels", 0),
+        ("max_source_edge", 0),
+        ("background", (256, 255, 255)),
+    ],
+    ids=[
+        "no-memory",
+        "memory-not-whole-pages",
+        "no-cpu",
+        "no-long-edge",
+        "no-pixel-ceiling",
+        "no-edge-ceiling",
+        "background-out-of-range",
+    ],
+)
+def test_limits_the_child_would_refuse_abort_the_stage_before_any_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: object
+) -> None:
+    # The broker runs the child's own request validator first, so a value the child would
+    # refuse before its ready line never reaches a spawn, and it is a configuration fault for
+    # the whole stage rather than a refusal charged to this asset.
+    asset = _asset(tmp_path, _encode(_receipt(), "PNG"))
+    changed = dataclasses.replace(receipt_geometry.NORMALIZATION, **{field: value})
+    monkeypatch.setattr(receipt_pages, "NORMALIZATION", changed)
+    monkeypatch.setattr(receipt_pages.subprocess, "Popen", _no_spawn)
+    with pytest.raises(receipt_pages.ReceiptDecodeUnavailableError, match="decode limits"):
+        _pages(tmp_path, asset)
+    assert _files(tmp_path) == []
+
+
+def test_the_child_refuses_a_memory_limit_that_is_not_whole_pages() -> None:
+    line = _request(memory_bytes=256 * 1024 * 1024 + 1).line()
+    with pytest.raises(receipt_decode.WireError, match="4 KiB pages"):
+        receipt_decode.parse_request(line)
+    assert receipt_decode.parse_request(_request(memory_bytes=256 * 1024 * 1024).line())
+
+
+def test_an_abort_before_the_ready_line_kills_and_reaps_the_child_promptly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launched: list[tuple[Any, dict[str, Any]]] = []
+    real_popen = subprocess.Popen
+
+    def recording(command: list[str], **options: Any) -> Any:
+        process = real_popen(command, **options)
+        launched.append((process, options))
+        return process
+
+    monkeypatch.setattr(receipt_pages.subprocess, "Popen", recording)
+    if sys.platform == "win32":
+        # The child exists but never enters its Job: ending the (empty) Job would not reach it.
+        def unassignable(kernel32: Any, job: int, process_handle: int) -> None:
+            raise process_limits.ProcessLimitsError("fictional refusal", code=5)
+
+        monkeypatch.setattr(process_limits, "assign_process", unassignable)
+    else:
+
+        def refusing(line: bytes | None, **options: Any) -> int | None:
+            raise receipt_pages.ReceiptDecodeUnavailableError("fictional refusal")
+
+        monkeypatch.setattr(receipt_pages, "_parse_ready_line", refusing)
+    started = time.monotonic()
+    with pytest.raises(receipt_pages.ReceiptDecodeUnavailableError):
+        _pages(tmp_path, _asset(tmp_path, _encode(_receipt(), "PNG")))
+    elapsed = time.monotonic() - started
+    ((process, options),) = launched
+    assert process.returncode is not None, "the child must be killed and reaped"
+    assert elapsed < 10, f"the abort waited {elapsed:.1f} s for a child it never killed"
+    assert not Path(options["cwd"]).exists(), "the working directory is removed after the reap"
 
 
 def test_the_module_imports_without_pillow() -> None:

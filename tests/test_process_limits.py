@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import ctypes
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -15,7 +16,6 @@ from pta_finance.treasurer_slides import native_sandbox, native_worker
 _ROOT = Path(__file__).resolve().parents[1]
 _LEAF = _ROOT / "pta_finance" / "process_limits.py"
 _MiB = 1024 * 1024
-_windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Job Objects are Windows-only")
 
 
 class _Untouchable:
@@ -238,7 +238,7 @@ def test_close_handle_reports_failure_without_raising(monkeypatch: pytest.Monkey
     assert process_limits.close_handle(_FakeKernel32(), 4242) is True
 
 
-@_windows_only
+@pytest.mark.skipif(os.name != "nt", reason="Job Objects are a Windows-only enforcement boundary")
 def test_a_real_job_limits_accounts_and_ends_a_child_process() -> None:
     kernel32 = process_limits.load_kernel32()
     job = process_limits.make_job_object(

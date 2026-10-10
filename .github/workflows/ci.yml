@@ -62,6 +62,8 @@ jobs:
           required_budget = {
               'test_known_good_anchor_yields_page[png-80mp-rgba]',
               'test_known_good_anchor_yields_page[jpeg-80mp-cmyk-progressive]',
+              'test_known_good_anchor_yields_page[jpeg-motion-photo]',
+              'test_known_good_anchor_yields_page[mpo-per-frame-exif]',
               'test_known_good_anchor_has_headroom[png-80mp-rgba]',
               'test_known_good_anchor_has_headroom[jpeg-80mp-cmyk-progressive]',
               'test_known_garbage_sentinel_is_refused[lanczos-strip]',
@@ -175,7 +177,12 @@ jobs:
       - name: Native sandbox, statement parser, process limits and receipt decode tests
         shell: bash
         run: |
-          uv run pytest -q tests/test_treasurer_slides_native_sandbox.py tests/test_treasurer_slides_bank_statements_native.py tests/test_process_limits.py tests/test_receipt_pages.py tests/test_receipt_decode_budget.py --junitxml=windows-results.xml
+          uv run pytest -q --junitxml=windows-results.xml \
+            tests/test_treasurer_slides_native_sandbox.py \
+            tests/test_treasurer_slides_bank_statements_native.py \
+            tests/test_process_limits.py \
+            tests/test_receipt_pages.py \
+            tests/test_receipt_decode_budget.py
           uv run python - <<'PY'
           from xml.etree import ElementTree
           everything = list(ElementTree.parse('windows-results.xml').getroot().iter('testcase'))
@@ -185,6 +192,8 @@ jobs:
               'tests.test_receipt_decode_budget': {
                   'test_known_good_anchor_yields_page[png-80mp-rgba]',
                   'test_known_good_anchor_yields_page[jpeg-80mp-cmyk-progressive]',
+                  'test_known_good_anchor_yields_page[jpeg-motion-photo]',
+                  'test_known_good_anchor_yields_page[mpo-per-frame-exif]',
                   'test_known_good_anchor_has_headroom[png-80mp-rgba]',
                   'test_known_good_anchor_has_headroom[jpeg-80mp-cmyk-progressive]',
                   'test_known_garbage_sentinel_is_refused[lanczos-strip]',

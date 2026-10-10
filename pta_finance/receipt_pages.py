@@ -83,6 +83,7 @@ from pta_finance.receipt_decode import (
     DecodeRequest,
     WireError,
     parse_line,
+    parse_request,
     scaled_size,
     wire_float,
     wire_int,
@@ -168,6 +169,7 @@ _MESSAGES = {
 _UNWRITABLE = "receipt pages directory is not writable"
 
 _CLEANUP_WARNINGS = 0
+_ONE_CHILD_AT_A_TIME = threading.Lock()
 # Job handles that could not be closed. No process is in them; they stay referenced until the
 # process (and so the stage) ends rather than being silently abandoned.
 _RETAINED_JOB_HANDLES: list[int] = []
@@ -372,6 +374,10 @@ def to_pages(
             "cached receipt asset no longer matches its asset id; re-fetch it",
             reason="digest-mismatch",
         )
+    if not data:
+        # The child refuses a zero-byte body before its ready line, which the broker would
+        # have to treat as a stage abort; an empty upload is this asset's problem alone.
+        raise ReceiptPageError(_MESSAGES["unreadable"], reason="unreadable")
     decoded, usage = _decode_in_child(data, asset.media_type, pillow=pillow)
     del data
     encoded = pixels_to_page(
@@ -748,14 +754,29 @@ def _map_child_exit(result: _ChildResult, request: DecodeRequest) -> _Decoded | 
 
 
 def _decode_in_child(data: bytes, media_type: str, *, pillow: str) -> tuple[_Decoded, DecodeUsage]:
-    """Run one decode child over ``data``; a validated page, or a per-asset refusal."""
+    """Run one decode child over ``data``; a validated page, or a per-asset refusal.
+
+    The request is first checked with the child's own validator, so nothing the child would
+    refuse before its ready line is ever sent: the asset-dependent value (``byte_count``) has
+    already been refused per asset by :func:`to_pages`, and anything left is a configuration
+    fault that aborts the stage before a spawn. Children run one at a time per process, which
+    also keeps the Linux ``RUSAGE_CHILDREN`` delta attributable to the one child.
+    """
 
     request = _request_for(data, media_type)
-    run = _DecodeChild(request, pillow=pillow)
     try:
-        result = run.communicate(data)
-    finally:
-        run.close()
+        if parse_request(request.line()) != request:
+            raise WireError("request does not survive its own wire form")
+    except WireError:
+        raise ReceiptDecodeUnavailableError(
+            "receipt decode limits are invalid; restore the toolkit's receipt_geometry values"
+        ) from None
+    with _ONE_CHILD_AT_A_TIME:
+        run = _DecodeChild(request, pillow=pillow)
+        try:
+            result = run.communicate(data)
+        finally:
+            run.close()
     usage = run.usage
     outcome = _map_child_exit(result, request)
     del result
@@ -775,6 +796,7 @@ class _DecodeChild:
         self._process: subprocess.Popen[bytes] | None = None
         self._kernel32: Any = None
         self._job: int | None = None
+        self._in_job = False
         self._workdir: str | None = None
         self._pump: _StdoutPump | None = None
         self._threads: list[threading.Thread] = []
@@ -913,6 +935,7 @@ class _DecodeChild:
                 process_limits.assign_process(self._kernel32, job, int(handle))
                 if not process_limits.is_process_in_job(self._kernel32, int(handle), job):
                     raise process_limits.ProcessLimitsError("not in the Job", code=6)
+                self._in_job = True
             except process_limits.ProcessLimitsError:
                 raise ReceiptDecodeUnavailableError(
                     "receipt decode child could not be placed in its limits on this host"
@@ -930,7 +953,9 @@ class _DecodeChild:
         if process is None or self._reaped:
             return
         if sys.platform == "win32":
-            if self._job is not None:
+            # Ending the Job reaches the child only once it is confirmed inside it; a child the
+            # broker could not place in its Job is ended directly.
+            if self._job is not None and self._in_job:
                 try:
                     process_limits.terminate_job(self._kernel32, self._job)
                     return
