@@ -19,7 +19,7 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --locked --extra dev --extra slides
+        run: uv sync --locked --extra dev --extra slides --extra receipts
 
       - name: Ruff lint
         run: uv run ruff check .
@@ -42,6 +42,42 @@ jobs:
           }
           assert len(cases) == 2 and {case.attrib['name'] for case in cases} == expected
           assert all(case.find('skipped') is not None for case in cases), 'Receipt browser cases ran in lint-type-test'
+          everything = list(ElementTree.parse('lint-results.xml').getroot().iter('testcase'))
+          pages = [case for case in everything if case.attrib['classname'] == 'tests.test_receipt_pages']
+          required = {
+              'test_geometry_and_page_budget_are_imported_not_restated',
+              'test_box_padding_mirrors_the_viewer_template',
+              'test_rotated_exif_jpeg_normalizes_to_displayed_orientation[orientation-6]',
+              'test_two_runs_produce_byte_identical_pages',
+              'test_source_metadata_never_reaches_the_page[jpeg]',
+              'test_broker_rejects_malformed_decode_response[wrong-length]',
+              'test_broker_rejects_malformed_decode_response[extra-field]',
+              'test_broker_stdout_read_is_capped',
+              'test_broker_maps_child_exit_status[exit-child-error]',
+              'test_an_empty_asset_is_a_per_asset_refusal_before_any_spawn[png]',
+              'test_an_empty_asset_is_a_per_asset_refusal_before_any_spawn[jpeg]',
+              'test_limits_the_child_would_refuse_abort_the_stage_before_any_spawn[memory-not-whole-pages]',
+              'test_the_child_refuses_a_memory_limit_that_is_not_whole_pages',
+              'test_an_abort_before_the_ready_line_kills_and_reaps_the_child_promptly',
+          }
+          assert required <= {case.attrib['name'] for case in pages}, 'Receipt page tests were not collected'
+          assert all(case.find('skipped') is None for case in pages), 'Receipt page coverage was omitted'
+          budget = [case for case in everything
+                    if case.attrib['classname'] == 'tests.test_receipt_decode_budget']
+          required_budget = {
+              'test_known_good_anchor_yields_page[png-80mp-rgba]',
+              'test_known_good_anchor_yields_page[jpeg-80mp-cmyk-progressive]',
+              'test_known_good_anchor_yields_page[jpeg-motion-photo]',
+              'test_known_good_anchor_yields_page[mpo-per-frame-exif]',
+              'test_known_good_anchor_has_headroom[png-80mp-rgba]',
+              'test_known_good_anchor_has_headroom[jpeg-80mp-cmyk-progressive]',
+              'test_known_garbage_sentinel_is_refused[lanczos-strip]',
+              'test_known_garbage_sentinel_is_refused[cpu-bound]',
+              'test_known_garbage_sentinel_is_refused[wall-clock]',
+              'test_decoding_pid_is_the_limited_process',
+          }
+          assert required_budget <= {case.attrib['name'] for case in budget}, 'Decode budget cases were not collected'
+          assert all(case.find('skipped') is None for case in budget), 'Decode budget coverage was omitted'
           PY
           uv run pytest -q tests/test_treasurer_slides_bank_statements_native.py -k "extractor_never_reads_a_pdf_if_the_sandbox_cannot_start"
 
@@ -60,7 +96,7 @@ jobs:
       - name: Install Python and dependencies
         run: |
           uv python install 3.12
-          uv sync --locked --extra dev --extra slides --extra web
+          uv sync --locked --extra dev --extra slides --extra web --extra receipts
           uv run playwright install --with-deps chromium
       - uses: actions/setup-java@v4
         with:
@@ -134,10 +170,58 @@ jobs:
         run: uv python install 3.12
 
       - name: Install dependencies
-        run: uv sync --locked --extra dev --extra slides
+        run: uv sync --locked --extra dev --extra slides --extra receipts
 
-      - name: Native sandbox and statement parser tests
-        run: >-
-          uv run pytest -q
-          tests/test_treasurer_slides_native_sandbox.py
-          tests/test_treasurer_slides_bank_statements_native.py
+      - name: Native sandbox, statement parser, process limits and receipt decode tests
+        shell: bash
+        run: |
+          uv run pytest -q --junitxml=windows-results.xml \
+            tests/test_treasurer_slides_native_sandbox.py \
+            tests/test_treasurer_slides_bank_statements_native.py \
+            tests/test_process_limits.py \
+            tests/test_receipt_pages.py \
+            tests/test_receipt_decode_budget.py
+          uv run python - <<'PY'
+          from xml.etree import ElementTree
+          everything = list(ElementTree.parse('windows-results.xml').getroot().iter('testcase'))
+          def named(classname):
+              return [case for case in everything if case.attrib['classname'] == classname]
+          required = {
+              'tests.test_receipt_decode_budget': {
+                  'test_known_good_anchor_yields_page[png-80mp-rgba]',
+                  'test_known_good_anchor_yields_page[jpeg-80mp-cmyk-progressive]',
+                  'test_known_good_anchor_yields_page[jpeg-motion-photo]',
+                  'test_known_good_anchor_yields_page[mpo-per-frame-exif]',
+                  'test_known_good_anchor_has_headroom[png-80mp-rgba]',
+                  'test_known_good_anchor_has_headroom[jpeg-80mp-cmyk-progressive]',
+                  'test_known_garbage_sentinel_is_refused[lanczos-strip]',
+                  'test_known_garbage_sentinel_is_refused[cpu-bound]',
+                  'test_known_garbage_sentinel_is_refused[wall-clock]',
+                  'test_decoding_pid_is_the_limited_process',
+              },
+              'tests.test_receipt_pages': {
+                  'test_rotated_exif_jpeg_normalizes_to_displayed_orientation[orientation-6]',
+                  'test_two_runs_produce_byte_identical_pages',
+                  'test_broker_stdout_read_is_capped',
+                  'test_an_empty_asset_is_a_per_asset_refusal_before_any_spawn[png]',
+                  'test_an_empty_asset_is_a_per_asset_refusal_before_any_spawn[jpeg]',
+                  'test_limits_the_child_would_refuse_abort_the_stage_before_any_spawn[memory-not-whole-pages]',
+                  'test_the_child_refuses_a_memory_limit_that_is_not_whole_pages',
+                  'test_an_abort_before_the_ready_line_kills_and_reaps_the_child_promptly',
+              },
+              'tests.test_process_limits': {
+                  'test_a_real_job_limits_accounts_and_ends_a_child_process',
+                  'test_job_structures_match_the_native_worker_copy_recursively',
+              },
+          }
+          for classname, names in required.items():
+              cases = named(classname)
+              found = {case.attrib['name']: case for case in cases}
+              assert names <= set(found), f'{classname} required cases were not collected'
+              assert all(found[name].find('skipped') is None for name in names), f'{classname} required cases were skipped'
+          assert all(case.find('skipped') is None for case in named('tests.test_receipt_decode_budget')), 'Decode budget coverage was omitted'
+          assert all(case.find('skipped') is None for case in named('tests.test_receipt_pages')), 'Receipt page coverage was omitted'
+          PY
+
+      - name: Receipt sidecar headroom tests (Windows drive and UNC rules)
+        run: uv run pytest -q tests/test_receipt_viewer.py -k headroom

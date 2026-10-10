@@ -1319,11 +1319,48 @@ calibrated per § 5A to 1.5× the largest of N = 3 measured runs per host for th
 (job commit on Windows, bisected address space on Linux), with every anchor required to finish
 within 80% of each limit; the largest legitimate in-process peak
 measured so far is about 941 MiB working set and 4.6 s (an 80 MP CMYK progressive JPEG), and Step 39
-replaces that figure with the per-host measurement § 5A defines. **Calibrated values:** *not yet
-measured — Step 39 replaces this sentence with the measured peak per host, the chosen
-`memory_bytes`, `cpu_seconds` and `wall_seconds`, N and the spread, the Pillow-loaded Linux
-interpreter baseline, and the Pillow version they were measured under (this record is Step 39's
-only edit to this plan).* The header checks — pixel and source-edge
+replaces that figure with the per-host measurement § 5A defines. **Calibrated values (Step 39,
+2026-10-10, final):** Pillow 12.2.0, N = 3 per anchor per host, each host in its § 5A unit
+(Windows: Job peak commit and Job user time; Linux: bisected `RLIMIT_AS` need above the runtime
+baseline, at 64 MiB resolution, and user + system time), every anchor a page at the starting
+limits, measured with `scripts/calibrate_receipt_decode.py`. Largest reading per host, all from
+the 80 MP CMYK progressive anchor (the 80 MP RGBA PNG in brackets), with the largest spread over
+the readings the spread rule checks:
+
+| host | memory | CPU | wall | spread |
+|---|---|---|---|---|
+| Windows dev box (Intel Core Ultra 7 155H, Python 3.12.13) | 933.1 MiB [701.9] | 4.73 s [1.13] | 5.11 s [1.42] | 1.083 |
+| Linux, WSL2 on the dev box (Python 3.12.13) | 960 MiB [704] | 3.99 s [1.56] | 3.66 s [1.43] | 1.047 |
+| `lint-type-test` runner, ubuntu (AMD EPYC 7763, Python 3.12.15) | 960 MiB [704] | 4.96 s [1.93] | 4.97 s [1.94] | 1.012 |
+| `windows-native-sandbox` runner, windows-2022 (AMD family 25, Python 3.12.15) | 932.9 MiB [701.7] | 5.50 s [1.41] | 5.64 s [1.55] | 1.035 |
+
+The three small anchors needed at most 128 MiB, 0.33 s and 0.42 s on any host. The CI records come
+from run 38063930164. Formula inputs, M taken over all four hosts (CPU and wall on the slowest
+runner, `windows-native-sandbox`): M_memory = 960 MiB (1,006,632,960 B), M_cpu = 5.50 s,
+M_wall = 5.64 s. **Chosen values:** `memory_bytes` = ⌈1.5 × 960 MiB ÷ 64 MiB⌉ × 64 MiB = 1,472 MiB
+(1,543,503,872 B), `cpu_seconds` = max(5, ⌈1.5 × 5.50⌉) = 9 and `wall_seconds` =
+max(9, ⌈1.5 × 5.64⌉) = 9. Every known-good anchor then finishes at or below 80% of each limit:
+65.2% of memory, 61.1% of CPU and 62.7% of wall at the worst reading, and the headroom tests run
+at 1,177 MiB, 8 s and 8 s. The Pillow-loaded Linux interpreter baseline measured 49.9 MiB
+(52,310,016 B) on the `lint-type-test` runner and 46.8 MiB under WSL, so `max_as_baseline`
+(256 MiB, pinned) is 5.1× the larger. *Method change to the spread rule, recorded here for
+ratification (§ 5A's text is unchanged):* the "spread above 1.2 invalidates" test was applied to
+every memory reading and to every CPU or wall reading whose smallest run is at least 0.5 s, not to
+sub-second time readings. The reason is resolution: Windows Job CPU accounting advances in
+15.625 ms ticks, so a reading of a few ticks has a spread that is quantization, not run-to-run
+variance (0.5 s is 32 ticks, about 3% quantization). The readings this exempted that would
+otherwise have failed were all Windows CPU readings of the small anchors, none of which bounds a
+limit: on the dev box, motion photo 0.156–0.219 s (spread 1.40), phone 0.203–0.266 s (1.31) and
+MPO 0.031–0.078 s (2.50), with 1.23, 1.33 and 2.00 in an earlier run; and on the windows-2022
+runner, MPO 0.094–0.141 s (1.50). Every other exempted reading was within 1.2 anyway (at most
+1.17). Every reading that bounds a limit — the two 80 MP anchors — was checked and passed on every
+host. The first WSL run, invalidated by a bounding reading (RGBA PNG CPU spread 1.252 under
+concurrent load), was re-run rather than relaxed. Measured once on the dev box: the `cpu-bound`
+sentinel's uncapped decode needs 14.6–15.0 s of CPU and the `wall-clock` sentinel's 22.6–25.9 s;
+the `lanczos-strip` need (about 2.58 GB) stays above the chosen `memory_bytes`. Windows enforces
+`PerProcessUserTimeLimit` with a lag — a 1 s limit ended the child at 2.0–2.6 s of user time, and
+under heavy load a 2 s limit at 6.6 s — so on Windows the broker wall clock is the hard time bound
+and the Job CPU limit a backstop. The header checks — pixel and source-edge
 ceilings, the mode allowlist, the animated-PNG refusal — remain only as cheap fast paths and policy;
 none is a safety bound, and the raw-byte scan, EXIF and multi-picture counts are deleted.
 **Residual:** the child is still an ordinary user-level process running as the operator. A
@@ -1417,7 +1454,7 @@ from the URL or the original filename, so no vendor filename lands on disk or in
 - **Produces:** `pta_finance/receipt_geometry.py`, `pta_finance/receipt_pages.py` (image path, broker half, `pixels_to_page`), `pta_finance/receipt_decode.py` (the decode child), `pta_finance/process_limits.py` (the Job Object primitive moved out of `native_sandbox.py`), the wrapper refactor in `pta_finance/treasurer_slides/native_sandbox.py`, `tests/test_receipt_pages.py` (in-process Pillow-patching tests rewritten; the A1-removed ceiling tests deleted; the direct validator, capped-reader and exit-status-mapper cases § 9 names), `tests/test_receipt_decode_budget.py`, `tests/test_process_limits.py` (the leaf imports nothing from `pta_finance`; recursive structure parity with `native_worker.py` — field names, scalar ctypes types, offsets and `ctypes.sizeof` of every structure and nested structure — plus equal flag values; `active_processes` honored; limits below 1 raise `ProcessLimitsError` before any handle exists), `scripts/calibrate_receipt_decode.py` (the § 5A calibration vehicle); **`pta_finance/receipt_viewer.py`** — export the page-budget constants and a `headroom_bytes(sidecar_path)` helper so producers import rather than redefine them (`load_receipts` and `item_fingerprint` are unchanged); `tests/test_receipt_viewer.py` — the `headroom_bytes` tests (`test_headroom_*`, including the refusal parametrize and the Windows same-drive and UNC rules); the `receipts` extra in `pyproject.toml` (the `>=12.2` floor; Pillow itself already arrives through `matplotlib`) with `uv.lock` refreshed, and no new pytest marker; `.github/workflows/ci.yml` — every job installs a **fixed** `--extra` list, so each names `receipts` to install the reviewed floor; `lint-type-test`'s JUnit check names the required `tests.test_receipt_pages` and `tests.test_receipt_decode_budget` cases (§ 9) and asserts none is skipped; `windows-native-sandbox` names `tests/test_receipt_pages.py`, `tests/test_receipt_decode_budget.py` and `tests/test_process_limits.py` in its explicit pytest file list (`ci.yml:139-143`) with a JUnit no-skip check on its required cases, and gains the step `uv run pytest -q tests/test_receipt_viewer.py -k headroom` (Windows drive and UNC rules); a temporary `Calibrate decode limits` step in both jobs that runs the calibration script and is removed before merge (the merged `ci.yml` carries no calibration step); and `documentation/receipt-autofill-plan.md` — the § 6.3 calibration record only
 - **Done when:** byte-identical output across two runs on the same input; a rotated-EXIF fixture normalizes to displayed orientation; one-source-of-truth identity is asserted with `is`, not `==`, on the frozen `NORMALIZATION` instance (e.g. `receipt_pages.NORMALIZATION is receipt_geometry.NORMALIZATION`) or on a value CPython never caches such as `max_source_bytes` (26,214,400) — never on a small or derived int such as q85, 25 or 15, which CPython caches so a restated copy would still pass — so re-duplication fails CI; `max_jpeg_scans`, `max_exif_bytes` and `max_mpf_bytes` no longer appear anywhere in `pta_finance/` or `tests/`; the `lint-type-test` job installs the new extra and `tests/test_receipt_pages.py` is observed **executing, not skipped**, in that job (a module-level `importorskip` that leaves the module uncovered in every CI job is not an acceptable resolution — mirror the JUnit case-name and skip-state assertions in the `Receipt viewer browser test` CI step); the real decode child — never an in-process substitute — runs in that ubuntu job through the Linux rlimit path, so "executing" there covers the production decode path; `tests/test_receipt_decode_budget.py` is observed **executing, not skipped**, in both `lint-type-test` (rlimit path) and `windows-native-sandbox` (Job Object path), with § 9's required cases named in both jobs' JUnit checks, and in it: every amplification fixture ends as a page or a per-asset refusal within the budget; the known-good anchors — both 80 MP anchors at production limits on both hosts, the motion-photo-style JPEG with an appended trailer and the MPO (a JPEG Multi-Picture Object: concatenated JPEG frames indexed by an APP2 Multi-Picture Format, MPF, segment) with per-frame EXIF — produce pages; the memory sentinel — the LANCZOS strip with `max_source_edge` and `max_source_pixels` lifted to `2**31 - 1` and `memory_bytes` at the chosen production value — exits `EXIT_BUDGET` (at production fast paths the same strip is a `source-edge` refusal), the CPU sentinel is refused with the budget message, and the wall-clock sentinel is refused with the budget message and leaves no process of its job or process group alive; the guard-independence run stays within budget; `test_decoding_pid_is_the_limited_process` proves the ready line's pid is the `Popen` pid and is the process carrying the limits (job membership and job limits on Windows; on Linux `/proc/<pid>/limits` shows soft = hard = the ready line's `rlimit_as` for address space and soft = hard = `cpu_seconds` for CPU time); a `darwin` platform aborts before any spawn; a Pillow mismatch on the ready line aborts the stage, as does a Linux `rlimit_as` outside `[memory_bytes, memory_bytes + max_as_baseline]`; a cached file one byte over `max_source_bytes` is refused before any spawn; the direct validator cases refuse a `bool` or float in an int field, a non-finite `scale`, a duplicate key, a CRLF terminator and an over-cap line; the direct exit-status mapper cases map exit 3 and an oversize stream to `budget` and exit 4 to `child-error`, never `budget`; the memory, CPU and wall limits are calibrated per § 5A's exact formulas (N = 3 per anchor per host), with every reading, the spread and the chosen values recorded in the step checkpoint and § 6.3, and the headroom tests pass at 80% of each limit; each § 9 mutation anchor turns its named test red, recorded in the checkpoint; the native-sandbox tests pass unchanged after the wrapper refactor and the parity test passes; the Windows `-k headroom` step runs the `test_headroom_*` cases green, and the merged `ci.yml` carries no calibration step; `mypy --strict pta_finance` passes on Windows and, in CI, on Linux; the checkpoint records, as `Baseline tests:`, the full-suite collected count on `main` at the commit this resumed step is dispatched from, before any Phase 9 code merges — the floor Step 48 compares against; full suite green
 - **Depends on:** 38
-- **Status:** BLOCKED (2026-10-09) — stop-and-audit: decoder cost on untrusted images is unbounded, see issue #73. **Decision recorded 2026-10-09: Option A1** (resource-capped decode child, § 6.3); ready to resume `/build-step 39` after `/plan-wrap` and `/repo-sync`, following the resume prerequisite above
+- **Status:** DONE (2026-10-10) — resumed after the A1 re-plan; BLOCKED 2026-10-09 (stop-and-audit, issue #73). Full suite 1,480 collected / 0 failed / 3 expected skips; gating CI 38069078237 green; review-deep PASS 6/6.
 
 <!-- autofix-applied: 2026-09-16 -->
 ### Step 40: Allowlisted asset fetcher with a content-addressed cache

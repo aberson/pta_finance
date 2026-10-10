@@ -17,6 +17,17 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pta_finance.reimbursement_report import ReimbursementReport, ReviewItem, Ticket
 
+__all__ = [
+    "MAX_PAGE_BYTES",
+    "MAX_TOTAL_BYTES",
+    "ReceiptViewerError",
+    "headroom_bytes",
+    "item_fingerprint",
+    "load_receipts",
+]
+
+# The page budget, counted on raw page bytes before base64. This is its one definition:
+# producers of receipt pages import these names and never restate the numbers.
 MAX_PAGE_BYTES = 20 * 1024 * 1024
 MAX_TOTAL_BYTES = 100 * 1024 * 1024
 
@@ -81,6 +92,59 @@ def _box(value: Any) -> list[float] | None:
     if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
         raise ReceiptViewerError("receipt box must fit within the page's 0–1 coordinates")
     return [float(n) for n in value]
+
+
+def headroom_bytes(sidecar_path: Path) -> int:
+    """Return how many more raw page bytes the sidecar can embed under ``MAX_TOTAL_BYTES``.
+
+    Counted as :func:`load_receipts` counts: raw bytes before base64, once per page entry, so
+    two entries naming one file count twice because each is embedded. An absent sidecar has
+    the whole budget, matching ``build_report``, which embeds nothing when the sidecar does not
+    exist. A sidecar that cannot be read, names a page outside its directory or a missing page,
+    or already exceeds a cap raises :class:`ReceiptViewerError`; the remaining budget is never
+    guessed. Fingerprints and digests are left to :func:`load_receipts`.
+    """
+
+    if not sidecar_path.exists():
+        return MAX_TOTAL_BYTES
+    try:
+        document = json.loads(
+            sidecar_path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object
+        )
+    except (ValueError, OSError) as exc:
+        raise ReceiptViewerError("cannot read a valid receipt sidecar") from exc
+    raw = _object(document, {"schema_version", "pages", "items"})
+    if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
+        raise ReceiptViewerError("unsupported receipt sidecar schema_version")
+    root = sidecar_path.resolve().parent
+    total_bytes = 0
+    for value in _array(raw["pages"]):
+        page = _object(value, {"id", "path", "sha256", "label"})
+        text = _text(page["path"])
+        if "\x00" in text:
+            raise ReceiptViewerError("receipt page is missing or unreadable")
+        relative = Path(text)
+        # Absolute (including UNC) paths and paths on another drive are refused before any
+        # filesystem call can reach them; everything else is judged after resolution, exactly
+        # as load_receipts judges it (a same-drive "C:page.png" joins inside the root).
+        if relative.is_absolute() or relative.drive.casefold() not in ("", root.drive.casefold()):
+            raise ReceiptViewerError("receipt page must be inside the sidecar directory")
+        try:
+            image_path = (root / relative).resolve()
+        except (OSError, ValueError) as exc:
+            raise ReceiptViewerError("receipt page is missing or unreadable") from exc
+        if not image_path.is_relative_to(root):
+            raise ReceiptViewerError("receipt page must be inside the sidecar directory")
+        try:
+            page_bytes = image_path.stat().st_size if image_path.is_file() else None
+        except (OSError, ValueError) as exc:
+            raise ReceiptViewerError("receipt page is missing or unreadable") from exc
+        if page_bytes is None:
+            raise ReceiptViewerError("receipt page is missing or unreadable")
+        total_bytes += page_bytes
+        if page_bytes > MAX_PAGE_BYTES or total_bytes > MAX_TOTAL_BYTES:
+            raise ReceiptViewerError("receipt images exceed the offline report size limit")
+    return MAX_TOTAL_BYTES - total_bytes
 
 
 def load_receipts(path: Path, report: ReimbursementReport) -> dict[str, Any]:
